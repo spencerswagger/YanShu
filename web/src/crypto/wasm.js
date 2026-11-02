@@ -386,57 +386,31 @@ export class WasmKernel {
     try {
       const cap = data.length + 64 * 1024 + 4096
       if (this.capabilities.packV1) {
-        // 契约清单里有 EXT 与 CREATED_AT：用 v1 导出把这两个字段写实。
-        // 注意：头文件注释说 `_v1` 也收 64 字节公钥，实现里却是 `fixed::<65>`（要求 0x04 开头），
-        // 所以这里按"先 65 后 64"试一次并记住哪种形式可用。
-        const wire = WasmKernel.toWire(recipientPublic)
-        const raw = WasmKernel.toKernel(recipientPublic)
-        // 头文件当前口径是 64；过渡轮次曾要 65。先按 64，失败再试 65，并记住哪种可用。
-        const forms =
-          this.packPubkeyForm === 'wire'
-            ? [wire]
-            : this.packPubkeyForm === 'raw'
-              ? [raw]
-              : [raw, wire]
-        let lastErr
-        for (const form of forms) {
-          const key = this.#write(form)
-          try {
-            const out = this.#outCall(
-              'ys_pack_v1',
-              (outPtr, outCap, outLen) =>
-                this.exports.ys_pack_v1(
-                  key.ptr,
-                  sender.ptr,
-                  nameBytes.ptr,
-                  nameBytes.len,
-                  mimeBytes.ptr,
-                  mimeBytes.len,
-                  extBytes.ptr,
-                  extBytes.len,
-                  BigInt(createdAt),
-                  blockSize,
-                  seed.ptr,
-                  seed.len,
-                  payload.ptr,
-                  payload.len,
-                  outPtr,
-                  outCap,
-                  outLen,
-                ),
-              cap,
-            )
-            this.packPubkeyForm = form.length === 65 ? 'wire' : 'raw'
-            return out
-          } catch (err) {
-            lastErr = err
-            // 公钥形态不对时内核会报 CURVE_INVALID / BAD_ARGUMENT 一类；换另一种形态再试一次
-            if (!/CRYPTO_CURVE_INVALID|CRYPTO_BAD_ARGUMENT|CRYPTO_KEY_UNWRAP_FAILED/.test(String(err.code))) throw err
-          } finally {
-            key.release()
-          }
-        }
-        throw lastErr
+        // 公钥入参统一 64 字节 `X‖Y`（内核已统一；传 65 会 CRYPTO_CURVE_INVALID，不做猜测式兼容）
+        return this.#outCall(
+          'ys_pack_v1',
+          (out, outCap, outLen) =>
+            this.exports.ys_pack_v1(
+              recipient.ptr,
+              sender.ptr,
+              nameBytes.ptr,
+              nameBytes.len,
+              mimeBytes.ptr,
+              mimeBytes.len,
+              extBytes.ptr,
+              extBytes.len,
+              BigInt(createdAt),
+              blockSize,
+              seed.ptr,
+              seed.len,
+              payload.ptr,
+              payload.len,
+              out,
+              outCap,
+              outLen,
+            ),
+          cap,
+        )
       }
       return this.#outCall(
         'ys_pack',
@@ -525,6 +499,26 @@ export class WasmKernel {
         priv.release()
         pub.release()
       },
+    }
+  }
+
+  /** 只有 prelude 时也能看"谁发的/多大/几块"；内核没这个导出就返回 null（走老流程：取齐再看）。 */
+  unpackMetaPrelude({ prelude, recipientPrivate }) {
+    if (typeof this.exports.ys_unpack_meta_prelude !== 'function') return null
+    const p = this.#write(prelude)
+    const priv = this.#write(recipientPrivate)
+    try {
+      const json = this.#outCall(
+        'ys_unpack_meta_prelude',
+        (out, cap, outLen) => this.exports.ys_unpack_meta_prelude(p.ptr, p.len, priv.ptr, out, cap, outLen),
+        1024,
+      )
+      const meta = JSON.parse(new TextDecoder().decode(json))
+      // 如实标注：prelude 只验到清单与来源签名，块 AEAD/摘要还没验
+      return { ...meta, meta_scope: meta.scope || 'prelude', data_verified: Boolean(meta.data_verified) }
+    } finally {
+      p.release()
+      priv.release()
     }
   }
 

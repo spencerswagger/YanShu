@@ -115,6 +115,11 @@ npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局�
 测试里有一条硬断言：契约 §15.1 的 `PB_S` 必须算出 **`AWQW`**；`npm run wasm:check` 同时打印
 "传 64 字节（正确）= AWQW / 传 65 字节（错用）= 另一个码"，这正是"wasm 算出别的码"最常见的根因。
 
+**prelude 阶段的两态**：内核有 `ys_unpack_meta_prelude` 时，收件人拿到 prelude 就能看到「来自 `sender_code` / 文件名 / 大小 / 块数」，
+但界面必须标 **未校验**（`scope=prelude`、`data_verified=false`：头/来源签名/清单已验，块 AEAD 与摘要未验）；
+整包 `ys_unpack_v1` 成功后才切 **已校验**。整包 `_meta` 对 prelude-only 会 `CRYPTO_TRUNCATED`，两个入口不混用；
+内核没有这个导出时优雅降级为老流程（取齐再显示）。
+
 空文件名按契约裁决处理：`NAME_LEN = 0` 合法，落盘显示「未命名」并保留扩展名（`未命名.txt`）；
 界面上不假设 `FLAGS.NAME_OBFUSCATED` 与 `NAME_MODE` 一致，名字语义只以 `ys_unpack_meta` 的 JSON 为准。
 另外 `tests/legacy-reject.test.js` 用旧布局产物（HEADER 40）产一个包喂给默认解包入口，断言必须被拒

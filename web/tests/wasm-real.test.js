@@ -289,3 +289,50 @@ test('真内核 + 真中转：A 端加密 → 分块上传 → B 端取回解密
   assert.equal(after.chunks.size, 0)
   relay.server.close()
 })
+
+test('真内核：prelude-only 能显示发件人/文件名/大小，但如实标"未校验"', { skip }, async () => {
+  const kernel = await instantiateKernel(readFileSync(wasmPath))
+  kernel.blockSize = 4096
+  const alice = kernel.generateIdentity()
+  const bob = kernel.generateIdentity()
+  const data = new Uint8Array(9000).map((_, i) => (i * 5) & 0xff)
+  const pack = kernel.pack({
+    data,
+    name: 'prelude.bin',
+    mime: 'application/octet-stream',
+    recipientPublic: bob.publicKey,
+    senderPrivate: alice.privateKey,
+    blockSize: kernel.blockSize,
+  })
+  const { prelude } = kernel.splitPack({ pack, plaintextSize: data.length, chunkSize: kernel.blockSize })
+
+  const early = kernel.unpackMetaPrelude({ prelude, recipientPrivate: bob.privateKey })
+  assert.ok(early, '内核应提供 ys_unpack_meta_prelude')
+  assert.equal(early.meta_scope, 'prelude')
+  assert.equal(early.data_verified, false, 'prelude 阶段块未校验，必须如实标 false')
+  assert.equal(early.name, 'prelude.bin')
+  assert.equal(Number(early.size), data.length)
+  assert.equal(early.sender_code, kernel.codeOf(alice.publicKey))
+
+  // 反向：整包 _meta 对 prelude-only 必须拒绝（TRUNCATED），两个入口不许混用
+  assert.throws(
+    () => kernel.unpackMeta({ pack: prelude, recipientPrivate: bob.privateKey }),
+    (err) => err.code === 'CRYPTO_TRUNCATED',
+  )
+
+  // 收齐后：session 标记已校验
+  const session = kernel.openUnpackSession({
+    prelude,
+    recipientPrivate: bob.privateKey,
+    plaintextSize: data.length,
+    chunkSize: kernel.blockSize,
+  })
+  assert.equal(session.metaScope, 'prelude')
+  assert.equal(session.dataVerified, false)
+  const { slices } = kernel.splitPack({ pack, plaintextSize: data.length, chunkSize: kernel.blockSize })
+  slices.forEach((s, i) => session.feed(i, s))
+  const done = session.finish()
+  assert.equal(done.dataVerified, true)
+  assert.equal(done.meta.scope, 'full')
+  assert.deepEqual([...done.plain], [...data])
+})

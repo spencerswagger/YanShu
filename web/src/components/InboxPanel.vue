@@ -13,7 +13,7 @@ const loading = ref(false)
 const errorText = ref('')
 const notice = ref('')
 const activeId = ref('')
-const progress = ref({ done: 0, total: 0, message: '' })
+const progress = ref({ done: 0, total: 0, message: '', verified: false, meta: null })
 
 async function refresh() {
   if (!props.api) return
@@ -38,7 +38,13 @@ async function take(item) {
     const result = await props.receive({
       transferId: item.transfer_id,
       onProgress: (p) => {
-        progress.value = { done: p.done || 0, total: p.total || 0, message: p.message || '' }
+        progress.value = {
+          done: p.done || 0,
+          total: p.total || 0,
+          message: p.message || '',
+          verified: Boolean(p.verified),
+          meta: p.meta || progress.value.meta,
+        }
       },
     })
     notice.value = `已取回并落盘：${result.name}（${fmtBytes(result.size)}）`
@@ -49,7 +55,7 @@ async function take(item) {
     if (d.terminal) items.value = items.value.filter((i) => i.transfer_id !== item.transfer_id)
   } finally {
     activeId.value = ''
-    progress.value = { done: 0, total: 0, message: '' }
+    progress.value = { done: 0, total: 0, message: '', verified: false, meta: null }
   }
 }
 
@@ -93,7 +99,12 @@ refresh()
           <div class="progress">
             <span :style="{ width: percent(progress.done, progress.total) + '%' }" />
           </div>
-          <p class="meta">{{ progress.message }}</p>
+          <p class="meta">
+            {{ progress.message }}
+            <span v-if="progress.meta" class="tag" :class="progress.verified ? 'ok' : ''">
+              {{ progress.verified ? '已校验' : '未校验' }}
+            </span>
+          </p>
         </div>
       </li>
     </ul>

@@ -62,15 +62,16 @@ export class UnpackSession {
     this.slices = new Array(this.chunkCount)
     this.received = 0
     this.closed = false
-    // 契约布局的 `ys_unpack_meta` 会校验整包长度，只给 prelude 会被判 TRUNCATED；
-    // 所以这里先试一次，失败就等收齐所有块后再解（UI 用列表里的元数据兜底）。
-    try {
-      this.meta = kernel.unpackMeta({ pack: prelude, recipientPrivate, senderPublic, senderCode })
-      this.metaFromPrelude = true
-    } catch (err) {
-      this.meta = null
-      this.metaError = err
-      this.metaFromPrelude = false
+    // ① 先用 prelude-only 入口拿"谁发的 / 多大 / 几块"（scope=prelude，**块未校验**）；
+    // ② 没这个导出就退回老流程（等收齐再看）；③ 整包 `_meta` 对 prelude-only 会 TRUNCATED，不许拿它硬试。
+    this.meta = null
+    this.metaScope = null
+    this.dataVerified = false
+    const preludeMeta = kernel.unpackMetaPrelude?.({ prelude, recipientPrivate })
+    if (preludeMeta) {
+      this.meta = preludeMeta
+      this.metaScope = preludeMeta.meta_scope || 'prelude'
+      this.dataVerified = Boolean(preludeMeta.data_verified)
     }
   }
 
@@ -103,14 +104,14 @@ export class UnpackSession {
       plaintextSize: this.plaintextSize,
       chunkSize: this.chunkSize,
     })
-    if (!this.meta) {
-      this.meta = this.kernel.unpackMeta({
-        pack,
-        recipientPrivate: this.recipientPrivate,
-        senderPublic: this.senderPublic,
-        senderCode: this.senderCode,
-      })
-    }
+    // 整包清单（scope=full）：块到齐后才有意义
+    this.meta = this.kernel.unpackMeta({
+      pack,
+      recipientPrivate: this.recipientPrivate,
+      senderPublic: this.senderPublic,
+      senderCode: this.senderCode,
+    })
+    this.metaScope = this.meta.scope || 'full'
     const plain = this.kernel.unpack({
       pack,
       recipientPrivate: this.recipientPrivate,
@@ -120,7 +121,9 @@ export class UnpackSession {
     if (plain.length !== Number(this.meta.size)) {
       throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '解密结果与清单大小不一致')
     }
-    return { plain, meta: this.meta }
+    // 到这里块 AEAD 与摘要都由内核验过了：这才是"已校验"
+    this.dataVerified = true
+    return { plain, meta: this.meta, dataVerified: this.dataVerified }
   }
 
   close() {

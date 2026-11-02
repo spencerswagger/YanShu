@@ -66,6 +66,18 @@ async function receiveOnce({ api, kernel, session, transferId, senderPublic, onP
   })
   // 契约布局下 prelude 单独解不出清单（内核校验整包长度），此时先信 API 元数据，收齐后再核
   const manifest = unpack.meta
+  if (manifest) {
+    // prelude 阶段就能告诉用户"谁发的 / 多大 / 几块"，但**块还没校验**，必须如实标注
+    report({
+      phase: 'prelude',
+      done: 0,
+      total: Number(manifest.size),
+      message: `来自 ${manifest.sender_code || meta.sender_code}：${manifest.name || '未命名'} · ${manifest.size} 字节 · ${manifest.chunk_count} 块`,
+      meta: { name: manifest.name || '未命名', size: Number(manifest.size), senderCode: manifest.sender_code, chunkCount: manifest.chunk_count },
+      verified: false,
+      scope: unpack.metaScope,
+    })
+  }
   if (manifest && meta.plaintext_size !== undefined && Number(manifest.size) !== Number(meta.plaintext_size)) {
     throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '清单大小与元数据不一致')
   }
@@ -86,7 +98,13 @@ async function receiveOnce({ api, kernel, session, transferId, senderPublic, onP
       { concurrency: config.uploadConcurrency, signal },
     )
 
-    report({ phase: 'decrypting', done: 0, total: Number(manifest?.size ?? meta.plaintext_size), message: '端侧验签并解密' })
+    report({
+      phase: 'decrypting',
+      done: 0,
+      total: Number(manifest?.size ?? meta.plaintext_size),
+      message: '端侧验签并解密（块 AEAD + 摘要）',
+      verified: false,
+    })
     const finished = unpack.finish()
     plain = finished.plain
     if (Number(finished.meta.size) !== plain.length) {
@@ -103,7 +121,7 @@ async function receiveOnce({ api, kernel, session, transferId, senderPublic, onP
   }
   const blob = new Blob([plain], { type: finalMeta.mime || 'application/octet-stream' })
   if (save) {
-    report({ phase: 'saving', done: plain.length, total: plain.length, message: '落盘' })
+    report({ phase: 'saving', done: plain.length, total: plain.length, message: '落盘', verified: true })
     save(blob, safeFileName(finalMeta.name, finalMeta.ext))
   }
   if (ack) {
@@ -111,15 +129,16 @@ async function receiveOnce({ api, kernel, session, transferId, senderPublic, onP
     await api.ack({ transferId, downloadId: prelude.downloadId })
   }
   info('接收完成', { bytes: plain.length, chunks: chunkCount })
-  report({ phase: 'done', done: plain.length, total: plain.length, message: '已取回' })
+  report({ phase: 'done', done: plain.length, total: plain.length, message: '已取回（块已校验）', verified: true })
   return {
     transferId,
-    name: finalMeta.name,
+    name: safeFileName(finalMeta.name, finalMeta.ext),
     mime: finalMeta.mime,
     size: plain.length,
     chunkCount,
     blob,
-    senderCode: meta.sender_code,
+    senderCode: finalMeta.sender_code || meta.sender_code,
+    dataVerified: true,
   }
 }
 

@@ -8,12 +8,12 @@
     "file": "ys-e2e-input.bin"
   },
   "acceptance": true,
-  "note": "宿主常驻实例 127.0.0.1:18080（yanshu_dev，stub-allow）+ 契约布局内核 9445d80（§2.3 四条全过、PB_S→AWQW）；验签仍为桩",
-  "startedAt": "2026-11-02T17:09:02.106Z",
+  "note": "宿主常驻实例 127.0.0.1:18080（yanshu_dev，stub-allow）+ 冻结 head 80400ec（§2.3 四条全过、PB_S→AWQW、prelude 元信息未校验/已校验两态）；验签仍为桩",
+  "startedAt": "2026-11-02T17:14:53.019Z",
   "kernel": "真实加密 · 契约布局内核（YSPK/1.0）",
   "layout": "contract-112",
   "kernelBuild": {
-    "commit": "9445d80",
+    "commit": "80400ec",
     "ysVersion": "0x00010000"
   },
   "serverConfig": {
@@ -23,8 +23,8 @@
   },
   "chunkSize": 1048576,
   "chunkCountExpected": 3,
-  "codeA": "6JFY",
-  "codeB": "HRHY",
+  "codeA": "D9DK",
+  "codeB": "JJ73",
   "sent": true,
   "received": true,
   "downloaded": [
@@ -34,6 +34,6 @@
   "downloadSha256": "4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f",
   "bytesEqual": true,
   "downloadName": "ys-e2e-input.bin",
-  "finishedAt": "2026-11-02T17:09:10.954Z",
+  "finishedAt": "2026-11-02T17:15:00.905Z",
   "ok": true
 }
