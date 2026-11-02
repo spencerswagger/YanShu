@@ -43,6 +43,12 @@ python3 "$here/check_code_consistency.py" --wasm "$WASM" --ys-tool "$TOOL" \
 rc_code=$?
 set -e
 
+echo "== 3c/5 契约字面 vs 实现（双向一致性）=="
+set +e
+python3 "$here/check_contract_impl_parity.py" ${YS_PARITY_ARGS:-} | tail -6
+rc_parity=$?
+set -e
+
 if [ -n "${YS_OLD_BINARY:-}" ] && [ -n "${YS_NEW_BINARY:-}" ] && [ -n "${YS_BASE_DSN:-}" ]; then
     echo "== 3b/5 升级路径（老库 → 新库）=="
     set +e
@@ -84,5 +90,6 @@ echo "  用户码一致性：exit=$rc_code"
 echo "  prelude-only 元数据：exit=$rc_prelude"
 echo "  服务端内嵌内核 sha：exit=$rc_kernel${YS_SERVER_DIR:+（$YS_SERVER_DIR）}"
 echo "  升级路径：exit=$rc_upgrade"
+echo "  契约/实现一致性：exit=$rc_parity"
 echo "  证据二：exit=$rc_ev2"
-[ "$rc_code" -eq 0 ] && [ "$rc_prelude" -eq 0 ] && [ "$rc_ev2" -eq 0 ] && [ "$rc_kernel" -eq 0 ] && [ "$rc_upgrade" -eq 0 ]
+[ "$rc_code" -eq 0 ] && [ "$rc_prelude" -eq 0 ] && [ "$rc_ev2" -eq 0 ] && [ "$rc_kernel" -eq 0 ] && [ "$rc_upgrade" -eq 0 ] && [ "$rc_parity" -eq 0 ]

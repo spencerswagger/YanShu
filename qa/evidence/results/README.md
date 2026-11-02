@@ -110,6 +110,20 @@ token 轮换（KID → **`AUTH_TOKEN_STALE`**，终值；`REVOKED` 当前不出�
 prelude-only 6/6、证据一（存储/DB/日志零命中 + 三组阳性对照，含真 `sm2`）、
 token 矩阵（INVALID/STALE 两码 + 四码覆盖）、服务端内嵌内核同源（白名单 + 向量套件）。
 
+## 常驻项：契约 ↔ 实现字面双向核对
+
+`qa/evidence/check_contract_impl_parity.py`（已接进 `check_all.sh` 第 3c 步）：
+
+- **契约侧**：`git show origin/docs/contract-clarify:docs/API.md`（只读，不碰工作区）；
+- **实现侧**：`server/internal/spec/errors.go` 的字面量；
+- **双向判定**：契约有实现无 → FAIL（契约描述了不存在的行为）；实现有契约无 → FAIL（实现提供了未定义的行为）；
+- **禁用名** `AUTH_TOKEN_REVOKED` 出现在任何一侧 → FAIL；
+- 非错误码标识（`TRANSFER_ID`/`TRANSFER_ID_ASCII`/`TRANSFER_NOTICE`/`TRANSFER_STATE`）与 PURPOSE 名不计入。
+
+**契约与实现字面必须一一对应，任何一侧多出/缺少都算 FAIL。**
+当前实测（契约 `origin/docs/contract-clarify` vs 实现 `06c9f56`）：两侧各 **13 个码完全一致**，
+`AUTH_TOKEN_REVOKED` 两侧均 0。
+
 ## 经验条目（防重复踩坑）
 
 ### 经验一：同源不同字节的根因是**构建入口用错**（2026-11-02）

@@ -239,6 +239,7 @@ qa/evidence/
 ├─ check_upgrade_path.py        **升级路径**：老库缺列 → 跑新版迁移 → 列补上/历史行完好/服务起/幂等
 ├─ check_restore_after_drop.py  **回滚恢复（模拟）**：手工删列/删表 → 新版迁移恢复 → 旧凭据 401 STALE
 ├─ check_restore_from_real_drop.py **回滚恢复（真实）**：用含 drop 迁移的旧二进制建库 → 新版恢复
+├─ check_contract_impl_parity.py **契约↔实现字面双向核对**（任一方向缺/多即 FAIL，禁 REVOKED）
 ├─ check_all.sh                 一条命令跑全部：构建 → 自测 → 用户码 → prelude 元数据 → 证据二
 ├─ run_evidence1_core.sh        证据一一键复跑（起真服务 → 投递 → 三处扫 → 阳性对照）
 ├─ run_evidence2_contract.sh    证据二一键复跑（契约布局，Rust 原生入口）
