@@ -45,41 +45,86 @@ fn wasm_user_code_matches_native() {
         out.status.code(),
         String::from_utf8_lossy(&out.stderr)
     );
-    let json = String::from_utf8_lossy(&out.stdout);
-    let json = json.trim();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut code_checked = 0;
+    let mut norm_checked = 0;
+    let mut saw_pb_s = false;
 
-    // 不引 serde：按字段片段做最小校验（够用且无依赖）
-    let mut checked = 0;
-    for entry in json.split("{\"name\"").skip(1) {
-        let code64 = field(entry, "code64");
-        let code65 = field(entry, "code65");
-        let want = field(entry, "expect_code");
-        let check64 = field(entry, "check64");
-        let check65 = field(entry, "check65");
-        let want_check = field(entry, "expect_check");
-        assert_eq!(code64, want, "ys_user_code(64B) 与原生不一致: {}", entry);
-        assert_eq!(
-            code65, want,
-            "ys_user_code_wire(65B) 与原生不一致: {}",
-            entry
-        );
-        assert_eq!(check64, want_check, "check_symbol 不一致: {}", entry);
-        assert_eq!(check65, want_check, "check_symbol_wire 不一致: {}", entry);
-        checked += 1;
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        match parts.first().copied() {
+            Some("C") => {
+                // C name code64 code65 check64 check65 expectCode expectCheck
+                assert_eq!(parts.len(), 8, "C 行格式: {}", line);
+                let (name, c64, c65, k64, k65, want, want_check) = (
+                    parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7],
+                );
+                assert_eq!(c64, want, "{}: ys_user_code(64B) 与原生不一致", name);
+                assert_eq!(c65, want, "{}: ys_user_code_wire(65B) 与原生不一致", name);
+                assert_eq!(k64, want_check, "{}: check_symbol(64B) 不一致", name);
+                assert_eq!(k65, want_check, "{}: check_symbol_wire(65B) 不一致", name);
+                if name == "contract_pb_s" {
+                    assert_eq!(want, "AWQW", "契约 PB_S 必须得到 AWQW");
+                    saw_pb_s = true;
+                }
+                code_checked += 1;
+            }
+            Some("N") => {
+                // N ok rc in_hex got_hex expect_hex
+                assert_eq!(parts.len(), 6, "N 行格式: {}", line);
+                let ok = parts[1] == "1";
+                let rc: i32 = parts[2].parse().expect("rc");
+                let input = if parts[3] == "-" {
+                    String::new()
+                } else {
+                    String::from_utf8(
+                        (0..parts[3].len() / 2)
+                            .map(|i| u8::from_str_radix(&parts[3][i * 2..i * 2 + 2], 16).unwrap())
+                            .collect(),
+                    )
+                    .expect("utf8")
+                };
+                if ok {
+                    let got = hex_to_string(parts[4]);
+                    let want = hex_to_string(parts[5]);
+                    assert_eq!(rc, 0, "合法输入 {:?} 在 wasm 下失败", input);
+                    assert_eq!(got, want, "normalize 在 wasm 与原生不一致: {:?}", input);
+                } else {
+                    assert!(
+                        rc < 0,
+                        "非法输入 {:?} 在 wasm 下竟然成功（rc={}）",
+                        input,
+                        rc
+                    );
+                }
+                norm_checked += 1;
+            }
+            Some("E") => panic!("node 侧出错: {}", line),
+            _ => {}
+        }
     }
-    assert!(checked >= 5, "至少校验 5 组公钥，实际 {}", checked);
+
+    assert!(saw_pb_s, "向量里必须有契约 PB_S 条目");
     assert!(
-        json.contains("\"code64\":\"AWQW\"") || json.contains("\"code64\": \"AWQW\""),
-        "契约 PB_S 必须得到 AWQW"
+        code_checked >= 5,
+        "至少校验 5 组公钥，实际 {}",
+        code_checked
+    );
+    assert!(
+        norm_checked >= 20,
+        "归一化向量至少 20 条，实际 {}",
+        norm_checked
     );
 }
 
-fn field<'a>(entry: &'a str, key: &str) -> &'a str {
-    let pat = format!("\"{}\":\"", key);
-    let i = entry
-        .find(&pat)
-        .unwrap_or_else(|| panic!("字段 {} 缺失: {}", key, entry));
-    let rest = &entry[i + pat.len()..];
-    let end = rest.find('"').expect("闭合引号");
-    &rest[..end]
+fn hex_to_string(hex: &str) -> String {
+    if hex == "-" {
+        return String::new();
+    }
+    String::from_utf8(
+        (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+            .collect(),
+    )
+    .expect("utf8")
 }

@@ -36,4 +36,28 @@ for (const v of vec.vectors) {
   });
   [a64, a65, o64, o65, s64, s65].forEach((p, i) => e.ys_free(p, [64, 65, 4, 4, 1, 1][i]));
 }
-console.log(JSON.stringify(out));
+// 归一化：同一份 vectors/normalize-vectors.json，wasm 与原生必须一致
+const lines = [];
+for (const v of out) {
+  lines.push(["C", v.name, v.code64, v.code65, v.check64, v.check65, v.expect_code, v.expect_check].join(" "));
+}
+try {
+  const nvPath = new URL("../../testdata/normalize-vectors.json", import.meta.url);
+  const nv = JSON.parse(fs.readFileSync(nvPath, "utf8"));
+  const hexOf = (s) => Buffer.from(s, "utf8").toString("hex");
+  for (const c of nv.vectors) {
+    const input = Buffer.from(c.in, "utf8");
+    const inPtr = e.ys_alloc(input.length || 1);
+    if (input.length) u8().set(input, inPtr);
+    const outPtr = e.ys_alloc(4);
+    const rc = e.ys_normalize_code(inPtr, input.length, outPtr);
+    const got = rc === 0 ? Buffer.from(u8().slice(outPtr, outPtr + 4)).toString("ascii") : "";
+    const h = (x) => (x === "" ? "-" : x);
+    lines.push(["N", c.ok ? 1 : 0, rc, h(hexOf(c.in)), h(hexOf(got)), h(hexOf(c.out ?? ""))].join(" "));
+    e.ys_free(inPtr, input.length || 1);
+    e.ys_free(outPtr, 4);
+  }
+} catch (err) {
+  lines.push(["E", String(err && err.message ? err.message : err).replace(/\s+/g, "_")].join(" "));
+}
+console.log(lines.join("\n"));
