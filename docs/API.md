@@ -291,13 +291,13 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 - 凭据类**只有两个**：`AUTH_TOKEN_INVALID`（不存在 / 格式错 / 值不匹配 / 租约过期）、`AUTH_TOKEN_STALE`（`KID` 已轮换）；
 - 签名类：`AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受：伪造 DER、消息被改、公钥不符）、`AUTH_CODE_MISMATCH`（码与签名不一致）。
 
-**三个终值（定稿）**：`AUTH_TOKEN_STALE`（版本已过期，`KID` 轮换）/ `AUTH_TOKEN_INVALID`（值不匹配·格式错·不存在）/ `AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受）。
+**终值（定稿）**：凭据类**两个** —— `AUTH_TOKEN_STALE`（版本已过期，`KID` 轮换）、`AUTH_TOKEN_INVALID`（值不匹配·格式错·不存在）；签名类**一个** —— `AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受）。凭据类不设第三个名字。
 
 > 「显式吊销列表」这类独立语义本期**不定义**：本实现没有该机制，将来若引入再单独命名，避免与 `AUTH_TOKEN_STALE` 近义混用。
 
 **客户端处置按名字分叉**：前两个都走"重新挑战 → 签名 → 取新凭据"（**不要重算签名**，那是签名问题的解法）；只有拿到 `AUTH_SIGNATURE_INVALID` 才去查 `SIG_INPUT` 拼接、私钥与公钥是否配对。
 
-**v1 不设凭据级的"过期"错误码（定稿：删除，不保留）**：上传凭据的有效期就是传输的 `expires_at`，到期由传输终结表达（`410 TRANSFER_EXPIRED`）；下载租约到期视为凭据失效（`AUTH_TOKEN_INVALID`）。凭据类 **MUST NOT** 另设任何"凭据过期"类错误名；与 `TRANSFER_EXPIRED` 的边界是"传输终结走 410、凭据失效走 401 两码"，两者不混用。
+**v1 不设凭据级的"过期"错误码（该名仅作预留、v1 不实现，登记见 `docs/contract-rulings.md` K2）**：上传凭据的有效期就是传输的 `expires_at`，到期由传输终结表达（`410 TRANSFER_EXPIRED`）；下载租约到期视为凭据失效（`AUTH_TOKEN_INVALID`）。凭据类 **MUST NOT** 另设任何"凭据过期"类错误名；与 `TRANSFER_EXPIRED` 的边界是"传输终结走 410、凭据失效走 401 两码"，两者不混用。
 
 凭据失效 **MUST NOT** 返回签名类错误：否则客户端会被引去"重算签名 / 怀疑私钥"，而真正原因是"该换凭据了"。同理 `AUTH_TOKEN_STALE` 也 **MUST NOT** 被 `AUTH_TOKEN_INVALID` 顶替——两者客户端处置相同，但排查含义完全不同（一个是版本、一个是来源）。
 
