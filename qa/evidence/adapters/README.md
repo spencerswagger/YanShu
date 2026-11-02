@@ -44,6 +44,17 @@ $PROBE unpack /tmp/a.yspk /tmp/out.bin --recipient-sk /tmp/bob.sk
 等于**拿别人的源码产出当自己的证据**。所以 `build_probe.sh` 默认把 target 放到临时目录
 （`$work/target`），要共享必须显式 `YS_PROBE_TARGET_DIR=…`。
 
+## ABI 口径（照头文件，不照记忆）
+
+- **公钥入参一律 64 字节 `X‖Y`，不带 `0x04`**（0x04‖X‖Y 只出现在包内 `SENDER_PUB`）。
+  传 65 字节给 `ys_pack_v1` 会得到 `CRYPTO_CURVE_INVALID`——本驱动踩过，现按 64 传、
+  收到 65 字节时自动去掉前缀。
+- **解包符号**：优先 6 参 `ys_unpack_v2` / `ys_unpack_v1`（名字随版本变），
+  没有则回退 **7 参** `ys_unpack(pack,len,priv,sender_pub_or_0,out,cap,out_len)` 并把第 4 参传 `0`。
+- **绝不能拿 6 个实参去调 7 参的那个导出**：wasm 会静默丢掉多余实参、整体错位一位
+  （`out` 收到公钥指针、`out_len` 收到容量数字）→ 内存踩踏。驱动因此在调用前**断言
+  `fn.length`**（wasm 导出函数的 `.length` 就是形参个数），对不上直接退出 2。
+
 ## 驱动的输出契约
 
 | 场景 | stdout | 退出码 |
@@ -54,6 +65,18 @@ $PROBE unpack /tmp/a.yspk /tmp/out.bin --recipient-sk /tmp/bob.sk
 
 密钥文件是**裸字节**（sk 32B、pk 64B `x‖y`），不是 hex 或文本，避免被误当配置提交。
 驱动的 stdout 只报长度，不回显密钥。
+
+## 已知不一致（2026-11-02，待端侧确认）
+
+`ys_user_code`（wasm，64 字节入参）与 `ys-tool user-code`（原生，65 字节入参）**算出的码不同**：
+
+| 输入 | wasm `ys_user_code` | `ys-tool user-code` | 契约 §15.1 |
+|---|---|---|---|
+| 契约样例 `PB_S` | `X2EH` | **`AWQW`** | **`AWQW`** |
+| 本次投递包内公钥 | `FXWD` | `M8NE`（= SM3(65B) 手算） | — |
+
+`ys-tool` 与手算、与契约样例一致；wasm 侧对不上。浏览器拿这个码去注册会被服务端按
+"码与公钥不匹配"拒掉。已报给实现方，驱动暂不依赖 `ys_user_code`。
 
 ## 换别的实现怎么办
 

@@ -99,7 +99,21 @@ function callSized(fn, capGuess) {
 
 const mode = rest[0];
 
-if (mode === "version") {
+if (mode === "user-code") {
+  // 入参 64 字节 X‖Y（前端不用改）；内核内部补 0x04 后按 65 字节算 SM3
+  const hexIn = (rest[1] || "").trim();
+  const raw = Buffer.from(hexIn, "hex");
+  if (raw.length !== 64 && raw.length !== 65) die("user-code 需要 64 或 65 字节公钥 hex");
+  const pk = alloc(65);
+  if (raw.length === 65) write(pk, raw);
+  else { u8()[pk] = 0x04; write(pk + 1, raw); }
+  // 头文件：ys_user_code(public_key /*64*/, out /*4 ASCII*/) —— 2 参，无 out_len
+  if (e.ys_user_code.length !== 2) die(`ys_user_code arity=${e.ys_user_code.length}，期望 2`);
+  const out = alloc(4);
+  const rc = e.ys_user_code(pk, out);
+  if (rc !== 0) die(`ys_user_code: ${errName(rc)}`);
+  console.log(Buffer.from(read(out, 4)).toString("ascii"));
+} else if (mode === "version") {
   // ys_version() 是 u32，按 major.minor.patch(8.8.16) 解
   const v = e.ys_version();
   console.log(`0x${v.toString(16).padStart(8, "0")} ${(v >>> 24)}.${(v >>> 16) & 0xff}.${v & 0xffff}`);
@@ -119,11 +133,12 @@ if (mode === "version") {
   const [inPath, outPath] = rest.slice(1, 3);
   if (!inPath || !outPath) die("pack <in> <out> --recipient-pk <f> --sender-sk <f>");
   const data = fs.readFileSync(inPath);
-  // 注意：头文件注释写 64，但实现读的是 65 字节并强制 0x04 前缀（见 ffi.rs）
+  // ABI 口径（头文件「公钥口径表」）：入参一律 64 字节 X‖Y，**不带 0x04**；
+  // 0x04‖X‖Y 只出现在包内 SENDER_PUB。传 65 字节会被当成坐标解析 → CRYPTO_CURVE_INVALID。
   const pkRaw = fs.readFileSync(opt("--recipient-pk") ?? die("--recipient-pk required"));
-  const recipientPk = pkRaw.length === 65 ? pkRaw
-    : pkRaw.length === 64 ? Buffer.concat([Buffer.from([0x04]), pkRaw])
-    : die(`recipient-pk must be 64 or 65 bytes, got ${pkRaw.length}`);
+  const recipientPk = pkRaw.length === 65 && pkRaw[0] === 0x04 ? pkRaw.subarray(1)
+    : pkRaw.length === 64 ? pkRaw
+    : die(`recipient-pk must be 64 bytes X||Y (or 65 with 0x04 prefix), got ${pkRaw.length}`);
   const senderSk = readKey(opt("--sender-sk"), 32, "sender-sk");
   const name = Buffer.from(opt("--name") ?? "probe.bin", "utf8");
   const mime = Buffer.from(opt("--mime") ?? "application/octet-stream", "ascii");
@@ -132,7 +147,7 @@ if (mode === "version") {
   const chunkSize = Number(opt("--chunk-size") ?? (1 << 20));
   const seed = crypto.randomBytes(32);
 
-  const pk = alloc(65), sk = alloc(32), nm = alloc(name.length || 1), mi = alloc(mime.length || 1);
+  const pk = alloc(64), sk = alloc(32), nm = alloc(name.length || 1), mi = alloc(mime.length || 1);
   const ex = alloc(ext.length || 1), dt = alloc(data.length || 1), sd = alloc(32);
   write(pk, recipientPk); write(sk, senderSk); write(nm, name); write(mi, mime);
   write(ex, ext); write(dt, data); write(sd, seed);
@@ -159,12 +174,29 @@ if (mode === "version") {
     // 优先用 6 参的 ys_unpack_v2（不需要发送方公钥）；没有就退回 7 参原型并把公钥传 0。
     // 注意：wasm 会静默丢弃多余实参并整体错位（out 收到公钥指针 → 内存踩踏），所以两条路
     // 必须精确匹配各自的原型，不能混传。
-    const unpackFn =
-      typeof e.ys_unpack_v1 === "function"
-        ? (out, cap, outLen) => e.ys_unpack_v1(pp, pack.length, skp, out, cap, outLen)
-        : typeof e.ys_unpack_v2 === "function"
-          ? (out, cap, outLen) => e.ys_unpack_v2(pp, pack.length, skp, out, cap, outLen)
-          : (out, cap, outLen) => e.ys_unpack(pp, pack.length, skp, 0, out, cap, outLen);
+    // wasm 导出函数的 .length 就是形参个数：**先断言 arity 再调用**。
+    // 踩过的坑：6 参实参去调 7 参的 ys_unpack 不会报错，而是整体错位一位
+    //（out 收到公钥指针、out_len 收到容量数字）→ 内存踩踏。这里宁可硬失败。
+    const sixAri = (fn, name) => {
+      if (fn.length !== 6) die(`${name} arity=${fn.length}，期望 6；拒绝调用（错位会踩内存）`);
+      return fn;
+    };
+    const sevenAri = (fn, name) => {
+      if (fn.length !== 7) die(`${name} arity=${fn.length}，期望 7；拒绝调用`);
+      return fn;
+    };
+    let unpackFn;
+    if (typeof e.ys_unpack_v2 === "function") {
+      const f = sixAri(e.ys_unpack_v2, "ys_unpack_v2");
+      unpackFn = (out, cap, outLen) => f(pp, pack.length, skp, out, cap, outLen);
+    } else if (typeof e.ys_unpack_v1 === "function") {
+      const f = sixAri(e.ys_unpack_v1, "ys_unpack_v1");
+      unpackFn = (out, cap, outLen) => f(pp, pack.length, skp, out, cap, outLen);
+    } else {
+      const f = sevenAri(e.ys_unpack, "ys_unpack");
+      // 7 参原型：第 4 参 sender_pub_or_0 传 0 = 不与包内公钥比对
+      unpackFn = (out, cap, outLen) => f(pp, pack.length, skp, 0, out, cap, outLen);
+    }
     const plain = callSized(unpackFn, pack.length);
     fs.writeFileSync(outPath, plain);
     console.log(`OK ${plain.length}`);

@@ -1,11 +1,11 @@
 # 证据二实测结果：密文篡改必报错（**生产导出路径**：wasm32 raw C ABI）
 
 - 日期：2026-11-02
-- 对象：`crypto/sm`，分支 `feat/endcrypto-wasm` @ **`e9f8254`**（Rune 已删除 rune-v1 旧布局，
+- 对象：`crypto/sm`，分支 `feat/endcrypto-wasm` @ **`a33c2de`**（Rune 已删除 rune-v1 旧布局，
   仓库只剩 `YSPK/1.0`；解密调用走 6 参 `ys_unpack_v1`，没有则回退 7 参 `ys_unpack` 传 NULL）
 - **入口类型：`wasm-production`**（`--entry-kind production`）
 - `ys_version()`：`0x00010000` → **0.1.0**；wasm 文件 sha256
-  `a657b33948b7299bd282e2c4a6b4774906afa8c61d3a0e6a7fa279d2c2b57b19`（124,976 字节）
+  `（以本次构建为准，124,161 字节；sha256 见复跑输出）`
 - 包布局：`contract-v1`（默认）
 - 解密入口：**`yanshu_sm.wasm` 的 `ys_unpack`**（`--entry-kind production`）——
   就是 Web 将来要调的同一批导出，不是 Rust 原生 API、也不是测试替身
@@ -70,7 +70,8 @@ qa/evidence/run_evidence2_wasm.sh /tmp/rune/crypto/sm /tmp/ys-ev2-wasm
 
 **未报错 0 种**。
 
-（本次 head `e9f8254` 复跑：单块 5/5、多块 10/10、补充变体 18/18，与上一版结论一致。）
+（本次 head `a33c2de` 复跑：单块 5/5、多块 10/10、补充变体 18/18，与上一版结论一致。
+公钥入参口径已改为 **64 字节 `X‖Y`**，驱动按 64 传；解包走 6 参 `ys_unpack_v1`（arity 断言）。）
 
 ## 与 native-api 那份（`2026-11-02-evidence2-contract-v1.md`）的差别
 
@@ -85,14 +86,19 @@ qa/evidence/run_evidence2_wasm.sh /tmp/rune/crypto/sm /tmp/ys-ev2-wasm
 
 ## 发现的问题（不影响结论，但要让实现方知道）
 
-1. **头文件注释与实现不一致**：`crypto/include/yanshu_sm.h` 里 `ys_pack_v1` 的
-   `recipient_public` 注释写 `/* 64 */`，但实现（`ffi.rs`）读 **65 字节**并强制 `0x04` 前缀，
-   传 64 字节会得到 `BAD_POINT`。驱动里已按 65 处理并做了 64→65 自动补前缀。
-   （本轮复查 `73e4b2a` 的头文件，注释仍未改；`ys_unpack` 的 7 参/`_v2` 6 参说明已补齐。）
-2. **wasm 的 `ys_error_name` 返回不带 `CRYPTO_` 前缀**（如 `TAG_MISMATCH`），而 native/Rust
+1. **公钥入参口径已统一为 64 字节 `X‖Y`**（`a33c2de` 的头文件「公钥口径表」明确写了）。
+   早期版本曾要 65 字节（`0x04` 前缀），驱动跟着改过两次；现在按 64 传，收到 65 时自动去前缀，
+   传 65 给 `ys_pack_v1` 会得到 `CRYPTO_CURVE_INVALID`。
+2. **`ys_user_code` 的算码结果与契约/原生侧不一致**（本轮新发现，最要紧）：
+   同一把公钥，wasm 的 `ys_user_code` 算出 `FXWD`，`ys-tool user-code` 算出 `M8NE`
+   （= 契约 §15.1 的算法，用 65 字节 `SM3` 手算也是 `M8NE`）。
+   用契约样例 `PB_S` 复核：契约给 `AWQW`，`ys-tool` 给 `AWQW`，**wasm 给 `X2EH`**。
+   → 浏览器若拿 `ys_user_code` 的码去注册，会被服务端按"码与公钥不匹配"拒掉。
+   本轮证据不依赖这个导出（码只用于投递，且由 `ys-tool` 派生），但**建议按 P0 修**。
+3. **wasm 的 `ys_error_name` 返回不带 `CRYPTO_` 前缀**（如 `TAG_MISMATCH`），而 native/Rust
    侧错误名是 `CRYPTO_*`。两边不一致会让"按错误名做前端映射"时踩坑；本次用
    `--error-regex 'ERR [A-Z_]+'` 兼容，但建议统一。
-3. `RUSTFLAGS=-C linker=gcc` 这类全局设置会把 wasm 目标也带偏（rust-lld 被替换成 gcc
+4. `RUSTFLAGS=-C linker=gcc` 这类全局设置会把 wasm 目标也带偏（rust-lld 被替换成 gcc
    直接报错）。已改成按 host target 变量设置，脚本里留了注释。
 
 ## 待补：Web 集成后的 C 份
