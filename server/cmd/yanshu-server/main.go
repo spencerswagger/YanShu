@@ -113,9 +113,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	verifier, err := auth.NewVerifier(string(cfg.Verifier), log)
+	verifier, err := auth.NewVerifier(string(cfg.Verifier), cfg.ResolveKernelWASM(), log)
 	if err != nil {
 		return err
+	}
+	if closer, ok := verifier.(interface{ Close() }); ok {
+		defer closer.Close()
 	}
 	tokens, err := auth.NewTokenIssuer(cfg.TokenSecret)
 	if err != nil {

@@ -178,6 +178,7 @@ log_path=/var/log/yanshu/server.log
 | `YANSHU_TOKEN_SECRET` | **起服务时必需** | 无 | `upload_token` 的 HMAC 密钥，**≥16 字节**；缺失或过短 → 启动报错退出（不会用空值/随机值静默跑起来）；只从环境变量或 0600 密钥文件读 |
 | `YANSHU_ADDR` | 否 | `:8080` | 监听地址；常驻本机写 `127.0.0.1:8080`。**只认这个 env，没有 `--addr` 参数** |
 | `YANSHU_VERIFIER` | 否 | `stub-deny` | `sm2` / `stub-deny`（一律拒绝，fail closed）/ `stub-allow`（仅显式开启的测试态，启动打 WARN） |
+| `YANSHU_KERNEL_WASM` | `sm2` 时必需 | 自动探测 `./kernel/yanshu_sm.wasm` | 端侧内核路径（wazero 加载，0 import） |
 | `YANSHU_LOG_DIR` | 否 | 空（仅 stdout） | 按 UTC 日期滚动写 `yanshu-server-YYYY-MM-DD.log`（0640） |
 | `YANSHU_LOG_RETENTION_DAYS` | 否 | `7` | 滚动日志保留天数，只清理本服务命名规则内的文件 |
 | `YANSHU_LOG_FILE` | 否 | 空 | 单文件日志（不滚动），优先于 `YANSHU_LOG_DIR` |
@@ -203,23 +204,28 @@ log_path=/var/log/yanshu/server.log
 ### 切到真实 SM2 验签（`YANSHU_VERIFIER=sm2`）
 
 ```sh
-YANSHU_VERIFIER=sm2 ...        # 真实验签（默认 userID "1234567812345678"，DER 签名）
-YANSHU_VERIFIER=stub-deny ...  # 默认值：一律拒绝（fail closed）
-YANSHU_VERIFIER=stub-allow ... # 仅测试态：放行占位签名，启动打 WARN
+YANSHU_VERIFIER=sm2 \
+YANSHU_KERNEL_WASM=./kernel/yanshu_sm.wasm \
+... ./bin/yanshu-server
 ```
 
-- 实现是服务端自研的 SM2 验签（`internal/gm/sm2.go`）：sm2p256v1 曲线 + ZA + `SM3(ZA‖SIG_INPUT)`
-  + 严格 DER 解析；**没有**引第三方密码库，也没有 wasm 运行时依赖（单二进制即可部署）。
-- 正确性用端侧实现的向量钉住：ZA、固定 k 签名逐字节一致，验签通过、篡改必拒
-  （`internal/gm/sm2_test.go`；端侧实现已与 GmSSL 交叉验证 84 项）。
+- 走 **路线 B**：纯 Go wasm 运行时（wazero）加载端侧内核 `yanshu_sm.wasm`，
+  调 `ys_sm2_verify_der` 验签。服务端**不再维护第二套 SM2 实现**，减少分叉源。
+- 内核随仓库提供：`server/kernel/yanshu_sm.wasm`（0 import、`ys_version()=0x00010000`，
+  来源与 sha256 见 `server/kernel/README.md`）。
+- `YANSHU_KERNEL_WASM` 留空时自动探测 `./kernel/yanshu_sm.wasm` 与可执行文件同级的
+  `kernel/yanshu_sm.wasm`；**sm2 模式下找不到内核 → 启动直接报错**（不降级）。
+- 公钥：内核 ABI 收 64 字节 `X‖Y`；服务端存的是 65 字节（`0x04‖X‖Y`），调用前剥掉前缀。
+  签名：DER `SEQUENCE{r,s}`；userID 固定 `1234567812345678`，`e = SM3(ZA‖SIG_INPUT)`。
+- 默认值：`YANSHU_VERIFIER` 缺省 `stub-deny`（一律拒绝，fail closed）；`stub-allow` 只能显式开启
+  并打 WARN。三者都非法值 → 启动报错。
 - 切换影响：
   - 所有写操作必须带**真实签名**（`X-YS-Signature` = base64url(DER)，覆盖 `SIG_INPUT`）；
     占位签名会得到 `401 AUTH_SIGNATURE_INVALID`。
   - `X-YS-Code` 与签名覆盖的 `CODE(4)` 不一致 → `401 AUTH_CODE_MISMATCH`。
   - **没有会话**：雁书没有 session/token 登录态，切换不涉及"旧会话失效"。
-  - `upload_token` 按 `SM3(token)` 校验，**轮换 `TOKEN_SECRET` 不会让已签发的 token 失效**；
-    但用同一个 `Idempotency-Key` 重放 `POST /transfers` 时无法重建旧 token（会返回 `409`），
-    此时重新建传输即可（新传输拿新 token）。
+  - `upload_token` 按「当前密钥重算 + SM3 比对」校验，**轮换 `TOKEN_SECRET` 会让存量 token 失效**
+    （≤ TTL 24h）：旧 token → 401，客户端重建传输即可继续；同 `Idempotency-Key` 重放会返回 409。
 
 ### migrations（命令与幂等性）
 

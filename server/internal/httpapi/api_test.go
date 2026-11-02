@@ -67,7 +67,11 @@ func newEnv(t *testing.T, mode string) *env {
 		SweepInterval:     time.Minute,
 		ShutdownTimeout:   time.Second,
 	}
-	v, err := auth.NewVerifier(mode, nil)
+	kernel := ""
+	if mode == auth.ModeSM2 {
+		kernel = "../../kernel/yanshu_sm.wasm"
+	}
+	v, err := auth.NewVerifier(mode, kernel, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

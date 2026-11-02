@@ -53,6 +53,28 @@ func TestVerifierDefaultsToFailClosed(t *testing.T) {
 	}
 }
 
+// sm2 模式没有内核时必须启动失败（fail closed，不降级）。
+func TestSM2RequiresKernelWhenServing(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
+	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
+	t.Setenv("YANSHU_TOKEN_SECRET", strings.Repeat("k", MinTokenSecretLen))
+	t.Setenv("YANSHU_VERIFIER", "sm2")
+	t.Setenv("YANSHU_KERNEL_WASM", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	err = cfg.ValidateForServe()
+	if err == nil {
+		t.Fatal("sm2 without kernel must fail validation")
+	}
+	if !strings.Contains(err.Error(), "kernel") {
+		t.Fatalf("error should mention the kernel: %v", err)
+	}
+}
+
 func TestDatabaseURLIsRequired(t *testing.T) {
 	t.Setenv("YANSHU_DATABASE_URL", "")
 	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())

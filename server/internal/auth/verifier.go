@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-
-	"github.com/spencerswagger/YanShu/server/internal/gm"
 )
 
 // 验签错误。对外只暴露"签名不合法"或"验签不可用"，不区分内部原因（不给 oracle）。
@@ -20,11 +18,8 @@ var (
 //
 // 约定（与 docs/CRYPTO-PACK.md §10 对齐）：
 //   - pubKey 是未压缩点 65 字节（0x04 ‖ X32 ‖ Y32）；
-//   - message 是服务端给出的挑战消息原文（见 BuildChallengeMessage）；
+//   - message 是 SIG_INPUT 原文（YSAUTH1 ‖ PURPOSE ‖ NONCE ‖ 字段串）；
 //   - signature 是 ASN.1 DER 的 SEQUENCE{r,s}（§10.4），算法为 SM2-SM3、默认 ZA。
-//
-// 实现方要自己完成 SM3(ZA ‖ message) 与曲线点校验；本接口不传 ZA 参数，
-// 因为 v1 只允许默认 ZA（ID = "1234567812345678"）。
 type Verifier interface {
 	Verify(pubKey, message, signature []byte) error
 }
@@ -38,12 +33,26 @@ const (
 
 // NewVerifier 按模式构造验签器。
 //
-// 默认 stub-deny（一律拒绝）是刻意的 fail-closed：SM2 实现还没接进来之前，
+// 默认 stub-deny（一律拒绝）是刻意的 fail-closed：内核没加载成功时，
 // 宁可全拒绝也不要"看起来能跑但谁都能过"。
-func NewVerifier(mode string, log *slog.Logger) (Verifier, error) {
+//
+// sm2 走路线 B：wazero + 端侧内核的 `ys_sm2_verify_der`（kernelPath 必填，
+// 缺失或加载失败时启动即报错，不降级）。
+func NewVerifier(mode, kernelPath string, log *slog.Logger) (Verifier, error) {
 	switch mode {
 	case ModeSM2:
-		return sm2Verifier{}, nil
+		v, err := NewWASMVerifier(kernelPath)
+		if err != nil {
+			return nil, err
+		}
+		if log != nil {
+			if ver, err := v.Version(); err == nil {
+				log.Info("sm2 verifier loaded", "kernel", kernelPath, "version", fmt.Sprintf("0x%08x", ver))
+			} else {
+				log.Warn("sm2 verifier loaded but ys_version failed", "err", err.Error())
+			}
+		}
+		return v, nil
 	case ModeStubDeny, "":
 		return denyVerifier{}, nil
 	case ModeStubAllow:
@@ -69,28 +78,6 @@ func (allowVerifier) Verify(pubKey, message, signature []byte) error {
 		return ErrSignature
 	}
 	if len(message) == 0 || len(signature) == 0 {
-		return ErrSignature
-	}
-	return nil
-}
-
-// sm2Verifier 是真实 SM2 验签（服务端自研实现，见 internal/gm/sm2.go）。
-//
-// 口径与 docs/CRYPTO-PACK.md §10 一致：
-//   - 曲线 sm2p256v1，用户标识默认 "1234567812345678"（ENTL = 0x0080）；
-//   - 待验摘要 e = SM3(ZA ‖ message)，message 就是 SIG_INPUT 原文；
-//   - 签名值严格 DER SEQUENCE{r,s}（70..72 字节），拒绝非规范编码；
-//   - 失败一律返回 ErrSignature，不区分"格式错"与"验签不过"（不给 oracle）。
-type sm2Verifier struct{}
-
-func (sm2Verifier) Verify(pubKey, message, signature []byte) error {
-	if len(pubKey) != 65 || pubKey[0] != 0x04 {
-		return ErrSignature
-	}
-	if len(message) == 0 || len(signature) == 0 {
-		return ErrSignature
-	}
-	if !gm.VerifySM2DER(pubKey, message, signature) {
 		return ErrSignature
 	}
 	return nil

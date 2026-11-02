@@ -7,6 +7,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,9 @@ type Config struct {
 	// StorageQuotaBytes 是单 IP 未取走密文总量上限（API.md §11.4，默认 8 GiB）。
 	StorageQuotaBytes int64
 
+	// KernelWASM 是 sm2 验签用的端侧内核路径（YANSHU_KERNEL_WASM）；
+	// 留空时自动探测 ./kernel/yanshu_sm.wasm 与可执行文件同级的 kernel/。
+	KernelWASM string
 	// LogFile 非空时把日志同时追加写入该文件（单文件，不滚动）。
 	LogFile string
 	// LogDir 非空时按 UTC 日期滚动写 <dir>/yanshu-server-YYYY-MM-DD.log（stdout 仍保留）。
@@ -64,7 +68,28 @@ const MinTokenSecretLen = 16
 // 但只要开始监听端口，就必须有稳定的 TOKEN_SECRET —— 缺失时**报错退出**，
 // 不允许静默用空值/进程内随机值跑起来（那会让 upload_token 在重启后全部失效，
 // 而且部署方根本察觉不到）。
+// ResolveKernelWASM 解析内核路径：显式 env 优先，其次当前目录与可执行文件同级的 kernel/。
+func (c Config) ResolveKernelWASM() string {
+	if c.KernelWASM != "" {
+		return c.KernelWASM
+	}
+	candidates := []string{"kernel/yanshu_sm.wasm"}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "kernel", "yanshu_sm.wasm"))
+	}
+	for _, p := range candidates {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
 func (c Config) ValidateForServe() error {
+	if c.Verifier == VerifierSM2 && c.ResolveKernelWASM() == "" {
+		return fmt.Errorf("config: YANSHU_VERIFIER=sm2 requires the wasm kernel; " +
+			"set YANSHU_KERNEL_WASM=/path/to/yanshu_sm.wasm (repo ships it at server/kernel/yanshu_sm.wasm)")
+	}
 	if len(c.TokenSecret) < MinTokenSecretLen {
 		return fmt.Errorf("config: YANSHU_TOKEN_SECRET is required when serving (>=%d bytes); "+
 			"read it from an env var or a 0600 file, never hardcode it", MinTokenSecretLen)
@@ -83,6 +108,7 @@ func Load() (Config, error) {
 		STUNURLs:          envList("YANSHU_STUN_URLS", []string{"stun:stun.l.google.com:19302"}),
 		WSURL:             env("YANSHU_WS_URL", ""),
 		StorageQuotaBytes: envInt64("YANSHU_STORAGE_QUOTA_BYTES", 8<<30),
+		KernelWASM:        os.Getenv("YANSHU_KERNEL_WASM"),
 		LogFile:           os.Getenv("YANSHU_LOG_FILE"),
 		LogDir:            os.Getenv("YANSHU_LOG_DIR"),
 		LogRetentionDays:  int(envInt64("YANSHU_LOG_RETENTION_DAYS", 7)),

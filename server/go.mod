@@ -2,7 +2,10 @@ module github.com/spencerswagger/YanShu/server
 
 go 1.27
 
-require github.com/jackc/pgx/v5 v5.12.0
+require (
+	github.com/jackc/pgx/v5 v5.12.0
+	github.com/tetratelabs/wazero v1.9.0
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
