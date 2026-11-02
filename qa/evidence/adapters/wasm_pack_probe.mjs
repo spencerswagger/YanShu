@@ -158,7 +158,17 @@ if (mode === "meta" || mode === "meta-prelude") {
   // 关键：**按入口的入参宽度准备缓冲区**。
   // 64 字节入口必须拿到纯 X‖Y；把 0x04‖X‖Y 喂给 64 字节入口会整体错位一位，
   // 算出一个不一样的码（X2EH 就是这么来的，不是内核算错）。
-  const buf = alloc(wire ? 65 : 64);
+  // 规矩：公钥入参一律显式声明字节数并断言，不靠记忆（错一位会静默算出另一个码）
+  const wantLen = wire ? 65 : 64;
+  if (wire ? raw.length !== 65 : raw.length !== 64) {
+    // 允许调用方传 65 给 64 入口（自动去前缀），但**必须显式**记录这一步
+    if (!wire && raw.length === 65 && raw[0] === 0x04) {
+      // ok：去前缀后是 64
+    } else {
+      die(`${fnName} 需要 ${wantLen} 字节公钥，收到 ${raw.length}（带 0x04 的 65 字节只能给 _wire 入口）`);
+    }
+  }
+  const buf = alloc(wantLen);
   write(buf, wire ? (raw.length === 65 ? raw : Buffer.concat([Buffer.from([0x04]), raw]))
                   : (raw.length === 65 ? raw.subarray(1) : raw));
   const out = alloc(4);

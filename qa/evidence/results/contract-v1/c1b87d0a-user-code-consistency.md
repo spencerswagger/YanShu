@@ -1,6 +1,8 @@
 # 用户码跨实现一致性 · 冻结 head `233805a`（含"根因"的实测证据）
 
-- 日期：2026-11-02
+- 日期：
+> **验收锚点：锚 sha256，不锚 head 号** —— 本份对应产物 sha256 `c1b87d0a-d9a847fa-…`（完整值见正文），head 号仅作溯源；sha256 一变则全部重跑。
+2026-11-02
 - **冻结/最新 head**：`feat/endcrypto-wasm@233805a`（与 `80400ec`/`031e95b` **同一份产物**）
 - wasm：**127,313 字节**，sha256 `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`
 - 脚本：`qa/evidence/check_code_consistency.py`
