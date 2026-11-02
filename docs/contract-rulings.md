@@ -68,11 +68,10 @@
 | # | 现状 | 契约要求 | 状态 |
 |---:|---|---|---|
 | K1 | 内嵌内核曾用错构建入口产出 `8b89dd7f…`（130,653 B），与冻结产物 `c1b87d0a…`（127,313 B）不同字节 | 根因已查明（从成员 crate 目录构建会绕过 workspace 锁文件与 release profile），**已从偏离登记升级为契约硬规则**：`CRYPTO-PACK` §18 规定唯一构建命令、冻结 sha256、以及"只比 sha256"的判定方式 | **已升级为契约规则（§18），结案** |
-| K2 | `AUTH_TOKEN_EXPIRED` 已由实现提供（上传 6 h / 租约 30 min） | 已回 `API §10.1` 正文作为 v1 生效码；与 `410 TRANSFER_EXPIRED` 的分界写死（凭据超期 401 / 传输终结 410） | **结案（已入正文）** |
 | K4 | 内核二进制曾**未被 git 跟踪**：根 `.gitignore` 的 `*.wasm` 让 `git add -A` 静默跳过 `server/kernel/yanshu_sm.wasm`，仓库里从来没有这份内核，别人 clone 下来拿不到 | 内核资产 MUST 以 **git blob** 形式存在于仓库：`git cat-file blob HEAD:server/kernel/yanshu_sm.wasm` 的 sha256 == 冻结值 `c1b87d0a…7259f`（127,313 B）。**仅工作区有文件不算交付**（修法：`server/.gitignore` 加 `!kernel/yanshu_sm.wasm`） | 已修复，陷阱登记保留 |
 | K5 | **构建入口决定字节**：从成员目录 `crypto/sm` 构建会绕过 workspace 的 `Cargo.lock` 与 `[profile.release]`（`opt-level=3`/`lto=true`/`codegen-units=1`），得 130,653 B / `8b89dd7f…`；从 `crypto/` 用 `-p yanshu-sm` 才是 127,313 B / `c1b87d0a…` | 唯一正确命令：`cd crypto && cargo build --release --target wasm32-unknown-unknown -p yanshu-sm`；**不要**从成员 crate 目录构建。规范条文见 `CRYPTO-PACK` §18 | 已固化，陷阱登记保留 |
 
-> 编号说明：`K3` 已撤销（KID 机制已落地，不存在"版本机制缺失"这类偏离），因此本表编号在 K3 处留空，其余连续。
+> 编号说明：`K2` 已删除（`AUTH_TOKEN_EXPIRED` 已回 `API §10.1` 正文为 v1 生效码）、`K3` 已撤销（KID 机制已落地），故本表在 K2/K3 处留空，其余连续。
 
 ## 易错点（自查清单）
 
