@@ -216,33 +216,61 @@ func run(argv []string) int {
 		}
 	}
 
-	// 字段名固定（README「一条命令投递」有表），Gate 的 --deliver-cmd 按名字解析 stdout。
-	fmt.Println("=== DELIVERY ===")
-	fmt.Printf("code=%s\n", rep.Code)
-	fmt.Printf("recipient_code=%s\n", rep.RecipientCode)
-	fmt.Printf("package_id=%s\n", rep.PackageID)
-	fmt.Printf("chunks=%d\n", rep.Chunks)
-	fmt.Printf("chunk_size=%d\n", rep.ChunkSize)
-	fmt.Printf("plaintext_size=%d\n", rep.PlaintextSize)
-	fmt.Printf("prelude_len=%d\n", rep.PreludeLen)
-	fmt.Printf("ciphertext_bytes=%d\n", rep.CiphertextBytes)
-	fmt.Printf("state=%s\n", rep.State)
-	fmt.Printf("acked=%v\n", rep.Acked)
-	fmt.Printf("blob_dir=%s\n", rep.BlobDir)
-	fmt.Printf("storage_path=%s\n", rep.StoragePath)
-	fmt.Printf("db_url=%s\n", rep.DBURL)
-	fmt.Printf("schema=%s\n", rep.Schema)
-	fmt.Printf("log_path=%s\n", rep.LogPath)
-	fmt.Println("================")
+	// stdout 契约：**只输出一份 JSON 对象**（单行），字段名见 README；人读摘要走 stderr。
+	// 这样 `--deliver-cmd` 可以直接 `json.loads(stdout)`，不必和人类日志抢同一路输出。
+	line, err := marshalJSON(rep, false)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "序列化结果失败：%v\n", err)
+		return exitFailure
+	}
+	os.Stdout.Write(line)
+	writeHumanSummary(os.Stderr, rep)
 
-	if opt.jsonOut != "" {
-		data, _ := json.MarshalIndent(rep, "", "  ")
-		if err := os.WriteFile(opt.jsonOut, data, 0o600); err != nil {
+	// `--json-out <file>` 额外落一份缩进 JSON；`--json-out -` 等同默认（只有 stdout）。
+	if opt.jsonOut != "" && opt.jsonOut != "-" {
+		pretty, _ := marshalJSON(rep, true)
+		if err := os.WriteFile(opt.jsonOut, pretty, 0o600); err != nil {
 			fmt.Fprintf(os.Stderr, "写 --json-out 失败：%v\n", err)
 			return exitFailure
 		}
+		fmt.Fprintf(os.Stderr, "json_out=%s\n", opt.jsonOut)
 	}
 	return exitOK
+}
+
+// marshalJSON 编码结果；关掉 HTML 转义，保证 db_url 里的 & 不被写成 \u0026。
+func marshalJSON(v any, indent bool) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if indent {
+		enc.SetIndent("", "  ")
+	}
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// writeHumanSummary 打印人读摘要（固定 key=value，写到 stderr，不污染 stdout 的 JSON）。
+func writeHumanSummary(w io.Writer, rep report) {
+	fmt.Fprintln(w, "=== DELIVERY ===")
+	fmt.Fprintf(w, "code=%s\n", rep.Code)
+	fmt.Fprintf(w, "recipient_code=%s\n", rep.RecipientCode)
+	fmt.Fprintf(w, "package_id=%s\n", rep.PackageID)
+	fmt.Fprintf(w, "chunks=%d\n", rep.Chunks)
+	fmt.Fprintf(w, "chunk_size=%d\n", rep.ChunkSize)
+	fmt.Fprintf(w, "plaintext_size=%d\n", rep.PlaintextSize)
+	fmt.Fprintf(w, "prelude_len=%d\n", rep.PreludeLen)
+	fmt.Fprintf(w, "ciphertext_bytes=%d\n", rep.CiphertextBytes)
+	fmt.Fprintf(w, "state=%s\n", rep.State)
+	fmt.Fprintf(w, "acked=%v\n", rep.Acked)
+	fmt.Fprintf(w, "blob_dir=%s\n", rep.BlobDir)
+	fmt.Fprintf(w, "storage_path=%s\n", rep.StoragePath)
+	fmt.Fprintf(w, "db_url=%s\n", rep.DBURL)
+	fmt.Fprintf(w, "schema=%s\n", rep.Schema)
+	fmt.Fprintf(w, "log_path=%s\n", rep.LogPath)
+	fmt.Fprintln(w, "================")
 }
 
 // report 的 JSON 字段与 stdout 字段一一对应（Gate 按字段名解析）。

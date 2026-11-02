@@ -102,13 +102,17 @@ bin/deliver --base-url http://127.0.0.1:8080 --yspk /tmp/sample.yspk
 | `--recipient-code` | 收件人码；不给则临时生成一个并注册 |
 | `--recipient-pubkey` | 收件人公钥 base64url（收件人未注册时用；会校验与码一致） |
 | `--sender-code` | 可选，用于核对包内 `SENDER_PUB` 派生的码 |
-| `--no-ack` | 取件后不 ack，保留密文给 Gate 检索 |
+| `--no-ack` | 取件后不 ack，保留密文给 Gate 检索；**不传就是全流程**：ack 会消耗一次下载次数，达到 `max_downloads` 后进入 `CONSUMED` 并**物理删除密文**，想留证据务必加这个开关 |
 | `--blob-dir` | 服务端的 `YANSHU_BLOB_DIR`，用于打印/校验存储路径 |
 | `--dsn` | 服务端 DSN，用于打印 `database` / `schema` |
 | `--json-out` | 结果写 JSON |
 | `--sm3-cmd` | 外部 SM3 命令（hex 进 hex 出），用于与端侧实现对齐 |
 
-stdout 字段固定（Gate 按名字解析，`=== DELIVERY ===` 与 `================` 之间）：
+**输出契约**：`stdout` **只输出一份 JSON 对象**（单行，字段见下表），`stderr` 输出人读摘要
+（`=== DELIVERY ===` 包裹的 `key=value`）。`--json-out <file>` 额外落一份缩进 JSON 到文件
+（`--json-out -` 等同默认：只有 stdout）。
+
+JSON 字段：
 
 | 字段 | 含义 |
 |---|---|
@@ -128,24 +132,20 @@ stdout 字段固定（Gate 按名字解析，`=== DELIVERY ===` 与 `===========
 | `schema` | 实际生效的数据库 schema（连 `--dsn` 查出来的） |
 | `log_path` | 服务端日志路径（来自 `--log`）；传目录时自动展开为当日文件 `yanshu-server-YYYY-MM-DD.log` |
 
-输出（示例）：
+stdout（示例，一行 JSON）：
+
+```json
+{"ok":true,"base_url":"http://127.0.0.1:8080","code":"0KHJ","recipient_code":"57YV","package_id":"e36350a11e7a44642b1fefdba019c12c","chunks":1,"chunk_size":1024,"plaintext_size":48,"prelude_len":503,"ciphertext_bytes":567,"state":"LEASED","acked":false,"blob_dir":"/var/lib/yanshu/blobs","storage_path":"/var/lib/yanshu/blobs/e3/e36350a11e7a44642b1fefdba019c12c","db_url":"postgres://<user>@127.0.0.1:5432/<db>?search_path=yanshu_core&sslmode=disable","schema":"yanshu_core","log_path":"/var/log/yanshu/server.log"}
+```
+
+stderr（人读摘要，同样的值）：
 
 ```
 === DELIVERY ===
 code=0KHJ
-recipient_code=57YV
 package_id=e36350a11e7a44642b1fefdba019c12c
-chunks=1
-chunk_size=1024
-plaintext_size=48
-prelude_len=503
-ciphertext_bytes=567
-state=LEASED
-acked=false
 blob_dir=/var/lib/yanshu/blobs
-storage_path=/var/lib/yanshu/blobs/e3/e36350a11e7a44642b1fefdba019c12c
 db_url=postgres://<user>@127.0.0.1:5432/<db>?search_path=yanshu_core&sslmode=disable
-schema=yanshu_core
 log_path=/var/log/yanshu/server.log
 ================
 ```
@@ -156,16 +156,18 @@ log_path=/var/log/yanshu/server.log
 注意：
 - 本工具用**占位签名**，只能配合 `stub-allow`；接真实 SM2 验签后需改真签名。
 - 连续跑两次会生成两个不同的 `package_id`，互不冲突；`--no-ack` 的包会留到 TTL 清理。
+- 默认（不加 `--no-ack`）会 ack：`download_count` +1，达到上限即 `CONSUMED` 并删除密文；只有
+  `max_downloads > 1` 时才会停在 `READY` 等待下一次取件。
 
 ### 给自动化脚本的 `--deliver-cmd`
 
 ```sh
-<repo>/server/bin/deliver --base-url http://127.0.0.1:18080 --yspk <PACK> --no-ack \
-  --blob-dir <BLOB_DIR> --dsn '<DSN>' --json-out <OUT_JSON>
+<repo>/server/bin/deliver --base-url http://127.0.0.1:8080 --yspk <PACK> --no-ack \
+  --blob-dir <BLOB_DIR> --dsn "<DSN>" | jq -r '.package_id, .blob_dir, .db_url, .log_path'
 ```
 
-判定：退出码 `0` 即投递成功；`--json-out` 里的 `package_id` / `storage_path` / `schema` / `db_url`
-可直接作为后续检索的入参（JSON 与 stdout 同名字段）。
+判定：退出码 `0` 即投递成功；**stdout 是一行 JSON**，可直接 `json.loads` / `jq`。
+`--json-out <file>` 只是额外落一份缩进 JSON，不改变 stdout 的形状；`--json-out -` 等同默认。
 
 ### 环境变量（实现侧权威清单）
 
@@ -193,7 +195,10 @@ log_path=/var/log/yanshu/server.log
 
 - 默认 `:8080`（所有网卡）。要只监听本机：`YANSHU_ADDR=127.0.0.1:8080`。
 - **没有命令行参数覆盖**，端口/地址只认 `YANSHU_ADDR`。
-- 健康检查：`GET /healthz`（DB 通 → 200 `{"status":"ok"}`；DB 不通 → 503 `degraded`）。
+- 健康检查：`GET /healthz`
+  - DB 正常 → **200**，body `{"status":"ok","api_version":"v1","contract":"v1"}`
+  - DB 不可用 → **503**，body `{"status":"degraded","api_version":"v1","contract":"v1"}`
+  - 该端点不校验签名、不查业务表，只 `Ping` 数据库。
 
 ### migrations（命令与幂等性）
 
