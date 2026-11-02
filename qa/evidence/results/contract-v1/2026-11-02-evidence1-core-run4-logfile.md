@@ -71,3 +71,36 @@ spencer 在宿主起的常驻实例 `http://127.0.0.1:18080`（契约 v1 / `YSPK
 
 > 这是"跨端冒烟"，不是证据：库是 `yanshu_dev`、走 `stub-allow`，且用的是宿主实例。
 > 证据类扫描仍只用 `yanshu_test` 的 `gate_ev1`，不扫 `yanshu_dev`。
+
+## 追加：`9065eb8` + `YANSHU_LOG_DIR`（按日滚动）复扫
+
+Core 在 `9065eb8` 把日志做成**按 UTC 日期滚动**（`<dir>/yanshu-server-YYYY-MM-DD.log`，
+0640，默认保留 7 天，只清理自己的命名规则）。证据一改成扫这个目录：
+
+```sh
+YS_BASE_DSN="$PG_TEST_DSN" YS_EV1_LOG_MODE=dir YS_DELIVER_BIN=core-deliver \
+qa/evidence/run_evidence1_core.sh <core@9065eb8> <rune-crate> /tmp/ys-ev1
+```
+
+| 目标 | 语料量 | 命中 |
+|---|---|---|
+| 存储 | 3 文件 / 2240B | 0 |
+| PostgreSQL `gate_ev1` | 8 表 / 571 行 | 0 |
+| **轮转日志** `yanshu-server-2026-11-02.log` | 1 份 / 3132B | 0 |
+
+阳性对照 1/1/1/0（**日志那条注入的就是轮转文件本身**），退出码 0。
+
+**边界更新**：日志这条不再是"部署重定向的 stdout"，而是**服务端自己写的正式轮转文件**；
+认证仍是 `stub-allow`，所以本证据依旧不构成认证验收。
+
+### 跨天滚动怎么处理
+
+滚动会换文件名，硬编码"今天"的文件名会在边界前后漏扫。做法：
+
+1. 记录本次运行开始时间 `T_START`；启动后断言 `find <dir> -name 'yanshu-server-*.log' -newermt @T_START`
+   至少有一个非空文件，否则 BLOCKED；
+2. **扫描整个目录**（两天都覆盖），而不是单个文件；
+3. 阳性对照注入到目录里**最新**那个文件。
+
+模拟验证：把当日文件复制成"次日"名字后再扫 → `日志 2 份 / 6264B`；
+只按单个文件名扫 → `日志 1 份 / 3132B`（少一半，正是要避免的漏扫）。

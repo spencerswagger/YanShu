@@ -143,7 +143,7 @@ grep -q listening /srv/yanshu/logs/server.log
 |---|---|---|
 | **`YANSHU_LOG_FILE`（推荐，Core 交付清单里的正式方式）** | `YANSHU_LOG_FILE=/srv/yanshu/logs/server-file.log` | 单文件、不换名，取证最省事；仍是 stdout 之外的第二份 |
 | stdout 重定向 | `… >>/srv/yanshu/logs/server.log 2>&1` | 部署方接管，跨天不换名 |
-| `YANSHU_LOG_DIR` 按日滚动 | `YANSHU_LOG_DIR=/srv/yanshu/logs` | 写 `yanshu-server-YYYY-MM-DD.log`、0640、保留 7 天；**跨天换文件名**，取证要按投递时间戳选文件，别硬编码 |
+| `YANSHU_LOG_DIR` 按日滚动 | `YANSHU_LOG_DIR=/srv/yanshu/logs`（可选 `YANSHU_LOG_RETENTION_DAYS=7`） | 写 `<dir>/yanshu-server-YYYY-MM-DD.log`（UTC 日期）、0640、默认保留 7 天、只清理自己命名规则内的文件；**跨天换文件名**，取证要扫目录或按投递时间戳选文件，别硬编码 |
 
 > `YANSHU_LOG_DIR` 与 `YANSHU_LOG_FILE` 同时给时，Core 的实现以 `YANSHU_LOG_FILE` 优先。
 > 扫日志一律扫**实际落盘的那个文件**；扫不到就 BLOCKED，不许当 PASS。

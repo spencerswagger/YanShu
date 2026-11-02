@@ -68,14 +68,15 @@ if ! command -v cc >/dev/null 2>&1 && command -v gcc >/dev/null 2>&1; then
     export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER
 fi
 (cd "$work/crate" && CARGO_TARGET_DIR="$work/target" cargo build --release \
-    --bin ys-tool --bin ys_pack_probe >"$work/logs/build.log" 2>&1) || {
-    echo "[BLOCKED] 端侧工具编译失败，日志尾部：" >&2; tail -15 "$work/logs/build.log" >&2; exit 2; }
+    --bin ys-tool --bin ys_pack_probe >"$work/build.log" 2>&1) || {
+    echo "[BLOCKED] 端侧工具编译失败，日志尾部：" >&2; tail -15 "$work/build.log" >&2; exit 2; }
 BIN="$work/target/release"
 echo "server: $work/bin/yanshu-server"
 echo "tool:   $BIN/ys-tool"
 
 echo "== 2/6 建 schema 并起服务 =="
 psql -X -q "$base_dsn" -c "create schema if not exists $schema" >/dev/null
+T_START=$(date +%s)
 log_mode="${YS_EV1_LOG_MODE:-stdout}"    # stdout = 重定向；dir = 按日滚动目录；file = YANSHU_LOG_FILE
 if [ "$log_mode" = "file" ]; then
     LOG_FILE="$work/logs/server-file.log"
@@ -91,7 +92,7 @@ elif [ "$log_mode" = "dir" ]; then
     YANSHU_VERIFIER=stub-allow \
     YANSHU_TOKEN_SECRET="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
     "$work/bin/yanshu-server" >"$work/stdout.log" 2>&1 &
-    LOG_SCAN="$work/logs/yanshu-server-$(date -u +%F).log"
+    LOG_SCAN="$work/logs"          # 扫整个目录：跨天滚动会有两个文件，按时间戳选单个会漏
 else
     YANSHU_DATABASE_URL="$dsn" YANSHU_BLOB_DIR="$work/blobs" YANSHU_ADDR="127.0.0.1:$port" \
     YANSHU_VERIFIER=stub-allow \
@@ -109,7 +110,15 @@ while [ $i -lt 60 ]; do
 done
 # 启动检查要看**真正的日志落点**：stdout 模式是重定向文件，dir 模式是当日滚动文件
 LOG_CHECK="${LOG_SCAN:-$work/logs/server.log}"
-[ -d "$LOG_CHECK" ] && LOG_CHECK="$LOG_CHECK/server.log"
+if [ -d "$LOG_CHECK" ]; then
+    # 目录模式（按日滚动）：取最新那个轮转文件做判活，文件名不硬编码
+    for _i in $(seq 1 30); do
+        LOG_CHECK=$(ls -t "$LOG_CHECK"/yanshu-server-*.log 2>/dev/null | head -1)
+        [ -n "$LOG_CHECK" ] && break
+        sleep 0.2
+    done
+    [ -n "$LOG_CHECK" ] || { echo "[BLOCKED] 目录模式找不到任何轮转日志文件" >&2; exit 2; }
+fi
 for _i in $(seq 1 20); do [ -s "$LOG_CHECK" ] && break; sleep 0.2; done
 
 # 必须是**我们自己起的**那个进程在服务：进程活着、日志里有 listening、没有 bind 失败
@@ -260,12 +269,23 @@ if [ -z "$(find "$SCAN_BLOB" -type f 2>/dev/null | head -1)" ]; then
 fi
 echo "  存储里已有 $(find "$SCAN_BLOB" -type f | wc -l) 个文件，可以扫了"
 
-if [ "$log_mode" = "dir" ] || [ "$log_mode" = "file" ]; then
+if [ "$log_mode" = "dir" ]; then
+    # 跨天滚动会换文件名：这里按"本次开始时间之后写过的文件"判断，不硬编码当天文件名
+    LOG_FILES=$(find "$work/logs" -name 'yanshu-server-*.log' -newermt "@$T_START" 2>/dev/null)
+    if [ -z "$LOG_FILES" ]; then
+        echo "[BLOCKED] 本次运行期间没有任何轮转日志文件（$work/logs）" >&2
+        exit 2
+    fi
+    for f in $LOG_FILES; do
+        [ -s "$f" ] || { echo "[BLOCKED] 轮转日志为空：$f" >&2; exit 2; }
+        echo "  服务端日志（dir）：$f（$(wc -c <"$f") 字节）"
+    done
+elif [ "$log_mode" = "file" ]; then
     if [ ! -s "$LOG_SCAN" ]; then
         echo "[BLOCKED] 日志文件不存在或为空：$LOG_SCAN" >&2
         exit 2
     fi
-    echo "  服务端日志（$log_mode）：$LOG_SCAN（$(wc -c <"$LOG_SCAN") 字节）"
+    echo "  服务端日志（file）：$LOG_SCAN（$(wc -c <"$LOG_SCAN") 字节）"
 fi
 
 echo "== 5/6 三处检索 =="
@@ -292,7 +312,11 @@ if [ "${YS_EV1_CONTROLS:-1}" = "1" ]; then
     rm -f "$work/blobs/_control_plaintext.bin"
     # ② 日志：追加一行带文件名的请求日志
     LOG_CTL="${LOG_SCAN:-$work/logs/server.log}"
-    [ -d "$LOG_CTL" ] && LOG_CTL="$LOG_CTL/server.log"
+    if [ -d "$LOG_CTL" ]; then
+        # 目录模式：注入到**最新**的轮转文件（跨天时就是当日那个）
+        LOG_CTL=$(ls -t "$LOG_CTL"/yanshu-server-*.log 2>/dev/null | head -1)
+        [ -n "$LOG_CTL" ] || { echo "[BLOCKED] 找不到轮转日志文件用于阳性对照" >&2; exit 2; }
+    fi
     cp "$LOG_CTL" "$LOG_CTL.bak"
     printf '%s\n' "2026-01-01T00:00:00Z level=INFO msg=\"upload name=$NAME\"" >> "$LOG_CTL"
     set +e; scan; rc_log=$?; set -e
