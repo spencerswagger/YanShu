@@ -94,6 +94,20 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 --- PASS: TestStaleTokenCannotBeReincarnated   # 旧凭据不复活
 ```
 
+
+### ②e P0 回归：`uploader_ip IS NULL` 的历史传输不再 500（`06c9f56`）
+
+构造：正常投递一笔 → `UPDATE transfers SET uploader_ip = NULL` → 用同一 token 读 `/status`。
+
+| 场景 | 实测 |
+|---|---|
+| 正常行（`uploader_ip=127.0.0.1`） | **200** |
+| **置 NULL 后读同一传输** | **200**（`state=LEASED`、`chunk_count=3`…）——**不是 500** |
+| 单测存在 | `server/internal/store/migrate_upgrade_test.go` 里 `TestGetTransferWithNullUploaderIP`（该树上 `go test` PASS） |
+
+这条正是 `06c9f56` 相对 `4eda665`/`d8d90a2`/`4514848` 的 P0 差异：那几个 head 在"跑过删列版的库恢复"场景里，
+历史行 `uploader_ip` 为 NULL 时读传输会 **500 INTERNAL**；本版正常返回。
+
 ## 三、KID 矩阵（逐字错误名与 message）
 
 | 步 | 场景 | 状态 | 错误名 / message |
