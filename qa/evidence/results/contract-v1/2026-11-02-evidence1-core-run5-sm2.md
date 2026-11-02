@@ -1,8 +1,9 @@
 # 证据一 run #5：**真认证链路**（`YANSHU_VERIFIER=sm2`）
 
-- 日期：
-> **验收锚点：锚 sha256，不锚 head 号** —— 本份对应产物 sha256 `c1b87d0a-d9a847fa-…`（完整值见正文），head 号仅作溯源；sha256 一变则全部重跑。
-2026-11-02
+> **验收锚点：锚 sha256，不锚 head 号** —— 冻结产物 sha256 `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`（127,313B）；head 号仅作溯源，sha256 一变则全部重跑。
+
+
+- 日期：2026-11-02
 - 对象：服务端 `feat/server-skeleton` @ **`08d40e7`**，二进制
   `yanshu-server-08d40e7`（sha256 `275fc463d5ed876c1dd5db720b0414b770e0f8d43aa51de65e68bcc819f6af55`）；
   端侧 `feat/endcrypto-wasm` @ `0f33a15` 打的真契约包
