@@ -17,6 +17,7 @@ import {
 import { CryptoError } from './errors.js'
 import { segmenterFor, splitPack, joinPack } from './layout.js'
 import { normalizeSignature, decodeSignature } from '../lib/der.js'
+import { PackSession, UnpackSession } from './session.js'
 
 export async function loadKernelWasm(url) {
   let buffer
@@ -395,5 +396,22 @@ export class WasmKernel {
 
   joinPack(args) {
     return joinPack({ ...args, segmenter: this.segmenter })
+  }
+
+  // ---------------------------------------------------------------- 会话（JS 侧包装）
+
+  openPackSession({ pack, plaintextSize, chunkSize }) {
+    return new PackSession({ kernel: this, pack, plaintextSize, chunkSize })
+  }
+
+  resumePackSession(state) {
+    if (!state || state.v !== 1 || !state.pack) {
+      throw new CryptoError('CRYPTO_BAD_ARGUMENT', '会话快照不可用（请在当前页面续传或重发）')
+    }
+    return new PackSession({ kernel: this, ...state })
+  }
+
+  openUnpackSession({ prelude, recipientPrivate, senderPublic, plaintextSize, chunkSize }) {
+    return new UnpackSession({ kernel: this, prelude, recipientPrivate, senderPublic, plaintextSize, chunkSize })
   }
 }

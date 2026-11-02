@@ -18,6 +18,7 @@ import { CryptoError } from './errors.js'
 import { segmenterFor, splitPack, joinPack, chunkCountOf, plainTextLen } from './layout.js'
 import { encodeSignature } from '../lib/der.js'
 import { bytes, u32be } from '../lib/bytes.js'
+import { PackSession, UnpackSession } from './session.js'
 
 export class UnavailableKernel {
   constructor(reason) {
@@ -47,6 +48,9 @@ export class UnavailableKernel {
   unpack() { return this.#fail() }
   splitPack() { return this.#fail() }
   joinPack() { return this.#fail() }
+  openPackSession() { return this.#fail() }
+  resumePackSession() { return this.#fail() }
+  openUnpackSession() { return this.#fail() }
 }
 
 // ---------------------------------------------------------------- 开发桩
@@ -255,5 +259,20 @@ export class DevStubKernel {
 
   joinPack(args) {
     return joinPack({ ...args, segmenter: this.segmenter })
+  }
+
+  openPackSession({ pack, plaintextSize, chunkSize }) {
+    return new PackSession({ kernel: this, pack, plaintextSize, chunkSize })
+  }
+
+  resumePackSession(state) {
+    if (!state || state.v !== 1 || !state.pack) {
+      throw new CryptoError('CRYPTO_BAD_ARGUMENT', '会话快照不可用（请在当前页面续传或重发）')
+    }
+    return new PackSession({ kernel: this, ...state })
+  }
+
+  openUnpackSession({ prelude, recipientPrivate, senderPublic, plaintextSize, chunkSize }) {
+    return new UnpackSession({ kernel: this, prelude, recipientPrivate, senderPublic, plaintextSize, chunkSize })
   }
 }

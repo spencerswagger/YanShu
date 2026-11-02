@@ -42,37 +42,42 @@ export async function receiveTransfer({ api, kernel, session, transferId, sender
 
   // 内核当前把发送方公钥当入参（契约 §10.3 要求公钥在包内）：先从码查，再验签
   const pub = await senderPublic(meta.sender_code)
-  const manifest = kernel.unpackMeta({ pack: prelude.bytes, recipientPrivate: session.privateKey, senderPublic: pub })
-
+  const unpack = kernel.openUnpackSession({
+    prelude: prelude.bytes,
+    recipientPrivate: session.privateKey,
+    senderPublic: pub,
+    plaintextSize: Number(meta.plaintext_size),
+    chunkSize: Number(meta.chunk_size),
+  })
+  const manifest = unpack.meta
   if (meta.plaintext_size !== undefined && Number(manifest.size) !== Number(meta.plaintext_size)) {
     throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '清单大小与元数据不一致')
   }
 
   const chunkCount = Number(meta.chunk_count)
-  const chunkSize = Number(meta.chunk_size)
-  const slices = new Array(chunkCount)
   let done = 0
-  await runPool(
-    [...Array(chunkCount).keys()],
-    async (index) => {
-      if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-      slices[index] = await api.getChunk({ transferId, downloadId: prelude.downloadId, index })
-      done += slices[index].length
-      report({ phase: 'downloading', done, total: meta.total_ciphertext_bytes || done, message: `下载块 ${index + 1}/${chunkCount}` })
-    },
-    { concurrency: config.uploadConcurrency, signal },
-  )
+  let plain
+  try {
+    await runPool(
+      [...Array(chunkCount).keys()],
+      async (index) => {
+        if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+        const bytes = await api.getChunk({ transferId, downloadId: prelude.downloadId, index })
+        unpack.feed(index, bytes)
+        done += bytes.length
+        report({ phase: 'downloading', done, total: meta.total_ciphertext_bytes || done, message: `下载块 ${index + 1}/${chunkCount}` })
+      },
+      { concurrency: config.uploadConcurrency, signal },
+    )
 
-  report({ phase: 'decrypting', done: 0, total: Number(manifest.size), message: '端侧验签并解密' })
-  const pack = kernel.joinPack({
-    prelude: prelude.bytes,
-    slices,
-    plaintextSize: Number(meta.plaintext_size),
-    chunkSize,
-  })
-  const plain = kernel.unpack({ pack, recipientPrivate: session.privateKey, senderPublic: pub })
-  if (plain.length !== Number(manifest.size)) {
-    throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '解密结果与清单大小不一致')
+    report({ phase: 'decrypting', done: 0, total: Number(manifest.size), message: '端侧验签并解密' })
+    const finished = unpack.finish()
+    plain = finished.plain
+    if (Number(finished.meta.size) !== plain.length) {
+      throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '解密结果与清单大小不一致')
+    }
+  } finally {
+    unpack.close()
   }
 
   const blob = new Blob([plain], { type: manifest.mime || 'application/octet-stream' })

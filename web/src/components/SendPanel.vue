@@ -196,7 +196,7 @@ loadPending()
         <hr />
         <h2 style="margin: 0">未完成的上传</h2>
         <p class="hint">
-          刷新后能续传的前提是本机还留着密文包（≤8 MiB）；超过这个大小只能在当前页面里续。
+          刷新后能续传的前提是本机还留着会话快照（≤8 MiB 的密文包）；超过这个大小只能在当前页面里续。
         </p>
         <ul class="list">
           <li v-for="record in pending" :key="record.transferId">
@@ -206,8 +206,8 @@ loadPending()
               <span class="tag">{{ clock(new Date(record.createdAt).toISOString()) }}</span>
             </div>
             <div class="row" style="margin-top: 8px">
-              <button type="button" :disabled="busy || !record.pack" @click="resume(record)">
-                {{ record.pack ? '继续上传' : '本机无密文包，请重发' }}
+              <button type="button" :disabled="busy || !record.session" @click="resume(record)">
+                {{ record.session ? '继续上传' : '本机无会话快照，请重发' }}
               </button>
             </div>
           </li>

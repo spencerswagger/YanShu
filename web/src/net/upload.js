@@ -58,11 +58,9 @@ export async function sendFile({ api, kernel, session, file, recipient, onProgre
   })
 
   const chunkSize = kernel.blockSize || config.chunkSize
-  const { prelude, slices, preludeLen, chunkCount } = kernel.splitPack({
-    pack,
-    plaintextSize: data.length,
-    chunkSize,
-  })
+  // 会话式包装在 JS 侧：prelude + 第 i 块切片 + 可导出/恢复（内核只提供整包接口）
+  const packSession = kernel.openPackSession({ pack, plaintextSize: data.length, chunkSize })
+  const { prelude, slices, preludeLen, chunkCount } = packSession
   const preludeSm3 = kernel.sm3(prelude)
 
   report(onProgress, { phase: 'creating', done: 0, total: data.length, message: '创建传输' })
@@ -93,8 +91,8 @@ export async function sendFile({ api, kernel, session, file, recipient, onProgre
     chunkCount,
     preludeLen,
     preludeSm3: b64uEncode(preludeSm3),
-    // 整包接口无法在刷新后重建会话：把密文包留在本机（≤ maxPersistPack 字节）才能续传
-    pack: pack.length <= config.maxPersistPack ? pack : null,
+    // 会话快照（整包是密文）：≤ maxPersistPack 才留，刷新后靠它恢复
+    session: pack.length <= config.maxPersistPack ? packSession.export() : null,
     packSize: pack.length,
     createdAt: Date.now(),
     state: 'UPLOADING',
@@ -124,6 +122,7 @@ export async function sendFile({ api, kernel, session, file, recipient, onProgre
     state: done?.json?.state || 'READY',
     doneAt: Date.now(),
   })
+  packSession.close()
   info('发送完成', { bytes: data.length, chunks: chunkCount })
   report(onProgress, { phase: 'done', done: data.length, total: data.length, message: '已发送' })
   return {
@@ -143,17 +142,13 @@ export async function sendFile({ api, kernel, session, file, recipient, onProgre
  * 没有包（文件太大或清理过）就只能重发——整包接口没法重建会话。
  */
 export async function resumeSend({ api, kernel, session, record, onProgress, signal, pendingStore }) {
-  if (!record?.pack) {
-    const err = new Error('本机没有保留密文包，无法续传；请重新发送')
+  if (!record?.session) {
+    const err = new Error('本机没有保留会话快照，无法续传；请重新发送')
     err.code = 'RESUME_UNAVAILABLE'
     throw err
   }
-  const pack = record.pack instanceof Uint8Array ? record.pack : new Uint8Array(record.pack)
-  const { prelude, slices, chunkCount } = kernel.splitPack({
-    pack,
-    plaintextSize: record.fileSize,
-    chunkSize: record.chunkSize,
-  })
+  const packSession = kernel.resumePackSession(record.session)
+  const { prelude, slices, chunkCount } = packSession
   const status = await api.uploadStatus({ transferId: record.transferId, uploadToken: record.uploadToken })
   if (status?.state && status.state !== 'UPLOADING') {
     await pendingStore?.put(record.transferId, { ...record, state: status.state })
@@ -177,6 +172,7 @@ export async function resumeSend({ api, kernel, session, record, onProgress, sig
     signal,
   })
   const done = await api.complete({ transferId: record.transferId, uploadToken: record.uploadToken })
+  packSession.close()
   await pendingStore?.put(record.transferId, { ...record, state: done?.json?.state || 'READY', doneAt: Date.now() })
   return { transferId: record.transferId, state: done?.json?.state, resumed: true, missing: missing.length }
 }

@@ -157,7 +157,7 @@ test('上传中断后用 GET /status 续传，只补缺失块', async () => {
   assert.equal(records.length, 1)
   const record = records[0]
   assert.equal(record.state, 'UPLOADING')
-  assert.ok(record.pack instanceof Uint8Array, '续传要靠本机留着的密文包')
+  assert.ok(record.session?.pack instanceof Uint8Array, '续传要靠本机留着的会话快照')
 
   const before = await alice.api.uploadStatus({ transferId: record.transferId, uploadToken: record.uploadToken })
   assert.ok(before.received_chunks >= 1 && before.received_chunks < record.chunkCount)

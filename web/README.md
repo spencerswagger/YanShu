@@ -8,7 +8,8 @@
 | 项 | 状态 |
 |---|---|
 | 端侧内核（真 WASM） | **已接**：`WebAssembly.instantiate(bytes, {})`，0 import，按头文件绑定导出 |
-| 端到端闭环 | **已跑通**：浏览器双端、真国密（SM3/SM4-GCM/SM2）、分块上传、下载落盘逐字节一致 |
+| 端到端闭环 | **已跑通（真内核，不是桩）**：浏览器双端、真国密（SM3/SM4-GCM/SM2）、分块上传、下载落盘逐字节一致 |
+| 会话式包装 | **在 JS 侧**（`crypto/session.js`）：prelude + 逐块切片 + 导出/恢复；内核只用现有导出，不需要新增接口 |
 | 传输 | 本地联调用 `relay/dev-relay.mjs`（内存版，不验签）；生产走 Core 的 HTTP 服务 |
 | 大文件 | **受限**：内核当前是整包接口（`ys_pack` 一次吃整份明文），前端上限 64 MiB；流式接口已进排期 |
 
@@ -34,7 +35,7 @@ npm run dev                   # http://127.0.0.1:5173（auto：加载到 wasm �
 门禁：
 
 ```bash
-npm test        # node --test：单测 + 双端闭环 + 真内核集成测试（46 例）
+npm test        # node --test：单测 + 双端闭环 + 真内核集成测试（49 例）
 npm run build   # vite build（产物带严格 CSP）
 ```
 
@@ -58,6 +59,7 @@ web/
 │   │   ├── abi.js              ★ 与内核对齐的唯一位置：导出清单、错误名映射、差异备忘
 │   │   ├── wasm.js             instantiate + 线性内存 alloc/free + 公钥/签名边界转换
 │   │   ├── layout.js           整包 → prelude + 块切片的纯算术（按内核包头长度选策略）
+│   │   ├── session.js          会话式包装：PackSession / UnpackSession（导出/恢复、逐块喂入、边界报错）
 │   │   ├── stub.js             UnavailableKernel（报未就绪）/ DevStubKernel（开发桩）
 │   │   ├── errors.js           CRYPTO_* 端侧错误码与文案
 │   │   └── index.js            选择实现；生产构建拒绝开发桩
@@ -100,9 +102,10 @@ web/
 
 ## 已验证 / 未验证
 
-**已验证（`npm test`，46 例；真内核 5 例不跳过）**
+**已验证（`npm test`，49 例；真内核 6 例不跳过）**
 
 - 真内核：0 import、导出齐全、密钥对/码/归一化/签名验签、打包→切分→拼回→解包明文一致、改 1 字节/换别包块必须失败、包里搜不到文件名与明文片段
+- 会话包装：导出快照恢复后 prelude/切片逐字节相同、乱序喂入可解、重复块/越界/长度不符/缺块/关闭后喂入都明确报错
 - 真内核 + 真中转：浏览器等价链路（Node）分块上传 → 取回解密 → 字节一致；中转摘要校验**开着**
 - 浏览器双端（两个独立 profile）：2.4 MiB 文件 → 真加密 → 3 块 → 另一端解密 → 落盘 2506889 字节，逐字节一致
 - 传输编排：按 `/status` 的 `bitmap/missing` 续传、撤回后 410、幂等 204 / 冲突 409、429 带 `Retry-After`
