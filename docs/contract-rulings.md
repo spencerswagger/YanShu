@@ -35,8 +35,8 @@
 | R6 | `NAME_LEN = 0`（空文件名）是否合法 | **采纳"允许空名"**：`NAME_LEN=0` 为合法值，`NAME` 占 0 字节、后续偏移照常；读方 MUST 接受、不得因空名拒绝；客户端显示"未命名"并保留扩展名降级展示；落盘名由接收端本地决定。安全上不构成混淆通道（名字不参与加密/寻址，`MANIFEST_PT_LEN` 受清单 AAD 覆盖，服务端本就看不到明文名）；禁止空名只会逼客户端编造假名 | CRYPTO-PACK §8.2、§8.5、§13 #15 | 否 |
 | R7 | "布局/版本可并存"的残留措辞与内核合规判定 | **清理并写死**：契约声明只有一种布局 `YSPK/1.0`，凡"历史布局/其他布局"只用于描述拒绝行为；新增 §2.3 给出内核合规判定的四条判据（`ys_version()==0x00010000`、`ys_header_len()==112`、§15 V1 样例解包成功、改版本字节后必须 `CRYPTO_VERSION_UNSUPPORTED`），并明确"不是桩 ≠ 合规"；`ys_version()` 不参与运行时版本判定，包内版本字段才是权威 | CRYPTO-PACK §2.1、§2.3 | 否 |
 
-| R8 | token 生命周期与吊销缺口（旧实现：只比库内哈希，换 secret 后旧 token 仍 201） | **按实现对齐为 `KID`**：API §1.7 定义凭据版本 `KID`（正整数、**严格单调递增**、**调小/调回拒绝启动**、**未配置拒绝启动**）；校验顺序**先比 `KID` 再比凭据**；`KID` 进派生输入（重签发 ≠ 旧凭据、不复活）但**不进 wire**；给出「运维一次性吊销」5 步标准流程；错误名三分 `AUTH_TOKEN_INVALID` / `EXPIRED` / `STALE`；7 步可复跑用例（含"只换 secret = INVALID"与"递增 KID = STALE"对照） | API §1.5、§1.3、§1.7、§3、§7.4、§10.1、§11.1、§14 | 否 |
-| R9 | 重签发端点是否保留 | **保留但降级为可选**（API §1.7.5）：① 只认发件人 `PURPOSE 0x08` 签名，禁止凭 `transfer_id`/旧凭据换取；② 幂等（同 `(transfer_id, TOKEN_SECRET, KID)` 返回逐字节相同凭据）+ 双向限速；③ 新凭据用当前 `KID` 派生、与旧凭据逐字节不同，旧凭据永久 `AUTH_TOKEN_STALE`；④ 已传块不重传（先 `GET /status` 取 `missing`）；⑤ **v1 可选能力**，部署方可关闭（`501 FEATURE_DISABLED`） | API §1.7.5、§3、§10.1、§11.1 | 否 |
+| R8 | token 生命周期与吊销缺口（旧实现：只比库内哈希，换 secret 后旧 token 仍 201） | **按实现对齐为 `KID`**：API §1.7 定义凭据版本 `KID`（正整数、**严格单调递增**、**调小/调回拒绝启动**、**未配置拒绝启动**）；校验顺序**先比 `KID` 再比凭据**；`KID` 进派生输入（重签发 ≠ 旧凭据、不复活）但**不进 wire**；给出「运维一次性吊销」5 步标准流程；凭据类错误**只有两个**（`AUTH_TOKEN_INVALID` / `AUTH_TOKEN_REVOKED`），**不设** `*_EXPIRED`（凭据随传输到期走 410）；7 步可复跑用例（含"只换 secret = INVALID"与"递增 KID = REVOKED"对照） | API §1.5、§1.3、§1.7、§3、§7.4、§10.1、§11.1、§14 | 否 |
+| R9 | 重签发端点是否保留 | **保留但降级为可选**（API §1.7.5）：① 只认发件人 `PURPOSE 0x08` 签名，禁止凭 `transfer_id`/旧凭据换取；② 幂等（同 `(transfer_id, TOKEN_SECRET, KID)` 返回逐字节相同凭据）+ 双向限速；③ 新凭据用当前 `KID` 派生、与旧凭据逐字节不同，旧凭据永久 `AUTH_TOKEN_REVOKED`；④ 已传块不重传（先 `GET /status` 取 `missing`）；⑤ **v1 可选能力**，部署方可关闭（`501 FEATURE_DISABLED`） | API §1.7.5、§3、§10.1、§11.1 | 否 |
 
 | R10 | `SIG_INPUT` 缺长度上限（实现自设 512，契约无定义） | **补定义**：`SIG_INPUT_MAX = 109` 字节，由字段上限推导（前缀 7 + PURPOSE 1 + NONCE 32 + 最长字段串 69，最长是 `REGISTER` 的 `CODE‖PUBKEY`）；另设防御性硬上限 `SIG_INPUT_HARD_LIMIT = 512`，仅作 DoS 门、不是合法性边界；超硬上限 → `400 SIG_INPUT_TOO_LONG`；服务端 MUST 逐字段校验（不得用字节上限代替），客户端 MUST 本地按字段上限校验 | API §1.3、§10.1 | 否 |
 
@@ -48,11 +48,11 @@
 |---:|---|---|
 | 1 | 建传输，记 `tokenA`；`PUT /prelude`（带 `tokenA`） | `201` |
 | 2 | 递增 `KID`（可同时换 `TOKEN_SECRET`）并生效 | 旧凭据记录的 `KID` 落后 |
-| 3 | 再用 `tokenA` 打 `PUT /prelude` | **`401 AUTH_TOKEN_STALE`** |
+| 3 | 再用 `tokenA` 打 `PUT /prelude` | **`401 AUTH_TOKEN_REVOKED`** |
 | 4 | `POST /v1/transfers/{id}/token`（`PURPOSE 0x08` 签名）换 `tokenB` | `200`，且 `tokenB ≠ tokenA` |
 | 5 | 用 `tokenB` 打 `PUT /prelude` | `201` 或 `204`（已传块不重传） |
 | 6 | 同一 `(TOKEN_SECRET, KID)` 下重复第 4 步 | `200`，返回**与 `tokenB` 逐字节相同**（幂等） |
-| 7 | 另起一传输：**只换 `TOKEN_SECRET`、不动 `KID`** 后打旧凭据 | `401 AUTH_TOKEN_INVALID`（与第 3 步的 `STALE` 区分） |
+| 7 | 另起一传输：**只换 `TOKEN_SECRET`、不动 `KID`** 后打旧凭据 | `401 AUTH_TOKEN_INVALID`（与第 3 步的 `REVOKED` 区分） |
 
 判据：第 3 步必须 401（不许 201/410），第 5 步不许要求重传已完成块，第 6 步必须逐字节相同；任一步不符即 FAIL。
 
@@ -63,8 +63,8 @@
 | # | 现状 | 契约要求 | 状态 |
 |---:|---|---|---|
 | K1 | 服务端内嵌内核曾为 `8b89dd7f…`（130,653 B），与冻结产物 `c1b87d0a…`（127,313 B）不同字节 | 内嵌内核 MUST 与冻结构建产物同 sha256；同一 commit 跨环境重建可能不同字节，因此**以冻结产物 sha256 为准**，不以 commit 号为准 | 已换为 `c1b87d0a…`，待验收集复跑确认 |
-| K2 | 上传 token 的过期目前由传输 TTL（≤24 h）承担，`AUTH_TOKEN_EXPIRED` 实际不会触发 | 上传 token 寿命上限 6 h（§1.7.4）；未实现即暴露窗口放大到 24 h | 偏离，待修 |
-| K3 | 实现（`fa479d9`）已用 `AUTH_TOKEN_STALE`（KID 变更）与 `AUTH_TOKEN_INVALID`（只换 secret） | 与本契约 §1.7.4 完全一致（两种吊销语义分开） | **已对齐，结案** |
+| K2 | 实现不返回任何 `*_EXPIRED` 凭据码（过期由传输 TTL 承担） | 已按实现收口：v1 **不设**凭据级过期码；上传凭据有效期 = 传输 `expires_at`，到期走 `410 TRANSFER_EXPIRED`；租约到期归 `AUTH_TOKEN_INVALID` | **已收口**（契约已删该码） |
+| K3 | 实现（最终口径）用 `AUTH_TOKEN_REVOKED`（KID 轮换）与 `AUTH_TOKEN_INVALID`（只换 secret / 不匹配） | 与本契约 §1.7.4 完全一致（两种吊销语义分开，且无 `*_EXPIRED`） | **已对齐，结案** |
 
 ## 易错点（自查清单）
 
