@@ -120,6 +120,27 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 
 未覆盖项（不充数）：**下载租约 30 分钟到期**未单独构造（同属 `EXPIRED` 分支，机制相同）。
 
+## 四b、候选淘汰记录：`d8d90a2` **不可交付**
+
+我按要求在 `d8d90a2` 上重跑了同一套检查，结果 **4 PASS / 1 FAIL**，失败项是决定性的：
+
+| 项 | `d8d90a2` | `06c9f56`（本文件绑定的） |
+|---|---|---|
+| 内核三重核对 | PASS | PASS |
+| 老库升级（`08d40e7`） | PASS 10/10 | PASS 10/10 |
+| **跑过 `0004` drop 的库 → 恢复** | **FAIL**：`旧凭据 → 500 INTERNAL`（期望 401 `STALE`） | **PASS 12/12** |
+| KID 五步 + 四码 | PASS（`STALE`/200/不复活/`token_epoch` 1→2） | PASS |
+| 契约↔实现字面 | PASS（13 码一致，`REVOKED` 0） | PASS |
+
+**根因**：`d8d90a2` 缺 `uploader_ip IS NULL` 的 P0 修复——恢复出来的历史行 `uploader_ip` 为 NULL，
+读该传输直接 500。`06c9f56` 正是修这一处的提交（`TestGetTransferWithNullUploaderIP`）。
+
+另外 `d8d90a2` 的迁移集里**同时存在** `0004_drop_token_epoch.sql` 与 `0004_token_kid_state.sql`：
+每次迁移会先删列/删状态表再补回（`token_kid_state` 里已升的 `kid` 值会丢）。`06c9f56` 已删掉 drop 脚本，
+只剩 `0001/0002/0004_token_kid_state/0005_restore`。
+
+→ **结论：淘汰 `d8d90a2`，交付绑定 `06c9f56`（`5a42bb43…`）。**
+
 ## 五、结论
 
 **建议 spencer 用这份产物重启**（`5a42bbdf…` 见上表；`deliver` 与内核同表），
