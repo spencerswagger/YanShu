@@ -160,12 +160,12 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 
 用户码**不是**凭证、不授予任何操作权限。三者的完整生命周期、失效语义与应急吊销见 §1.7。
 
-**`upload_token` 的构造（写死）**：`upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖ TRANSFER_ID_ASCII ‖ u32be(EPOCH)) )`，32 字节、无填充。
+**`upload_token` 的构造（写死）**：`upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖ TRANSFER_ID_ASCII) )`，32 字节、无填充。
 
-- 库内只存 `SM3(upload_token)`，无明文 token 可被拖库窃取；`Idempotency-Key` 重放时用同一 `(transfer_id, epoch)` 重算即可返回**逐字节相同**的 token。
-- **`EPOCH` 必须进派生输入**：否则轮换版本后重签发的 token 会与旧 token 是同一个字符串，"吊销后旧 token 仍可用"，整个机制失效。
+- 库内只存 `SM3(upload_token)`，无明文 token 可被拖库窃取；`Idempotency-Key` 重放时用同一 `transfer_id` 与同一密钥重算即可返回**逐字节相同**的 token。
+- 校验时用**当前** `TOKEN_SECRET` 重算并常量时间比对（§1.7.2）。
 - `TOKEN_SECRET` 只来自部署密钥，不入库、不写日志。
-- 只换 `TOKEN_SECRET` 而**不**递增 `EPOCH` 时，既有 token 仍会通过校验（库里存的是哈希，与 secret 无关）——这是数据模型的必然结果，所以**应急吊销必须靠 `EPOCH`，不是靠换 secret**（§1.7.3）。
+- **轮换 `TOKEN_SECRET` 即全站吊销**：旧 token 的重算值必然对不上 → `AUTH_TOKEN_REVOKED`（§1.7.3）。这是 v1 唯一的全局吊销手段，属应急操作。
 
 服务端只存 `SM3(upload_token)`，不存明文 token。`transfer_id` 泄漏的后果：他人可消耗你的下载次数并拿到密文（拿不到明文，因为 DK 被 `SM2` 封给接收方）——这是被显式接受的风险，写入威胁模型。
 
@@ -188,7 +188,7 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 
 **安全结论（写死）**：容错归一化**不扩大撞码面**，但会归并同一码的多种书写——因此限速与失败锁定必须按**归一化后的码**计数，否则可用大小写变体绕过锁定。防"手滑打到另一个合法码"的责任在发送端：发送前 MUST 展示对方昵称供确认（`check_symbol()` 只是本地提示，见 `CRYPTO-PACK.md` §3.4）。
 
-### 1.7 能力凭证的生命周期与应急吊销
+### 1.7 能力凭证的生命周期与吊销
 
 #### 1.7.1 三种凭证
 
@@ -200,85 +200,89 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 
 `transfer_id` 与 token **互不替代**：前者能读密文，后者能写。用户码不是凭证（§1.1）。
 
-#### 1.7.2 存储口径与"换密钥不吊销"的由来
+#### 1.7.2 存储与校验口径
 
-服务端**只存凭证的哈希**（`upload_token` 存 `SM3`，`download_id` 同理），校验方式是"重算哈希比对库内记录"。
+- 服务端**只存凭据的哈希**（`upload_token` 存 `SM3`），不存明文。
+- `upload_token` 由服务器侧令牌派生密钥 `TOKEN_SECRET` **确定性派生**（§1.5）；**授权判定**用**当前**密钥重算后做常量时间比对。
+- 库内 `SM3` 记录的用途是**查"是否曾签发过"**（用于把 `AUTH_TOKEN_REVOKED` 与 `AUTH_TOKEN_INVALID` 分开），**不用于**授权判定。
+- 因此吊销不是"删数据"，而是"密钥换了、重算对不上"——可秒级全站生效。
 
-因此：**只按哈希比对、不引入版本机制时，轮换签发密钥必然不影响既有 token**——这是数据模型的直接结果，不是实现疏忽。以下 `EPOCH` 机制即为消除该后果而设。
+#### 1.7.3 吊销 = 轮换令牌派生密钥（全局、应急）
 
-#### 1.7.3 凭证版本（`EPOCH`）：一键吊销
+- **轮换服务器侧令牌派生密钥（`TOKEN_SECRET`）并重启 = 一次性吊销全部既有凭据**：此后所有旧 `upload_token` 与旧租约一律失配（`AUTH_TOKEN_REVOKED`）。
+- **这是全局操作**：影响全站所有在传任务（发送中的上传会中断，需要重签发或重建传输），所以是**应急手段**，不作日常轮换。
+- 吊销后新签发的凭据由新密钥派生；**旧 token 永久不可用**，重签发也不会让它复活。
+- **v1 不引入 `EPOCH` / `kid` 这类版本号机制**：吊销由密钥轮换承担，实现 MUST NOT 依赖任何版本字段。未来可选增强（如按版本精细吊销、双密钥过渡期）留待 v2 再议，**不属于 v1 要求**。
 
-- 部署维护一个**单调递增**的凭证版本号 `EPOCH`（可理解为 `kid`），对全站所有 token 生效。
-- 每个 token 绑定**签发时**的 `EPOCH`（嵌入 token 或与哈希同存，实现自由）；校验时与当前值比对，**旧版本一律拒绝**（`AUTH_TOKEN_STALE`）。
-- **递增 `EPOCH` 即"一键吊销全部既有 token"**：即时生效、不需逐条删库、不需重启；递增后新签发的 token 用新版本。
-- `/v1/config` MUST 暴露只读、无敏感的 `token_epoch`，供客户端与门禁观测版本切换。
-- **契约要求（不是建议）**：实现 MUST 支持该机制，且 MUST 能被 §1.7.6 的用例验证。
-
-#### 1.7.4 失效条件与错误名（判定顺序：先凭据、后状态）
+#### 1.7.4 失效条件与错误名（凭据类错误与签名类错误严格分开）
 
 | 情形 | HTTP | `code` | 客户端处置 |
 |---|---:|---|---|
 | 缺凭证头 | 401 | `AUTH_MISSING` | 补头 |
-| token 不存在 / 哈希不符 / 与该传输不匹配 | 401 | `AUTH_TOKEN_INVALID` | 重新申领（上传见 §1.7.5；下载重新 `GET /prelude`）；**不要**重试同一 token |
-| token 超过自身有效期（上传 6 h / 租约 30 min） | 401 | `AUTH_TOKEN_EXPIRED` | 同上 |
-| token 的 `EPOCH` 旧于当前部署版本 | 401 | `AUTH_TOKEN_STALE` | 同上；文案提示"已被运维吊销，请重新申领" |
+| 凭据不存在 / 与任何已签发凭据不匹配（随机串、别的传输的 token） | 401 | `AUTH_TOKEN_INVALID` | 重新申领（上传见 §1.7.5；下载重新 `GET /prelude`）；**不要**重试同一凭据 |
+| 超过自身有效期（上传 token ≤ 6 h / 下载租约 30 min） | 401 | `AUTH_TOKEN_EXPIRED` | 同上 |
+| 因**令牌派生密钥轮换**而失效（曾签发、现已不可用） | 401 | `AUTH_TOKEN_REVOKED` | 同上；文案提示"已被运维吊销，请重新申领" |
 | 传输进入终态 | 410 | `TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` | 停止并清理本地 |
 
-判定顺序**写死为"先凭据后状态"**：先 401、再 410。这样"用旧 token 探测传输是否还存在"不可行。
+**判定顺序写死**：先凭据（401）、后状态（410）。这样"用旧凭据探测传输是否还存在"不可行。
 
-> **寿命上限口径**：6 小时（上传）/ 30 分钟（租约）是**上限**，实现可以更短。若某实现把上传 token 的寿命直接等同于传输 TTL（24 h），则 `AUTH_TOKEN_EXPIRED` 实际不会触发、吊销前的暴露窗口被放大到 24 h——这是**偏离**，须登记并修正；契约不因实现现状改口。
+**两类错误不得互相顶替**（写死）：
 
-#### 1.7.5 重签发（上传侧，v1 追加载荷）
+- 凭据类：`AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` / `AUTH_TOKEN_REVOKED`；
+- 签名类：`AUTH_SIGNATURE_INVALID`（验签失败）、`AUTH_CODE_MISMATCH`（码与签名不一致）。
 
-`POST /v1/transfers/{id}/token`，无请求体。这是**唯一**能让"吊销后不重传大文件"成立的窄端点，因此必须按下面五条写死。
+凭据失效 **MUST NOT** 返回签名类错误：否则客户端会被引去"重算签名 / 怀疑私钥"，而真正原因是"该换凭据了"，排查成本极高。
 
-**① 鉴权：只认发送方签名，不认任何"持有即可换"的东西**
+**`INVALID` 与 `REVOKED` 的区分口径（行为级，实现方式自由）**：服务端有该传输的签发记录、但用当前密钥重算不符 → `REVOKED`；查不到任何签发记录、或与任何已签发凭据都不匹配 → `INVALID`。
 
-- 必须带 `X-YS-Code`（发送方码）+ `X-YS-Challenge-Id` + `X-YS-Signature`，`PURPOSE = 0x08 UPLOAD_TOKEN_ISSUE`（`SIG_INPUT` 见 §1.3），验签通过才签发。
-- **MUST NOT** 接受以下任一方式换取新 token：仅凭 `transfer_id`、仅凭旧 `upload_token`、仅凭用户码、仅凭 `Idempotency-Key`。否则等同"token 永不过期"，吊销形同虚设。
+#### 1.7.5 重签发（可选端点）
+
+`POST /v1/transfers/{id}/token`，无请求体。用于"吊销后不重传大文件"，但**在 v1 中是可选能力**：部署方 MAY 关闭（关闭后返回 `501 FEATURE_DISABLED`），代价是吊销后只能重建传输并重传。
+
+**① 鉴权：只认发送方签名**
+
+- 必须带 `X-YS-Code`（发送方）+ `X-YS-Challenge-Id` + `X-YS-Signature`，`PURPOSE = 0x08 UPLOAD_TOKEN_ISSUE`（§1.3），验签通过才签发。
+- **MUST NOT** 接受仅凭 `transfer_id`、旧 `upload_token`、用户码或 `Idempotency-Key` 换取——否则等同"凭据永不过期"。
 - 签名有效但不是该传输的发送方 → `403 NOT_TRANSFER_PARTY`。
 
 **② 幂等与限次**
 
-- **幂等**：签发结果由 `(transfer_id, 当前 EPOCH)` 确定性派生（§1.5），因此同一传输在同一 `EPOCH` 下重复调用**返回逐字节相同的 token 与相同的 `expires_at`**（`200`），不累加、不刷新有效期。
-- 只有 `EPOCH` 变化后才会得到不同的新 token。
-- 限速：按传输 10 次/分钟、按码 30 次/分钟（§11.1），超限 `429`；防止被用来刷。
+- 签发由 `(transfer_id, 当前 TOKEN_SECRET)` 确定性派生：同一密钥下重复调用返回**逐字节相同**的凭据与相同 `expires_at`（`200`），不刷新、不累加。
+- 密钥轮换后自然得到不同的新凭据。
+- 限速：按传输 10 次/分钟、按码 30 次/分钟（§11.1），超限 `429`。
 
-**③ 失效联动：旧 token 不得复活**
+**③ 失效联动：旧凭据不得复活**
 
-- 新 token 一定携带**当前** `EPOCH`；旧 token 的 `EPOCH` 永久落后，**此后一直** `AUTH_TOKEN_STALE`。
-- 重签发**不是**"续期"：它不会延长旧 token 的有效期，也不会把旧 token 的哈希重新写活。**任何实现都 MUST NOT 通过重签发让旧 token 起死回生。**
+新凭据由当前密钥派生；旧凭据的派生输入（旧密钥）已不存在，因此**永久** `AUTH_TOKEN_REVOKED`。重签发不是"续期"，MUST NOT 通过重签发让任何旧凭据重新可用。
 
-**④ 已传块不重传（这个端点的核心价值）**
+**④ 已传块不重传（该端点的核心价值）**
 
-客户端拿到新 token 后，**从服务端已确认的块继续**：先 `GET /status`（新 token）取 `missing`，只补缺失块；已 `201/204` 的 `prelude` 与块**不重新上传**。重新上传已完成块属于实现缺陷（会浪费带宽并可能触发 `409 CHUNK_CONFLICT`）。
+拿到新凭据后，先 `GET /status` 取 `missing`，只补缺失块；已 `201/204` 的 `prelude` 与块**不重传**。重新上传已完成块属实现缺陷（浪费带宽，且可能触发 `409 CHUNK_CONFLICT`）。
 
-**⑤ 响应与运维退路**
+**⑤ 响应**
 
 | 响应 | 含义 |
 |---|---|
-| `200 { "upload_token": "...", "expires_at": "..." }` | 新 token 用当前 `EPOCH`，有效期 `min(6h, 传输 expires_at)` |
+| `200 { "upload_token": "...", "expires_at": "..." }` | 新凭据由当前密钥派生，有效期 `min(6h, 传输 expires_at)` |
 | `403 NOT_TRANSFER_PARTY` | 签名有效但调用方不是发送方 |
 | `404 TRANSFER_NOT_FOUND` | 传输不存在 |
-| `410` + 对应终结码 | 传输已终态（不再签发） |
-| `501 FEATURE_DISABLED` | **部署方关闭了该端点**（见下） |
+| `410` + 对应终结码 | 传输已终态 |
+| `501 FEATURE_DISABLED` | 部署方关闭了该可选端点 |
 
-- **标注**：本端点是 **v1 的追加载荷（不是 v1.1、不是未来版本）**，实现 v1 即 MUST 支持。
-- **运维退路**：部署方 MAY 通过配置关闭该端点（关闭后返回 `501 FEATURE_DISABLED`，`code` 由客户端显式识别）；代价是**吊销后只能重建传输并重传**。关闭不等于"可用旧 token"——旧 token 仍然 `AUTH_TOKEN_STALE`。
-- 客户端遇 `501 FEATURE_DISABLED`：不得循环重试，提示"该部署已关闭凭证重签发，请重新发送"，并允许一键重建传输。
+#### 1.7.6 可复跑用例（验收集固定剧本）
 
-#### 1.7.6 可验证性（进验收集的固定用例）
+1. 建传输记 `tokenA`，`PUT /prelude` → 期望 `201`；
+2. 更换 `TOKEN_SECRET` 并重启（全站吊销）；
+3. 用 `tokenA` 再打 `PUT /prelude` → **期望 `401 AUTH_TOKEN_REVOKED`**；
+4. `POST /v1/transfers/{id}/token`（`PURPOSE 0x08`）换 `tokenB` → `200`，且 `tokenB ≠ tokenA`；
+5. 用 `tokenB` 打 `PUT /prelude` → 期望 `201`/`204`（**不得要求重传已完成块**）；
+6. 同一密钥下重复第 4 步 → `200` 且返回**与 `tokenB` 逐字节相同**。
 
-1. 建传输拿 `tokenA`，`PUT /prelude` → 期望 `201`；
-2. 运维递增 `EPOCH`（重启或热载均可）；
-3. 用 `tokenA` 再打 `PUT /prelude` → **期望 `401 AUTH_TOKEN_STALE`**；
-4. `POST /v1/transfers/{id}/token` 换 `tokenB` → `PUT /prelude` → **期望 `201`/`204`**。
-
-只验证"重启后仍可用/不可用"都不构成通过：**必须验证"版本递增即失效、重签发即恢复"**。
+只验证"重启后仍可用/不可用"不构成通过：必须验证"密钥轮换即全站失效 + 重签发恢复 + 幂等"。
 
 #### 1.7.7 本节不定义的东西
 
-表名/列名、`EPOCH` 的存储方式、token 是否带 `kid` 前缀、热载还是重启生效——都属实现自由。契约只约束**行为**与**可观测结果**（错误名、HTTP 状态、可复跑用例）。
+表名/列名、密钥存储方式、是否保留上一代密钥用于分类、热载还是重启生效——都属实现自由。契约只约束**行为**与**可观测结果**（错误名、HTTP 状态、可复跑用例）。
 
 ---
 
@@ -336,7 +340,7 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 | 15 | GET | `/v1/transfers/{id}/chunks/{index}` | `transfer_id` + `download_id` | 下载一个块切片 |
 | 16 | POST | `/v1/transfers/{id}/ack` | 签名 `TRANSFER_ACK` | 取件完成确认 → 删密文 |
 | 17 | POST | `/v1/transfers/{id}/revoke` | 签名 `TRANSFER_REVOKE` | 发送方主动撤回 |
-| 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`。**v1 追加载荷**（不是 v1.1/未来），实现即 MUST 支持；部署方可配置关闭（关闭返回 `501 FEATURE_DISABLED`，代价是吊销后需重建传输）。细则见 §1.7.5 |
+| 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`（**v1 可选能力**：部署方可关闭，关闭返回 `501 FEATURE_DISABLED`，代价是吊销后需重建传输并重传）。细则见 §1.7.5 |
 | 19 | WS | `/v1/ws` | 首帧签名 `WS_HELLO` | 在线状态、收件通知、直传信令。**v1 未实现**：返回 `503 SERVICE_UNAVAILABLE`，客户端按 §9.6 降级（排期见 §15） |
 
 ---
@@ -354,7 +358,6 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
   "chunk_size": 1048576,
   "max_plaintext_size": 4294967296,
   "max_ttl_seconds": 86400,
-  "token_epoch": 1,
   "stun_urls": ["stun:stun.yan-shu.example:3478"],
   "ws_url": "wss://yan-shu.example/v1/ws",
   "limits": {
@@ -727,7 +730,7 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
 
 | 项 | 值 |
 |---|---|
-| 头 | `X-YS-Download-Id: <先前拿到的>`；缺失 → `409 DOWNLOAD_NOT_STARTED`；过期 → `401 AUTH_TOKEN_EXPIRED`；版本递增后 → `401 AUTH_TOKEN_STALE`（§1.7.4，重新 `GET /prelude` 取新租约） |
+| 头 | `X-YS-Download-Id: <先前拿到的>`；缺失 → `409 DOWNLOAD_NOT_STARTED`；过期 → `401 AUTH_TOKEN_EXPIRED`；密钥轮换后 → `401 AUTH_TOKEN_REVOKED`（§1.7.4，重新 `GET /prelude` 取新租约） |
 | 响应 200 | 块切片原始字节（`PT_LEN+16` 字节），`Accept-Ranges: bytes` |
 | Range | 支持单区间（§8） |
 | 乱序 | 任意顺序请求，服务端不做顺序约束（顺序由端侧 AAD 保证） |
@@ -887,9 +890,9 @@ v1 的信令与在线表**未实现**（排期见 §15），所以"WS 不可用"
 | `AUTH_SIGNATURE_INVALID` | 401 | 验签失败或签名与字段不匹配 | 用同一挑战重算签名；**不要**无限重试（挑战已作废，需重新申请） |
 | `AUTH_CHALLENGE_INVALID` | 401 | 挑战过期/已用/用途不符 | 重新 `POST /challenges` 后重试一次 |
 | `AUTH_CODE_MISMATCH` | 401 | `X-YS-Code` 与 `SIG_INPUT` 里被签名的 `CODE(4)` 不一致 | 修 bug；用同一码重算签名 |
-| `AUTH_TOKEN_INVALID` | 401 | 凭证不存在 / 哈希不符 / 与该传输不匹配（§1.7.4） | 重新申领（上传 §1.7.5、下载重取租约）；不要重试同一 token |
+| `AUTH_TOKEN_INVALID` | 401 | 凭据不存在 / 与任何已签发凭据不匹配（随机串、别的传输的 token；§1.7.4） | 重新申领（上传 §1.7.5、下载重取租约）；不要重试同一凭据 |
 | `AUTH_TOKEN_EXPIRED` | 401 | 凭证超过自身有效期（上传 6 h / 租约 30 min） | 同上 |
-| `AUTH_TOKEN_STALE` | 401 | 凭证的 `EPOCH` 旧于当前部署版本（运维已吊销） | 同上；提示"已被吊销，请重新申领" |
+| `AUTH_TOKEN_REVOKED` | 401 | 凭据因**令牌派生密钥轮换**而失效（§1.7.3） | 重新申领（上传 §1.7.5、下载重取租约）；旧凭据永久不可用 |
 | `SIGNAL_PEER_MISMATCH` | 403 | 信令双方与传输不匹配 | 停止该直传尝试，走中转 |
 | `NOT_TRANSFER_PARTY` | 403 | 已认证（签名有效）但**不是该传输的当事人**：非接收方调 `ack`、非发送方调 `revoke` | 停止操作、不要重试；提示"这不是你的传输" |
 | `CODE_NOT_FOUND` | 404 | 码未注册 | 提示"码不对或对方已换浏览器" |
@@ -1039,7 +1042,7 @@ Content-Type: application/json
 13. 码的归一化在任何判定之前完成，且限速/锁定按归一化后的码计数（§1.6）。
 14. WS 不可用是 v1 的正常路径：上传/下载/续传/取件/撤回功能不受影响，只静默降级（§9.6）。
 15. 审计只记路由模板，不记实际路径参数；`upload_token` 库内只存 `SM3`。
-16. 凭证版本（`EPOCH`）递增即吊销全部 token：旧版本一律 `401 AUTH_TOKEN_STALE`，重签发后恢复；只换 `TOKEN_SECRET` 不构成吊销（§1.7）。
+16. 凭证吊销 = 轮换令牌派生密钥（`TOKEN_SECRET`）：旧凭据一律 `401 AUTH_TOKEN_REVOKED`，重签发后恢复；凭据类错误不得用签名类错误顶替（§1.7）。
 
 ---
 
