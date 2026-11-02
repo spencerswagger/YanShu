@@ -16,7 +16,9 @@
     "wasm:rebuild": "node scripts/rebuild-wasm.mjs",
     "wasm:check": "node scripts/check-wasm.mjs",
     "siginput:dump": "node scripts/dump-siginput.mjs",
-    "siginput:check": "node scripts/check-siginput.mjs"
+    "siginput:check": "node scripts/check-siginput.mjs",
+    "pretest": "node scripts/ensure-wasm.mjs",
+    "prebuild": "node scripts/ensure-wasm.mjs"
   },
   "dependencies": {
     "vue": "^3.5.0"

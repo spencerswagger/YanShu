@@ -12,18 +12,19 @@ import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { instantiateKernel } from '../src/crypto/wasm.js'
+import { kernelPathOrSkip } from './helpers/kernel.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const vectors = JSON.parse(readFileSync(resolve(here, 'fixtures/sm2-verify-vectors.json'), 'utf8'))
-const wasmPath = [process.env.YS_WASM, resolve(here, '../public/ys_kernel.wasm')].filter(Boolean).find((p) => existsSync(p))
-const skip = wasmPath ? false : '没找到内核产物'
 
 const hexOf = (h) => Uint8Array.from(Buffer.from(h, 'hex'))
 // ABI 的验签**没有 userID 入参**（固定国标默认串）。所以"换 userID"那条向量只能在"可配置 userID 的 verifier"
 // 上成立；对固定默认 ID 的实现来说，它是 oracle 侧属性，不是我们能执行的用例——显式标 SKIP 而不是假装通过。
 const DEFAULT_ID = vectors.meta?.user_id || '1234567812345678'
 
-test('验签向量：可执行部分逐条对上（固定默认 userID）', { skip }, async () => {
+test('验签向量：可执行部分逐条对上（固定默认 userID）', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   const kernel = await instantiateKernel(readFileSync(wasmPath))
   const applicable = vectors.verify_vectors.filter((v) => !v.user_id || v.user_id === DEFAULT_ID)
   const fixedIdOnly = vectors.verify_vectors.filter((v) => v.user_id && v.user_id !== DEFAULT_ID)
@@ -53,7 +54,9 @@ test('验签向量：可执行部分逐条对上（固定默认 userID）', { sk
   )
 })
 
-test('验签通过但码不一致：这是 AUTH_CODE_MISMATCH，不是签名错', { skip }, async () => {
+test('验签通过但码不一致：这是 AUTH_CODE_MISMATCH，不是签名错', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   const kernel = await instantiateKernel(readFileSync(wasmPath))
   const v = vectors.verify_vectors.find((x) => x.name === 'code_mismatch')
   assert.ok(v, '向量里应有 code_mismatch')
@@ -70,7 +73,9 @@ test('验签通过但码不一致：这是 AUTH_CODE_MISMATCH，不是签名错'
   assert.match(codeErr.title, /码/)
 })
 
-test('签名入参是原文：与向量的 sig_input 长度逐条一致（没有预哈希）', { skip }, async () => {
+test('签名入参是原文：与向量的 sig_input 长度逐条一致（没有预哈希）', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   // 预哈希会让长度变成 32；这里断言我们喂给内核的就是向量原文长度（44..109）
   for (const v of vectors.verify_vectors) {
     if (!v.sig_input_len) continue

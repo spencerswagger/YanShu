@@ -14,8 +14,9 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { kernelPathOrSkip, buildMetaOrSkip } from './helpers/kernel.js'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
@@ -29,18 +30,12 @@ import { sendFile } from '../src/net/upload.js'
 import { receiveTransfer } from '../src/net/download.js'
 import { decode as b64uDecode } from '../src/lib/base64url.js'
 
-const here = dirname(fileURLToPath(import.meta.url))
-const candidates = [process.env.YS_WASM, resolve(here, '../public/ys_kernel.wasm'), '/.cache/rust-web/wasm32-unknown-unknown/release/yanshu_sm.wasm'].filter(Boolean)
-const wasmPath = candidates.find((p) => existsSync(p))
-const skip = wasmPath ? false : `没找到内核产物（试过：${candidates.join(', ')}）`
-const buildMetaPath = resolve(here, '../public/ys_kernel.build.json')
-
-test('真内核：产物与构建溯源同源（sha256 + commit + 版本）', { skip }, async () => {
-  if (!existsSync(buildMetaPath)) {
-    console.log('[skip] 没有 ys_kernel.build.json（用 npm run wasm:rebuild 生成）')
-    return
-  }
-  const meta = JSON.parse(readFileSync(buildMetaPath, 'utf8'))
+test('真内核：产物与构建溯源同源（sha256 + commit + 版本）', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
+  const metaPath = buildMetaOrSkip(t)
+  if (!metaPath) return
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8'))
   const digest = createHash('sha256').update(readFileSync(wasmPath)).digest('hex')
   assert.equal(digest, meta.sha256, 'wasm 的 sha256 必须与构建溯源一致')
   assert.match(meta.commit, /^[0-9a-f]{40}$/, '溯源里必须记 40 位 commit')
@@ -50,7 +45,9 @@ test('真内核：产物与构建溯源同源（sha256 + commit + 版本）', { 
   console.log(`[provenance] commit=${meta.commit.slice(0, 7)} sha256=${digest.slice(0, 12)}…`)
 })
 
-test('真内核：0 import、导出齐全、版本/包头/块大小可读', { skip }, async () => {
+test('真内核：0 import、导出齐全、版本/包头/块大小可读', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   const kernel = await instantiateKernel(readFileSync(wasmPath))
   assert.equal(kernel.mode, 'wasm')
   assert.equal(kernel.isRealCrypto, true)
@@ -78,7 +75,9 @@ test('真内核：0 import、导出齐全、版本/包头/块大小可读', { sk
   assert.ok(kernel.notes.length >= 0)
 })
 
-test('真内核：密钥对 / 码 / 归一化 / 签名验签', { skip }, async () => {
+test('真内核：密钥对 / 码 / 归一化 / 签名验签', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   const kernel = await instantiateKernel(readFileSync(wasmPath))
   const alice = kernel.generateIdentity()
   assert.equal(alice.privateKey.length, 32)
@@ -100,7 +99,9 @@ test('真内核：密钥对 / 码 / 归一化 / 签名验签', { skip }, async (
   assert.equal(kernel.verify(alice.publicKey, tampered, sig), false)
 })
 
-test('真内核：打包 → 切分 → 拼回 → 解包，明文一致；改一个字节必须报错', { skip }, async () => {
+test('真内核：打包 → 切分 → 拼回 → 解包，明文一致；改一个字节必须报错', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   const kernel = await instantiateKernel(readFileSync(wasmPath))
   kernel.blockSize = 4096 // 用小块，几十 KB 就能覆盖多块
   const alice = kernel.generateIdentity()
@@ -163,7 +164,9 @@ test('真内核：打包 → 切分 → 拼回 → 解包，明文一致；改�
   )
 })
 
-test('真内核：码派生与契约 §15.1 向量一致（PB_S → AWQW / 校验 X）', { skip }, async () => {
+test('真内核：码派生与契约 §15.1 向量一致（PB_S → AWQW / 校验 X）', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   const kernel = await instantiateKernel(readFileSync(wasmPath))
   const PB_S = Uint8Array.from(
     Buffer.from(
@@ -174,7 +177,9 @@ test('真内核：码派生与契约 §15.1 向量一致（PB_S → AWQW / 校�
   assert.equal(kernel.codeOf(PB_S), 'AWQW', '内核应按 65 字节（补 0x04）派生码')
 })
 
-test('真内核：解包不需要发送方公钥（包内 SENDER_PUB 自证）', { skip }, async () => {
+test('真内核：解包不需要发送方公钥（包内 SENDER_PUB 自证）', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   const kernel = await instantiateKernel(readFileSync(wasmPath))
   kernel.blockSize = 4096
   const alice = kernel.generateIdentity()
@@ -203,7 +208,9 @@ test('真内核：解包不需要发送方公钥（包内 SENDER_PUB 自证）',
   )
 })
 
-test('真内核：包里搜不到文件名与明文片段（服务端零知识）', { skip }, async () => {
+test('真内核：包里搜不到文件名与明文片段（服务端零知识）', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   const kernel = await instantiateKernel(readFileSync(wasmPath))
   const alice = kernel.generateIdentity()
   const bob = kernel.generateIdentity()
@@ -229,7 +236,9 @@ test('真内核：包里搜不到文件名与明文片段（服务端零知识�
   assert.equal(contains(pack, marker), false, '明文片段不得出现在包字节里')
 })
 
-test('真内核 + 真中转：A 端加密 → 分块上传 → B 端取回解密，字节一致', { skip }, async () => {
+test('真内核 + 真中转：A 端加密 → 分块上传 → B 端取回解密，字节一致', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   const relay = createRelay() // 真 SM3 摘要校验开着
   await new Promise((resolve) => relay.server.listen(0, '127.0.0.1', resolve))
   const port = relay.server.address().port
@@ -290,7 +299,9 @@ test('真内核 + 真中转：A 端加密 → 分块上传 → B 端取回解密
   relay.server.close()
 })
 
-test('真内核：prelude-only 能显示发件人/文件名/大小，但如实标"未校验"', { skip }, async () => {
+test('真内核：prelude-only 能显示发件人/文件名/大小，但如实标"未校验"', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   const kernel = await instantiateKernel(readFileSync(wasmPath))
   kernel.blockSize = 4096
   const alice = kernel.generateIdentity()

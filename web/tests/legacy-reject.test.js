@@ -10,15 +10,20 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { instantiateKernel } from '../src/crypto/wasm.js'
+import { kernelPathOrSkip } from './helpers/kernel.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const legacyPath = [process.env.YS_WASM_LEGACY, resolve(here, '../public/ys_kernel-legacy.wasm')]
-  .filter(Boolean)
-  .find((p) => existsSync(p))
-const newPath = [process.env.YS_WASM, resolve(here, '../public/ys_kernel.wasm')].filter(Boolean).find((p) => existsSync(p))
-const skip = legacyPath && newPath ? false : '缺旧布局产物或契约产物'
 
-test('旧布局包喂给契约内核：默认解包入口必须拒绝', { skip }, async () => {
+test('旧布局包喂给契约内核：默认解包入口必须拒绝', async (t) => {
+  const newPath = kernelPathOrSkip(t)
+  if (!newPath) return
+  const legacyCandidates = [process.env.YS_WASM_LEGACY, resolve(here, '../public/ys_kernel-legacy.wasm')].filter(Boolean)
+  const legacyPath = legacyCandidates.find((p) => existsSync(p))
+  if (!legacyPath) {
+    if (process.env.CI) assert.fail('CI 下缺旧布局产物（public/ys_kernel-legacy.wasm）')
+    t.skip('缺旧布局产物（可选回归，不影响契约布局结论）')
+    return
+  }
   const legacy = await instantiateKernel(readFileSync(legacyPath))
   assert.equal(legacy.headerLen, 40, '旧产物应是 HEADER 40')
 

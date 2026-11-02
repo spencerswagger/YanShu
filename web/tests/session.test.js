@@ -12,10 +12,9 @@ import { dirname, resolve } from 'node:path'
 
 import { DevStubKernel } from '../src/crypto/stub.js'
 import { instantiateKernel } from '../src/crypto/wasm.js'
+import { kernelPathOrSkip } from './helpers/kernel.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const wasmPath = [process.env.YS_WASM, resolve(here, '../public/ys_kernel.wasm')].filter(Boolean).find((p) => existsSync(p))
-const skipReal = wasmPath ? false : '没找到内核产物'
 
 function plaintext(size = 500) {
   return new Uint8Array(size).map((_, i) => (i * 29 + 3) & 0xff)
@@ -104,7 +103,9 @@ test('会话包装（开发桩）：重复块 / 长度不符 / 缺块都要明�
   assert.throws(() => b.feed(0, session.slices[0]), (err) => err.code === 'CRYPTO_BAD_ARGUMENT')
 })
 
-test('会话包装（真内核）：同一套导出/恢复与乱序解密', { skip: skipReal }, async () => {
+test('会话包装（真内核）：同一套导出/恢复与乱序解密', async (t) => {
+  const wasmPath = kernelPathOrSkip(t)
+  if (!wasmPath) return
   const kernel = await instantiateKernel(readFileSync(wasmPath))
   await roundTrip(kernel, 500)
 })

@@ -184,6 +184,11 @@ npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局�
 - **日志只记元数据**：方法/路径/状态/大小/块数（`lib/log.js` 有字段白名单），不记文件名、明文、密钥、签名原文。
 - **桩不许假装加密**：未就绪替身一律 `CRYPTO_NOT_READY`；开发桩产物 `YSSTUB01` + `STUB-NOT-ENCRYPTED` + 界面红条；生产构建拒绝启用。
 - **零第三方运行时脚本**：Vue 打进 bundle，无 CDN；生产构建注入 `script-src 'self'` 等 CSP。
+- **`frame-ancestors` 必须由 HTTP 头下发**：`<meta http-equiv="Content-Security-Policy">` 里的 `frame-ancestors` 会被浏览器**忽略**，
+  防 iframe 嵌套实际不生效。本仓库已提供 `public/_headers`（Cloudflare Pages 格式），部署时会把整份 CSP + `X-Frame-Options: DENY`
+  作为真实 HTTP 头发下去；**换别的托管方时必须自己配等价响应头**，否则这条防护为空。
+- **测试/构建前自动落内核产物**：`pretest` / `prebuild` 会跑 `scripts/ensure-wasm.mjs`——产物或溯源缺失、sha256 不一致时**直接非 0 退出**；
+  CI 下缺产物一律失败（不允许“全绿但一条真加密断言都没跑”）。真内核用例缺产物时是 `SKIP`（报告里可见），不会显示为通过。
 - 路径/字段/错误码全部照 `docs/API.md`，不自行发明（例如绝不出现 `filename`）。
 
 ## 已验证 / 未验证
