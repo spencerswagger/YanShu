@@ -22,12 +22,22 @@
 | G9 | 块/prelude 响应未定义密文摘要头 | **明确拒绝纳入 v1**：完整性已由 AEAD tag + 清单摘要保证；实现可保留 `X-YS-Ciphertext-Sm3` 作**非契约扩展**，客户端 MUST NOT 依赖 | API §7.4 | 否 |
 | G10 | `/v1/config` 的 `stun_urls` / `ws_url` 未给默认值 | **补定义约束而不给默认值**：`stun_urls` ≥1 条且禁 `turn:`；`ws_url` 可为 `null`（走 §9.6）；`config` 不得含密钥/TURN 凭据/内部地址 | API §4.1 | 否 |
 
+## 补充裁决（错误码与 ABI，同日）
+
+| # | 问题 | 裁决 | 落点 | 改字节 |
+|---:|---|---|---|---|
+| R1 | 错误名与首版数值对不上 | **名字为唯一权威，数值冻结**：契约给一张「错误名 ↔ 数值」唯一对照表；首版重复值降为**别名**（-11/-13/-15/-16/-20/-23），规范值固定为 -28/-30/-29/-31/-19；新语义取未占用最小值（当前从 -34 起，-99 保留）；一个名字可有多值、一个值只能属于一个名字；断言与日志只用名字 | CRYPTO-PACK §13.1 | 否 |
+| R2 | 「截断」与「长度不符」是否拆开 | **拆开，但不新增数值**：首版已有 `-7`，正名为 `CRYPTO_TRUNCATED`；与 `CRYPTO_LENGTH_INCONSISTENT`（-27，声明互相矛盾）、`CRYPTO_TRAILING_BYTES`（-18，尾随字节）三分，写死分界表 | CRYPTO-PACK §13（#1/#12/#19）、§13.1 | 否 |
+| R3 | §15 样例是否要随契约重生成 | **不重算**：AAD 的六个字段 `YSPK/1.0` 本来就有（`CHUNK_INDEX`/`CHUNK_COUNT`/`LAST_FLAG`/`CHUNK_SIZE`/`PLAINTEXT_SIZE`/`PT_LEN`），本期未改契约字段；样例 V1 522 B / V2 743 B / V3 129 B / V4 70 B 保持原样，测试常量按现样例断言即可 | CRYPTO-PACK §15（正文未变） | 否 |
+| R4 | 新增导出命名与"运行时布局切换" | **命名不冲突**（契约管字节，不管符号名），但有两条约束：① `*_v1` 的 `v1` 只能指契约大版本 `YSPK/1.0`，不得指 ABI 代数（同族里 `_v1` 与 `_v2` 混用建议统一）；② 运行时切换布局（`ys_set_layout` 等）MUST 只存在于测试/开发构建，发布构建只允许 `YSPK/1.0`，未知布局值必须报错 | CRYPTO-PACK §2.2 规则 7 | 否 |
+
 ## 统计
 
-- **补定义**：12 项（D1、D2、D3、G1–G8、G10）
-- **明确拒绝**：1 项（G9）
+- **补定义**：15 项（D1、D2、D3、G1–G8、G10、R1–R3）
+- **明确拒绝**：2 项（G9 密文摘要头不纳入 v1；R4 的"运行时布局切换"不得进入发布构建）
 - **排期下一轮**：1 项（D1 的 WS 实现；其降级语义已在 v1 补定义）
 - **需要抬版本号**：0 项（唯一候选见 `docs/adr/0001-aad-chunk-binding.md`，结论为 v1 不改）
+- **新增错误名**：9 个（`CRYPTO_TRUNCATED`、`CRYPTO_TRAILING_BYTES`、`CRYPTO_CHUNK_DUPLICATE`、`CRYPTO_LAST_FLAG_MISMATCH`、`CRYPTO_KEY_RECORD_INVALID`、`CRYPTO_SIGNATURE_RECORD_INVALID`、`CRYPTO_BAD_ARGUMENT`、`CRYPTO_RNG`、`CRYPTO_INTERNAL`），**不改任何字段布局与样例字节**
 
 ## 一致性校核
 

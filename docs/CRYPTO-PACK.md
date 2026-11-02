@@ -98,6 +98,7 @@
 4. **算法 ID 双门控**：`AEAD_ID / KDF_ID / SM2_WRAP_ID / SIG_ID`（`HEADER[12..16)`）各自独立。未知值 MUST 拒绝（`CRYPTO_ALG_UNSUPPORTED`）。未来加算法 = 抬 `VERSION_MINOR` 并新增 ID 值，老实现按第 2 条拒绝。
 5. **保留位 MUST 为 0**：`HEADER` 的 `RESERVED` 区、`FLAGS` 的保留位、块头的 `RESERVED` 字节，写方 MUST 写 0；读方 MUST 校验为 0，否则拒绝（`CRYPTO_HEADER_INVALID` / `CRYPTO_FLAGS_UNKNOWN`）。这是为了防止"老实现静默忽略新语义"。
 6. **不做版本协商**。不存在"探测对方支持哪个版本"的握手，包自己声明版本，不匹配就失败。
+7. **可发布构建不得带"运行时切换布局"**：能产出非 `YSPK/1.0` 包字节的构建（历史临时布局等）MUST 只存在于测试/开发环境；发布构建里唯一的包布局就是 `YSPK/1.0`，且版本以包内版本字段为准，不由符号名决定。
 
 ---
 
@@ -613,7 +614,7 @@ KEK_MANIFEST = HKDF-SM3(DK, KDF_SALT, "YANSHU/v1/manifest-key", 16)
 
 | # | 校验 | 失败错误码 |
 |---:|---|---|
-| 1 | 总长度 ≥ `112 + 65 + 129 + 16 + 70`（最小包） | `CRYPTO_LENGTH_INCONSISTENT` |
+| 1 | 总长度 ≥ `112 + 65 + 129 + 16 + 70`（最小包） | `CRYPTO_TRUNCATED` |
 | 2 | `MAGIC == "YSPK"` | `CRYPTO_MAGIC_MISMATCH` |
 | 3 | `VERSION_MAJOR == 1 && VERSION_MINOR == 0` | `CRYPTO_VERSION_UNSUPPORTED` |
 | 4 | `HEADER_LEN == 112` | `CRYPTO_HEADER_INVALID` |
@@ -624,19 +625,79 @@ KEK_MANIFEST = HKDF-SM3(DK, KDF_SALT, "YANSHU/v1/manifest-key", 16)
 | 9 | `CHUNK_COUNT == ceil(PLAINTEXT_SIZE / CHUNK_SIZE)`，且 `1 ≤ CHUNK_COUNT ≤ 1048576` | `CRYPTO_LENGTH_INCONSISTENT` |
 | 10 | `WRAPPED_KEY_LEN == 129`、`SENDER_PUB_LEN == 65`、`MANIFEST_LEN == MANIFEST_PT_LEN + 16` | `CRYPTO_LENGTH_INCONSISTENT` |
 | 11 | `SIG_LEN ∈ [70,72]` 且与实际 DER 长度一致 | `CRYPTO_HEADER_INVALID` |
-| 12 | `ENVELOPE_LEN` 等于 §4.2 计算值（无尾随字节） | `CRYPTO_LENGTH_INCONSISTENT` |
+| 12 | `ENVELOPE_LEN` 等于 §4.2 计算值：**不足** → `CRYPTO_TRUNCATED`；**多出**（尾随字节）→ `CRYPTO_TRAILING_BYTES`；计算所用字段自相矛盾 → `CRYPTO_LENGTH_INCONSISTENT` | 见左列 |
 | 13 | SM2 解封 `WRAPPED_KEY` → 得 32 字节 `DK` | `CRYPTO_KEY_UNWRAP_FAILED` |
 | 14 | HKDF 派生 `KEK_MANIFEST`，解 `MANIFEST_SEC`（AAD 见 §7.3） | `CRYPTO_MANIFEST_AUTH_FAILED` |
 | 15 | `MANIFEST_PT` 的 `MAGIC=="YSM1"`、`MANIFEST_VERSION==1`、`DIGEST_ALG==1`、`DIGEST_LEN==32` | `CRYPTO_MANIFEST_INVALID` |
 | 16 | 清单内 `FILE_SIZE / CHUNK_SIZE / CHUNK_COUNT` 与头一致；`DIGEST_TABLE_LEN == CHUNK_COUNT*32`；字符串长度前缀不越界 | `CRYPTO_LENGTH_INCONSISTENT` |
 | 17 | SM2 验签 `SIG_SEC` over `SIG_INPUT`（§10.2） | `CRYPTO_SIGNATURE_INVALID` |
 | 18 | `Crockford(SM3(SENDER_PUB))[0..4)` == 元数据中的发送方码 | `CRYPTO_SENDER_MISMATCH` |
-| 19 | 逐块：块头自洽（`INDEX/PT_LEN/CT_LEN/LAST_FLAG/RESERVED`，§6.2） | `CRYPTO_CHUNK_ORDER` / `CRYPTO_LENGTH_INCONSISTENT` |
+| 19 | 逐块：块头自洽（`INDEX/PT_LEN/CT_LEN/LAST_FLAG/RESERVED`，§6.2）；同一序号出现两次 = 重复块 | `CRYPTO_CHUNK_ORDER` / `CRYPTO_CHUNK_DUPLICATE` / `CRYPTO_LENGTH_INCONSISTENT` |
 | 20 | 逐块：GCM 认证（nonce §6.4、AAD §7.2） | `CRYPTO_CHUNK_AUTH_FAILED` |
 | 21 | 逐块：`SM3(明文块) == DIGEST[i]` | `CRYPTO_DIGEST_MISMATCH` |
 | 22 | 存在且仅存在一个 `LAST_FLAG=1` 的块，且其 `INDEX == CHUNK_COUNT-1`；缺块报明确索引 | `CRYPTO_CHUNK_MISSING` / `CRYPTO_CHUNK_ORDER` |
 
-> 上述错误码是**端侧错误码**（Rune 产出、Web 展示），不经 HTTP 上行。服务端错误码见 `docs/API.md` 第 9 章，两套命名不混用。
+### 13.1 错误名 ↔ 数值对照（唯一权威）
+
+端侧 C ABI 用整数返回错误（`0` 成功、负数为错误）。**名字是唯一权威**：断言、日志、UI 文案、门禁判定一律用 `CRYPTO_*` 名字；数值只用于 ABI 传输，不进 wire、不进 HTTP。
+
+| 数值 | C ABI 常量 | 契约错误名 | 触发时机 / 备注 |
+|---:|---|---|---|
+| 0 | `YS_OK` | —（成功） | — |
+| -1 | `YS_ERR_BAD_ARGUMENT` | `CRYPTO_BAD_ARGUMENT` | 入参非法：NULL、名字/MIME/扩展名不合 §3.3、块大小越界 |
+| -2 | `YS_ERR_BUFFER_TOO_SMALL` | —（ABI 专用） | 输出缓冲不足：写入所需长度后由调用方重试，**不是**数据错误 |
+| -3 | `YS_ERR_RNG` | `CRYPTO_RNG` | 随机源失败，或同一 `seed` 被二次使用 |
+| -4 | `YS_ERR_BAD_MAGIC` | `CRYPTO_MAGIC_MISMATCH` | §13 #2 |
+| -5 | `YS_ERR_UNSUPPORTED_VERSION` | `CRYPTO_VERSION_UNSUPPORTED` | §13 #3 |
+| -6 | `YS_ERR_BAD_FLAGS` | `CRYPTO_FLAGS_UNKNOWN` | §13 #6 保留位非 0 |
+| -7 | `YS_ERR_TRUNCATED` | **`CRYPTO_TRUNCATED`** | 实际字节不足：包/段/块记录读到一半 EOF |
+| -8 | `YS_ERR_BAD_KEY_RECORD` | `CRYPTO_KEY_RECORD_INVALID` | `WRAPPED_KEY` 记录不合法（长度 ≠ 129、首字节 ≠ `0x04`） |
+| -9 | `YS_ERR_BAD_SIGNATURE_RECORD` | `CRYPTO_SIGNATURE_RECORD_INVALID` | DER 结构非法，或自述长度与 `SIG_LEN` 不符 |
+| -10 | `YS_ERR_BAD_MANIFEST_RECORD` | `CRYPTO_MANIFEST_INVALID` | 清单 `MAGIC`/版本/摘要算法/长度前缀非法 |
+| -11 | `YS_ERR_BLOCK_SEQUENCE` | `CRYPTO_CHUNK_ORDER` | **别名**（规范值 -28） |
+| -12 | `YS_ERR_DUPLICATE_BLOCK` | `CRYPTO_CHUNK_DUPLICATE` | 同一 `CHUNK_INDEX` 出现两次 |
+| -13 | `YS_ERR_MISSING_BLOCK` | `CRYPTO_CHUNK_MISSING` | **别名**（规范值 -30） |
+| -14 | `YS_ERR_LAST_FLAG_MISMATCH` | `CRYPTO_LAST_FLAG_MISMATCH` | `LAST_FLAG` 与位置不符，或出现多个末块 |
+| -15 | `YS_ERR_TAG_MISMATCH` | `CRYPTO_CHUNK_AUTH_FAILED` | **别名**（规范值 -29） |
+| -16 | `YS_ERR_MANIFEST_MISMATCH` | `CRYPTO_MANIFEST_AUTH_FAILED` | **别名**（规范值 -31） |
+| -17 | `YS_ERR_SIGNATURE_MISMATCH` | `CRYPTO_SIGNATURE_INVALID` | §13 #17 |
+| -18 | `YS_ERR_TRAILING_BYTES` | `CRYPTO_TRAILING_BYTES` | 包尾有多余字节 |
+| -19 | `YS_ERR_BAD_POINT` | `CRYPTO_KEY_UNWRAP_FAILED` | C1 点不在曲线上（**规范值**） |
+| -20 | `YS_ERR_BAD_KDF` | `CRYPTO_KEY_UNWRAP_FAILED` | **别名**（KDF 输出全零等） |
+| -21 | `YS_ERR_BAD_CODE` | `CRYPTO_BAD_CODE` | 码派生不符，或归一化后不是 4 个合法符号 |
+| -22 | `YS_ERR_CODE_EXHAUSTED` | `CRYPTO_CODE_EXHAUSTED` | 撞码重生成次数用尽 |
+| -23 | `YS_ERR_BAD_CIPHERTEXT` | `CRYPTO_KEY_UNWRAP_FAILED` | **别名**（C3 不符） |
+| -24 | `YS_ERR_HEADER_INVALID` | `CRYPTO_HEADER_INVALID` | §13 #4 / #7 / #8 / #11 |
+| -25 | `YS_ERR_ALG_UNSUPPORTED` | `CRYPTO_ALG_UNSUPPORTED` | §13 #5 |
+| -26 | `YS_ERR_UNSIGNED` | `CRYPTO_UNSIGNED` | `FLAGS.SENDER_SIGNED == 0` |
+| -27 | `YS_ERR_LENGTH_INCONSISTENT` | `CRYPTO_LENGTH_INCONSISTENT` | 长度字段互相矛盾（`MANIFEST_LEN ≠ MANIFEST_PT_LEN+16`、`CT_LEN ≠ PT_LEN`） |
+| -28 | `YS_ERR_CHUNK_ORDER` | `CRYPTO_CHUNK_ORDER` | 块序/位置错（**规范值**） |
+| -29 | `YS_ERR_CHUNK_AUTH_FAILED` | `CRYPTO_CHUNK_AUTH_FAILED` | 块级 GCM tag 不符（**规范值**） |
+| -30 | `YS_ERR_CHUNK_MISSING` | `CRYPTO_CHUNK_MISSING` | 缺块（**规范值**） |
+| -31 | `YS_ERR_MANIFEST_AUTH_FAILED` | `CRYPTO_MANIFEST_AUTH_FAILED` | 清单 GCM tag 不符（**规范值**） |
+| -32 | `YS_ERR_DIGEST_MISMATCH` | `CRYPTO_DIGEST_MISMATCH` | 明文块 SM3 与清单不符 |
+| -33 | `YS_ERR_SENDER_MISMATCH` | `CRYPTO_SENDER_MISMATCH` | §13 #18 |
+| -99 | `YS_ERR_INTERNAL` | `CRYPTO_INTERNAL` | 内部错误（panic 捕获等） |
+
+**规则（写死）**
+
+1. **数值冻结、不得复用**：已占用的数值不得改含义；新增语义取**未被占用的最小值**（当前从 `-34` 起；`-99` 已保留给 `CRYPTO_INTERNAL`）。数值不进 wire、不进 HTTP。
+2. **别名只为兼容**：`-11 / -13 / -15 / -16 / -20 / -23` 是首版遗留的重复值，语义已并入对应契约名；实现的新路径 SHOULD 返回规范值，但判定与日志一律按**名字**，返回别名不算失败。
+3. **多对一允许、一对多禁止**：一个契约名可以对应多个数值（别名），任何数值只对应一个契约名。
+4. **判定口径**：单测与门禁断言 `CRYPTO_*` 名字；只有 ABI 边界（JS ↔ wasm）用数值。
+5. **`-2` 不是数据错误**：缓冲区不足只表示"调用方给的空间不够"，按返回的所需长度重试，**不得**计入失败用例或篡改用例。
+
+**`CRYPTO_TRUNCATED` 与 `CRYPTO_LENGTH_INCONSISTENT` 的分界（写死）**
+
+| 情形 | 错误名 |
+|---|---|
+| 实际字节比结构所需少（读一半没了） | `CRYPTO_TRUNCATED`（-7） |
+| 长度字段互相矛盾（声明 vs 声明） | `CRYPTO_LENGTH_INCONSISTENT`（-27） |
+| 字节数比声明多（有尾随字节） | `CRYPTO_TRAILING_BYTES`（-18） |
+
+> 本节新增的名字（`CRYPTO_TRUNCATED`、`CRYPTO_TRAILING_BYTES`、`CRYPTO_CHUNK_DUPLICATE`、`CRYPTO_LAST_FLAG_MISMATCH`、`CRYPTO_KEY_RECORD_INVALID`、`CRYPTO_SIGNATURE_RECORD_INVALID`、`CRYPTO_BAD_ARGUMENT`、`CRYPTO_RNG`、`CRYPTO_INTERNAL` 等）此前只在实现内部存在；**一律不改变任何字段布局与样例字节**。
+
+> 上述错误码是**端侧错误码**（端侧产出、Web 展示），不经 HTTP 上行。服务端错误码见 `docs/API.md` §10，两套命名不混用。
 
 ---
 
