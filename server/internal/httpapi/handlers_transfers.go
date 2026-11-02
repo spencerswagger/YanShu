@@ -556,14 +556,14 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 		return store.Transfer{}, false
 	}
 	// 判定顺序（先凭据后状态）：
-	// ① KID 不符 → AUTH_TOKEN_REVOKED（KID 是唯一吊销开关，与 secret 无关）
+	// ① KID 不符 → AUTH_TOKEN_STALE（KID 是唯一吊销开关，与 secret 无关）
 	kid, err := a.store.CurrentTokenKID(r.Context())
 	if err != nil {
 		a.internalError(w, r, "current token kid", err)
 		return store.Transfer{}, false
 	}
 	if t.UploadTokenKID != strconv.FormatInt(kid, 10) {
-		writeError(w, r, apiError{code: spec.ErrAuthTokenRevoked})
+		writeError(w, r, apiError{code: spec.ErrAuthTokenStale})
 		return store.Transfer{}, false
 	}
 	// ② 凭据不匹配（伪造 / 串了传输 / 签发后 TOKEN_SECRET 被轮换）→ AUTH_TOKEN_INVALID

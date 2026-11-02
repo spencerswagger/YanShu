@@ -1111,7 +1111,7 @@ func newSM2Identity(t *testing.T) (priv, pub []byte, code string) {
 // token 轮换矩阵（KID 是唯一吊销开关）：
 //
 //	只换 TOKEN_SECRET（KID 不变）→ 旧 token 仍然有效（200）；
-//	KID 递增 → 旧 token 立刻 401 AUTH_TOKEN_REVOKED；
+//	KID 递增 → 旧 token 立刻 401 AUTH_TOKEN_STALE；
 //	每行都断言"新签发的 token 可用"。
 func TestTokenRotationMatrix(t *testing.T) {
 	e := newEnv(t, "")
@@ -1154,7 +1154,7 @@ func TestTokenRotationMatrix(t *testing.T) {
 	}
 	e2.wantError(e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
 		spec.HeaderUploadToken: tr.UploadToken,
-	}), spec.ErrAuthTokenRevoked)
+	}), spec.ErrAuthTokenStale)
 
 	// ③ 新签发的 token（带当前 KID）可用。
 	f2 := newFixture()

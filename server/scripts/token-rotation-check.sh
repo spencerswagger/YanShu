@@ -116,7 +116,7 @@ stop_server
 
 echo "== 3) KID +1（secret 不变）→ 旧 token 立刻 STALE =="
 start_server "rotation-secret-0002" "2"
-check "kid+1: 旧 token" 401 "AUTH_TOKEN_REVOKED" "$(status_of "$PKG2" "$TOK2")"
+check "kid+1: 旧 token" 401 "AUTH_TOKEN_STALE" "$(status_of "$PKG2" "$TOK2")"
 set -- $(new_transfer); PKG3=$1; TOK3=$2
 check "kid+1: 新 token" 200 "" "$(status_of "$PKG3" "$TOK3")"
 stop_server
