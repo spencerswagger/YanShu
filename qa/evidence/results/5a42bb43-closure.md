@@ -5,6 +5,11 @@
   结果与 Core 报的 `5a42bb43…` 逐字节一致，因此不存在"只有缩写"的问题。
 - 服务端 head：`feat/server-skeleton@**06c9f56**`（P0：`uploader_ip` 为 NULL 时读传输 500）
 
+> **证据来源总说明**
+> - `[宿主]` = 在 `http://127.0.0.1:18080` 真 `sm2` 实例上取得（产物 **`4eda665` / `cc117070…`**、内核 `c1b87d0a…`、`YANSHU_TOKEN_EPOCH=1`）。
+> - `[本地]` = 在沙盒自建实例上取得，**非宿主实例**；对应产物 `5a42bb43…`(head `06c9f56`)、`db58ae47…`(head `8223096`)、`a302dccf…`(head `4b3babd`)。
+> - **浏览器端到端未交付**（前端未响应），由 Gate 以 **API 等价代跑**（见「④b」「④c」），强度＝协议层闭环、**未覆盖前端实现**。
+
 ## 一、产物三件套
 
 | 文件 | 路径 | 完整 sha256（64 字符） |
@@ -135,6 +140,32 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 **复跑**：`qa/evidence/adapters/wasm_pack_probe.mjs`（pack/unpack）+ `server/bin/deliver`（`--sender-sk/--recipient-sk`），
 取回与比对脚本见本节步骤 ③–⑧（等价于 `results/web/c1b87d0a-closure-web.md` 的 API 版本）。
 
+## ④c · 宿主实例实测（`18080` / `4eda665` / 真 `sm2`）—— 由 Gate 代跑
+
+> 标注：**宿主 `http://127.0.0.1:18080`，产物 `4eda665`（`cc117070de08bd34f52055af48bb4e28f475bdd4f71b55f705a6420cc7e571f9`），
+> 内核 `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`，`YANSHU_VERIFIER=sm2`，`YANSHU_TOKEN_EPOCH=1`。**
+> 执行人：Gate（**代跑**，浏览器端到端未交付）。
+
+| 步 | 动作 | 结果 |
+|---|---|---|
+| ① | 注册 + 挑战验签（真 SM2） | 成功（`deliver --sender-sk/--recipient-sk`，`ok=true`） |
+| ② | 建包（`ys_pack_v1` 真加密） | 2,507,553 B，3 块（1 MiB） |
+| ③ | 分块上传 + `complete` | `state=LEASED`、`chunks=3` |
+| ④ | 凭码查询 `GET /v1/codes/7759` | **200**（186 B） |
+| ⑤ | `GET /prelude` | **200**（568 B，带 `X-Ys-Download-Id`） |
+| ⑥ | `GET /chunks/{0,1,2}` | **200 / 200 / 200**（1,048,592 / 1,048,592 / 409,753 B） |
+| ⑦ | 服务端字节 vs 本地密文 | **prelude 一致 = True、三块一致 = True** |
+| ⑧ | `ys_unpack_v1` 真解密（用服务端取回字节重建包） | 落盘 **2,506,889 B** |
+| ⑨ | 两端 sha256 | 落盘 `5ccada48061ab5e4f97507f87691d80030340cac5bcdb0270c2b3d7c291db6d7` = 源文件 → **逐字节一致** |
+| ⑩ | `ack` | `acked=true`、`state=CONSUMED` |
+| ⑪ | ack 后再取 prelude / chunks/0 | **410 `TRANSFER_CONSUMED`** |
+
+```json
+{"error":{"code":"TRANSFER_CONSUMED","message":"transfer has been consumed","request_id":"…"}}
+```
+
+（宿主上另有一次 2,506,889 B 与一次 12,000 B 投递同样通过，`ack` 后均 410。）
+
 ## 三、KID 矩阵（逐字错误名与 message）
 
 | 步 | 场景 | 状态 | 错误名 / message |
@@ -249,24 +280,19 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 **结论：字段级优先、不以字节上限代替字段校验——实现正确**；专属码 `SIG_INPUT_TOO_LONG` 不可达。
 **基线用途**：以后改字段上限时用上表比对是否越过 109。
 
-## 五、结论
+## 五、结论与已知偏差
 
-**建议 spencer 用这份产物重启**（`5a42bbdf…` 见上表；`deliver` 与内核同表），
-重启后需复核三项：
+**① 协议层闭环**：由 `[本地]` 三份产物（`5a42bb43` / `db58ae47` / `a302dccf`，**均非宿主实例**）与 `[宿主]` 实测共同支撑——
+加密→上传→凭码取回→真解密→逐字节一致→`ack` 后 410 全部成立（宿主两端 sha256 `5ccada48…1db6d7`；
+本地 `06c9f56` 上为 `0fd76c0f…2ead12`）。
+**② 浏览器端到端未交付**：前端未响应，由 Gate **以 API 等价代跑**（见「④b」「④c」），**未覆盖前端实现**
+（UI、浏览器内 WASM 加载、IndexedDB 私钥、跨端 UI 流程）。
 
-1. `curl -fsS http://127.0.0.1:18080/healthz` → **200** `{"status":"ok",...}`；
-2. 启动日志出现 **`sm2 verifier loaded kernel=./kernel/yanshu_sm.wasm version=0x00010000`**；
-3. `curl -s http://127.0.0.1:18080/v1/config` 里 **`token_epoch`** 存在且等于 `YANSHU_TOKEN_EPOCH`。
+已知偏差（如实，不美化）：
 
-启动 env（凭据占位）：
-
-```sh
-YANSHU_DATABASE_URL="<DSN，含 search_path>"
-YANSHU_TOKEN_SECRET="<≥16B>"
-YANSHU_TOKEN_EPOCH=1
-YANSHU_VERIFIER=sm2
-YANSHU_KERNEL_WASM=./kernel/yanshu_sm.wasm
-YANSHU_BLOB_DIR=/var/lib/yanshu/blobs
-YANSHU_LOG_DIR=/var/log/yanshu
-YANSHU_ADDR=127.0.0.1:18080
-```
+1. **宿主产物是 `4eda665`**：其"只换 `TOKEN_SECRET` → 401 `AUTH_TOKEN_INVALID`"与契约（secret 不吊销）**不一致**；
+   且无 `AUTH_TOKEN_EXPIRED`（超期走 410 `TRANSFER_EXPIRED`）。换 `06c9f56` 后两条消失。
+2. **`SIG_INPUT_TOO_LONG`（513 B）HTTP 不可达**：昵称 ≤32 先被字段级拒（`400 NICKNAME_INVALID`），码本身库层已实现 + 单测覆盖。
+3. **`[本地]` 结论不代表宿主**：token 五步、删列库恢复 12/12、P0 回归均在沙盒实例完成；宿主只做了只读与投递类实测。
+4. **旧 head 不可交付**：`97d156c`、`b516cc6` 内核为空 blob（0 B）；`fa479d9` 缺 `0002` 迁移。
+5. **跨版本 token 不兼容**：`4eda665`（`u64be`+`v2`）与 `06c9f56`（`u32be`+`v1`）不同；换产物失效在传 token（数据无损）。
