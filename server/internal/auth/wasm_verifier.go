@@ -5,10 +5,11 @@ package auth
 // 为什么选它：验签只需要"把公钥/消息/签名交给已经和 GmSSL 交叉验证过的实现"，
 // 服务端不再维护第二套 SM2 代码，少一个分叉源。
 //
-// 调用约定（docs/ABI.md §5.4）：
+// 调用约定（源码依据：`crypto/sm/src/ffi.rs:495` @ feat/endcrypto-wasm 95a24ac）：
 //   ys_sm2_verify_der(pub64, msg, msg_len, sig_der, sig_len) -> 1 通过 / 0 不通过 / 负数错误
-//   公钥 64 字节 `X‖Y`（**不含** 0x04；含 0x04 的 65 字节由本包剥掉前缀）；
+//   公钥 **64** 字节 `X‖Y`（不含 0x04；含 0x04 的 65 字节由本包剥掉前缀）；
 //   签名是 DER；userID 固定 "1234567812345678"，e = SM3(ZA‖msg)。
+//   注意同族的 `ys_sm2_verify`（ffi.rs:472）收的是裸 R‖S，不是 DER —— 两者别混用。
 //
 // 模块 0 import、导出 `memory` + `ys_alloc`/`ys_free`；实例化失败（例如出现 import）
 // 一律在启动阶段报错，不降级。
