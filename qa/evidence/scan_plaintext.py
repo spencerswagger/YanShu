@@ -608,8 +608,12 @@ def scan_sqlite(path: str, patterns: Sequence[Pattern], stats: Stats,
 # 投递（可插拔）
 # --------------------------------------------------------------------------- #
 
-# 投递命令必须给出的标识（stdout 里 JSON 或 key=value 行）
-DELIVER_KEYS = ("code", "package_id", "blob_dir", "db_url", "log_path")
+# 投递命令的标识约定：JSON（--json-out 文件或 stdout）或 key=value 行
+DELIVER_KEYS = ("code", "package_id", "blob_dir", "db_url", "log_path", "schema")
+# 必填：没有包 ID 不知道投了什么，没有 blob_dir 不知道扫哪儿 —— 这两个绝不猜
+DELIVER_REQUIRED = ("package_id", "blob_dir")
+# 不同实现的同义键（Core 的 deliver 用 transfer_id/storage_path）
+DELIVER_ALIASES = {"transfer_id": "package_id", "storage_path": "blob_dir"}
 
 
 def parse_deliver_output(text: str) -> dict[str, str]:
@@ -625,6 +629,9 @@ def parse_deliver_output(text: str) -> dict[str, str]:
             for k in DELIVER_KEYS:
                 if obj.get(k) not in (None, ""):
                     found[k] = str(obj[k])
+            for src, dst in DELIVER_ALIASES.items():
+                if dst not in found and obj.get(src) not in (None, ""):
+                    found[dst] = str(obj[src])
             if found:
                 return found
     for line in body.splitlines():
@@ -895,10 +902,10 @@ def _selftest() -> int:
         return f"干净日志 0 误报；泄漏日志命中 {len(hs2)} 处（target=logs）"
 
     def c_deliver_ids():
-        """投递命令的标识解析：JSON / key=value 两种写法都要认，缺字段要能点出来。"""
+        """投递标识解析：JSON / key=value、同义键、必填项缺失。"""
         full = {"code": "ABCD", "package_id": "0123456789abcdef0123456789abcdef",
                 "blob_dir": "/var/lib/yanshu/blobs", "db_url": "postgres://u:p@h/db",
-                "log_path": "/var/log/yanshu/server.log"}
+                "log_path": "/var/log/yanshu/server.log", "schema": "gate_ev1"}
         got = parse_deliver_output(json.dumps(full))
         assert got == full, got
 
@@ -907,10 +914,17 @@ def _selftest() -> int:
         got2 = parse_deliver_output(kv)
         assert got2["code"] == "WXYZ" and got2["blob_dir"] == "/tmp/blobs", got2
 
+        # Core deliver 的同义键：transfer_id → package_id，storage_path → blob_dir
+        core = json.dumps({"ok": True, "transfer_id": "abc", "storage_path": "/x/abc",
+                           "schema": "gate_ev1", "db_url": "postgres://h/d"})
+        got3 = parse_deliver_output(core)
+        assert got3["package_id"] == "abc" and got3["blob_dir"] == "/x/abc", got3
+        assert not [k for k in DELIVER_REQUIRED if k not in got3], "同义键映射后必填项应齐"
+
         partial = parse_deliver_output('{"code":"ABCD","package_id":"x"}')
-        missing = [k for k in DELIVER_KEYS if k not in partial]
-        assert set(missing) == {"blob_dir", "db_url", "log_path"}, missing
-        return "JSON/key=value 均可解析；缺字段能逐个点名"
+        missing = [k for k in DELIVER_REQUIRED if k not in partial]
+        assert missing == ["blob_dir"], missing
+        return "JSON/key=value/同义键均可解析；必填项缺失能点名"
 
     def c_core_schema():
         """core-skeleton 白名单核对：缺表与白名单外的列都要能点出来。"""
@@ -1005,6 +1019,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     help="投递样本描述 JSON（缺省则用内置样本生成）")
     ap.add_argument("--deliver-cmd", default=os.environ.get("YS_DELIVER_CMD"),
                     help="可选：跑一次投递的外部命令（拿到 YS_SAMPLE_FILE 等环境变量）")
+    ap.add_argument("--deliver-json", default=os.environ.get("YS_DELIVER_JSON"),
+                    help="投递命令写出的 JSON 结果文件（如 Core deliver 的 --json-out）；"
+                         "优先于从 stdout 解析")
     ap.add_argument("--recipient-code", default=os.environ.get("YS_RECIPIENT_CODE", ""),
                     help="收件方 4 位码，只透传给投递命令，不打印")
     ap.add_argument("--deliver-timeout", type=float, default=600.0)
@@ -1074,21 +1091,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"[BLOCKED] 投递失败：{exc}", file=sys.stderr)
             return EXIT_BLOCKED
 
-        ids = parse_deliver_output(deliver_out)
-        missing = [k for k in DELIVER_KEYS if k not in ids]
+        ids: dict[str, str] = {}
+        if args.deliver_json:
+            try:
+                ids = parse_deliver_output(Path(args.deliver_json).read_text(encoding="utf-8"))
+            except OSError as exc:
+                print(f"[PENDING] 读不了 --deliver-json {args.deliver_json}：{exc}", file=sys.stderr)
+                return EXIT_PENDING
+        if not ids:
+            ids = parse_deliver_output(deliver_out)
+
+        missing = [k for k in DELIVER_REQUIRED if k not in ids]
         if missing:
-            print(f"[PENDING] 投递命令的 stdout 里缺这些标识：{'、'.join(missing)}", file=sys.stderr)
-            print("          约定：输出 JSON 或 key=value 行，键为 "
-                  + " / ".join(DELIVER_KEYS) + "；缺字段按退出码 4 处理，不猜路径。",
-                  file=sys.stderr)
+            print(f"[PENDING] 投递结果里缺这些必填标识：{'、'.join(missing)}", file=sys.stderr)
+            print("          约定：`--deliver-json` 文件或 stdout 给 JSON/key=value，"
+                  "键为 " + " / ".join(DELIVER_KEYS)
+                  + "（同义键 transfer_id→package_id、storage_path→blob_dir）；"
+                    "缺必填项按退出码 4 处理，不猜路径。", file=sys.stderr)
             return EXIT_PENDING
-        print(f"[deliver] 标识：code={ids['code']} package_id={ids['package_id']} "
-              f"blob_dir={ids['blob_dir']} db_url={redact_dsn(ids['db_url'])} "
-              f"log_path={ids['log_path']}")
-        # 显式参数优先，其次用投递命令报出来的路径
-        args.storage_root = args.storage_root or ids["blob_dir"]
-        args.dsn = args.dsn or ids["db_url"]
-        args.log_path = args.log_path or ids["log_path"]
+        print("[deliver] 标识：" + " ".join(
+            f"{k}={redact_dsn(ids[k]) if k == 'db_url' else ids[k]}" for k in DELIVER_KEYS
+            if ids.get(k)) + f"（来源：{'--deliver-json' if args.deliver_json else 'stdout'}）")
+        # 显式参数优先，其次用投递结果里报出来的路径
+        args.storage_root = args.storage_root or ids.get("blob_dir")
+        args.dsn = args.dsn or ids.get("db_url")
+        args.log_path = args.log_path or ids.get("log_path")
+        args.pg_schema = args.pg_schema or ids.get("schema")
         if args.wait > 0:
             print(f"[deliver] 等待 {args.wait}s 让服务端落盘/提交")
             time.sleep(args.wait)

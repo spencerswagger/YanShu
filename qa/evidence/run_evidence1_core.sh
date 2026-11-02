@@ -35,9 +35,13 @@ if [ -z "$base_dsn" ]; then
     exit 4
 fi
 schema="${YS_EV1_SCHEMA:-gate_ev1}"
-# 端口按 PID 派生：沙盒里上一轮的服务可能还没退干净，固定端口会导致
-# "healthz 通但其实是别人的服务"，把密文写到别的目录里去（已踩过一次）
-port="${YS_EV1_PORT:-$((18080 + ($$ % 500)))}"
+# 端口：默认让内核给一个空闲端口（沙盒里残留进程会占住固定端口，导致
+# "healthz 通但其实是别人的服务"，密文写到别的目录里去——已踩过两次）
+free_port() {
+    python3 -c 'import socket
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
+port="${YS_EV1_PORT:-$(free_port)}"
 dsn="$base_dsn&search_path=$schema"
 
 # 只允许跑在约定的库上（默认 yanshu_test）：不扫别人的库、不互相污染
@@ -103,7 +107,11 @@ for _i in $(seq 1 20); do [ -s "$LOG_CHECK" ] && break; sleep 0.2; done
 # 必须是**我们自己起的**那个进程在服务：进程活着、日志里有 listening、没有 bind 失败
 if ! kill -0 "$SRV" 2>/dev/null; then
     echo "[BLOCKED] 服务进程已退出，日志尾部：" >&2
-    tail -20 "$LOG_CHECK" >&2
+    tail -20 "$LOG_CHECK" 2>/dev/null >&2 || true
+    tail -20 "$work/stdout.log" 2>/dev/null >&2 || true
+    if grep -q "address already in use" "$work/stdout.log" 2>/dev/null && [ -z "${YS_EV1_PORT:-}" ]; then
+        echo "[info] 端口 $port 被占，换一个空端口重试一次：请重跑（脚本每次都会重新取空闲端口）" >&2
+    fi
     exit 2
 fi
 if grep -q "bind: address already in use" "$LOG_CHECK" 2>/dev/null; then
@@ -139,28 +147,62 @@ b64() { python3 -c 'import base64,sys;print(base64.urlsafe_b64encode(bytes.fromh
 SCAN_BLOB="$work/blobs"; SCAN_DSN="$base_dsn"; SCAN_LOG="$work/logs"
 
 if [ -n "${YS_DELIVER_BIN:-}" ]; then
-    # Core 的投递驱动：入参是 .yspk（不是明文），stdout 给五个标识
-    echo "  投递驱动：$YS_DELIVER_BIN"
-    dargs=$(printf '%s' "${YS_DELIVER_ARGS:-}" | sed "s#{pack}#$work/sample.yspk#g")
+    # 投递驱动：入参是 .yspk（不是明文）。YS_DELIVER_BIN=core-deliver 会现编译 Core 的 deliver。
+    if [ "$YS_DELIVER_BIN" = "core-deliver" ]; then
+        (cd "$core/server" && go build -o "$work/bin/deliver" ./cmd/deliver) || {
+            echo "[BLOCKED] 编译 Core 的 deliver 失败" >&2; exit 2; }
+        DELIVER_BIN="$work/bin/deliver"
+        if [ -z "${YS_DELIVER_ARGS:-}" ]; then
+            YS_DELIVER_ARGS='--base-url http://127.0.0.1:{port} --yspk {pack} --no-ack --blob-dir {blob} --json-out {json}'
+        fi
+    else
+        DELIVER_BIN="$YS_DELIVER_BIN"
+    fi
+    DJ="$work/deliver.json"
+    echo "  投递驱动：$DELIVER_BIN"
+    # 占位符用 python 替换：sed 的替换串里 & 是"整个匹配"，DSN 里带 & 会被吃掉
+    dargs=$(python3 -c '
+import sys
+s = sys.argv[1]
+pairs = sys.argv[2:]
+for i in range(0, len(pairs), 2):
+    s = s.replace("{" + pairs[i] + "}", pairs[i + 1])
+print(s)
+' "${YS_DELIVER_ARGS:-}" pack "$work/sample.yspk" port "$port" blob "$work/blobs" \
+        dsn "$dsn" json "$DJ")
     set +e
     # shellcheck disable=SC2086
-    DELIVER_OUT=$("$YS_DELIVER_BIN" $dargs 2>&1)
+    DELIVER_OUT=$("$DELIVER_BIN" $dargs 2>&1)
     rc_deliver=$?
     set -e
     printf '%s\n' "$DELIVER_OUT" | sed 's/^/  /'
     if [ "$rc_deliver" -ne 0 ]; then
-        echo "[BLOCKED] 投递驱动退出码 $rc_deliver" >&2
+        echo "[BLOCKED] 投递驱动退出码 $rc_deliver（stub-allow 未开时 Core 的 deliver 会退 4）" >&2
         exit 2
     fi
-    IDS_JSON=$(printf '%s' "$DELIVER_OUT" | python3 -c '
+    if [ -f "$DJ" ]; then
+        IDS_JSON=$(python3 -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from scan_plaintext import parse_deliver_output
+print(json.dumps(parse_deliver_output(open(sys.argv[2], encoding="utf-8").read()), ensure_ascii=False))
+' "$here" "$DJ")
+    else
+        IDS_JSON=$(printf '%s' "$DELIVER_OUT" | python3 -c '
 import json, sys
 sys.path.insert(0, sys.argv[1])
 from scan_plaintext import parse_deliver_output
 print(json.dumps(parse_deliver_output(sys.stdin.read()), ensure_ascii=False))
 ' "$here")
+    fi
     SCAN_BLOB=$(printf '%s' "$IDS_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("blob_dir",""))')
     SCAN_DSN=$(printf '%s' "$IDS_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("db_url",""))')
     SCAN_LOG=$(printf '%s' "$IDS_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("log_path",""))')
+    SCHEMA_FROM_DRIVER=$(printf '%s' "$IDS_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("schema",""))')
+    if [ -n "$SCHEMA_FROM_DRIVER" ] && [ "$SCHEMA_FROM_DRIVER" != "$schema" ]; then
+        echo "[BLOCKED] 驱动报的 schema（$SCHEMA_FROM_DRIVER）与本轮用的（$schema）不一致" >&2
+        exit 2
+    fi
     SCAN_BLOB=${SCAN_BLOB:-$work/blobs}
     SCAN_DSN=${SCAN_DSN:-$base_dsn}
     SCAN_LOG=${SCAN_LOG:-$work/logs}

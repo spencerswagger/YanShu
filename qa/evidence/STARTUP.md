@@ -85,13 +85,36 @@ grep -q listening /srv/yanshu/logs/server.log
 > 扫日志时的坑：**跨天滚动会换文件名**，取证要按投递时间戳选当日文件（
 > `yanshu-server-$(date -u +%F).log`），不要硬编码某一天的文件名——否则会扫到空文件还判 PASS。
 
-## 6. 收工
+## 6. 投递一条命令（Core 的 `deliver`）
+
+```sh
+# 先编译（一次性）
+cd <YANSHU_SRC>/server && go build -o /srv/yanshu/bin/deliver ./cmd/deliver
+
+/srv/yanshu/bin/deliver \
+  --base-url http://127.0.0.1:8080 \
+  --yspk /path/to/<包>.yspk \
+  --no-ack \
+  --blob-dir /srv/yanshu/blobs \
+  --json-out /srv/yanshu/deliver.json
+```
+
+- **`--no-ack` 必须带**：ack 会按策略删密文，删完再"扫不到明文"就是空语料，不构成证据。
+- `--blob-dir` 只是打印/校验用；`--dsn` 可选（用 pgx 解析，**不要带 `search_path` 参数**，
+  否则连不上、schema 打印为空）。
+- 输出里 `storage_path` / `schema` / `transfer_id` 就是要交给扫描脚本的标识；
+  `--json-out` 写成文件后可直接喂给 `scan_plaintext.py --deliver-json`。
+- 服务端必须是 `YANSHU_VERIFIER=stub-allow`，否则 `deliver` 退出码 4（fail-closed）。
+- **端口**：上面写的是 spencer 要用的 8080；我沙盒实测用的是动态空闲端口（18080+/随机），
+  只影响 `--base-url` 和 `YANSHU_ADDR` 两处，其他不变。
+
+## 7. 收工
 
 ```sh
 pkill -f 'yanshu-server'    # 或 systemctl stop yanshu-server
 ```
 
-## 7. 这套配方与证据的关系
+## 8. 这套配方与证据的关系
 
 用这套配方起的实例 + `qa/evidence/run_evidence1_core.sh` 的投递/扫描流程，
 产出的就是 `results/contract-v1/2026-11-02-evidence1-core-c3c2fc9.md` 那份"初步证据"。
