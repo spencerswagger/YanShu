@@ -90,8 +90,9 @@ qa/evidence/run_evidence2_contract.sh /tmp/rune/crypto/sm /tmp/ys-ev2
 3. **AAD 里的块号绑定无法从外部单独验证**：nonce 也随块序号变化，任何"换块/换位"都会
    同时踩到 nonce 与 AAD，外部构造无法把它们分开。直接验证 AAD 绑定要依赖实现方的
    单元级反例（Rune 已补 `check_01…check_22`），Gate 只记录这个边界，不据此判分。
-4. **入口性质**：本次走 Rust 原生 API（native-api），不是 wasm C ABI 生产导出路径；
-   等 Web 的 wasm 适配层接好，用 `--entry-kind production` 再跑一遍，才算最终验收。
+4. **入口性质**：本次走 Rust 原生 API（native-api），不是 wasm C ABI 生产导出路径。
+   生产路径那一遍已经补跑：见同目录 `2026-11-02-evidence2-contract-v1-wasm.md`
+   （wasm `ys_unpack` / `ys_pack_v1`，结论一致：5/5、10/10、18/18）。
 5. **没有覆盖**：服务器替换整包/替换元数据（元数据层攻击）、并发/断点续传下的篡改、
    跨版本包（v2 预留位）。
 

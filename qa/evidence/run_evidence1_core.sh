@@ -48,7 +48,8 @@ mkdir -p "$work/crate/src/bin"
 cp "$here/adapters/ys_pack_probe.rs" "$work/crate/src/bin/ys_pack_probe.rs"
 # 有些精简环境只有 gcc 没有 cc（rustc 默认调 cc）
 if ! command -v cc >/dev/null 2>&1 && command -v gcc >/dev/null 2>&1; then
-    RUSTFLAGS="${RUSTFLAGS:-} -C linker=gcc"; export RUSTFLAGS
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER
 fi
 (cd "$work/crate" && CARGO_TARGET_DIR="$work/target" cargo build --release \
     --bin ys-tool --bin ys_pack_probe >"$work/logs/build.log" 2>&1) || {

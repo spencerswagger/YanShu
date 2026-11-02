@@ -27,5 +27,6 @@ results/
 | 文件 | 对象 | 状态 |
 |---|---|---|
 | `contract-v1/2026-11-02-evidence1-core-c3c2fc9.md` | 服务端 @ `c3c2fc9` + 契约包 | 存储/DB/日志三处零命中，3 组阳性对照全部触发 |
-| `contract-v1/2026-11-02-evidence2-contract-v1.md` | 端侧 `crypto/sm` @ `de6d6e1`（契约布局，Rust 原生 API 入口） | 单块 5/5、多块 10/10、变体 18/18；待 wasm 生产入口复跑 |
+| `contract-v1/2026-11-02-evidence2-contract-v1.md` | 端侧 @ `de6d6e1`（契约布局，Rust 原生 API 入口） | 5/5、10/10、18/18；入口属测试入口 |
+| `contract-v1/2026-11-02-evidence2-contract-v1-wasm.md` | 端侧 @ `cdcba0e`（**wasm C ABI 生产导出路径**） | 5/5、10/10、18/18；可作为 v1 验收 |
 | `rune-v1-noncontract/2026-11-02-evidence2-rune-v1.md` | 端侧 `crypto/sm` @ `12b3d94`（旧布局） | 记录与对照 |

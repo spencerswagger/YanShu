@@ -599,8 +599,39 @@ def scan_sqlite(path: str, patterns: Sequence[Pattern], stats: Stats,
 # 投递（可插拔）
 # --------------------------------------------------------------------------- #
 
+# 投递命令必须给出的标识（stdout 里 JSON 或 key=value 行）
+DELIVER_KEYS = ("code", "package_id", "blob_dir", "db_url", "log_path")
+
+
+def parse_deliver_output(text: str) -> dict[str, str]:
+    """从投递命令的 stdout 里取标识：先按 JSON 整体解析，再退回 key=value 行。"""
+    found: dict[str, str] = {}
+    body = (text or "").strip()
+    if body.startswith("{"):
+        try:
+            obj = json.loads(body)
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict):
+            for k in DELIVER_KEYS:
+                if obj.get(k) not in (None, ""):
+                    found[k] = str(obj[k])
+            if found:
+                return found
+    for line in body.splitlines():
+        line = line.strip()
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip().lstrip("-").replace("-", "_")
+        v = v.strip().strip('"').strip("'")
+        if k in DELIVER_KEYS and v:
+            found[k] = v
+    return found
+
+
 def deliver_via_cmd(cmd: str, sample_json: str, sample_bin: str, spec: SampleSpec,
-                    recipient_code: str, timeout: float) -> None:
+                    recipient_code: str, timeout: float) -> str:
     """跑一条外部命令完成一次投递；命令通过环境变量拿到样本与收件码。"""
     env = dict(os.environ)
     env.update({
@@ -619,6 +650,7 @@ def deliver_via_cmd(cmd: str, sample_json: str, sample_bin: str, spec: SampleSpe
     if proc.returncode != 0:
         tail = (proc.stderr or "").strip().splitlines()[-5:]
         raise RuntimeError(f"投递命令退出码 {proc.returncode}：{' / '.join(tail)}")
+    return proc.stdout or ""
 
 
 def deliver_via_http(*_args, **_kwargs) -> None:
@@ -844,6 +876,24 @@ def _selftest() -> int:
         assert any(h.item_id == "fragment:hi-entropy" for h in hs2), "日志里的高熵串没抓到"
         return f"干净日志 0 误报；泄漏日志命中 {len(hs2)} 处（target=logs）"
 
+    def c_deliver_ids():
+        """投递命令的标识解析：JSON / key=value 两种写法都要认，缺字段要能点出来。"""
+        full = {"code": "ABCD", "package_id": "0123456789abcdef0123456789abcdef",
+                "blob_dir": "/var/lib/yanshu/blobs", "db_url": "postgres://u:p@h/db",
+                "log_path": "/var/log/yanshu/server.log"}
+        got = parse_deliver_output(json.dumps(full))
+        assert got == full, got
+
+        kv = ("code=WXYZ\npackage_id=fa11fa11fa11fa11fa11fa11fa11fa11\n"
+              "blob_dir=/tmp/blobs\ndb_url=postgres://x/y\nlog_path=/tmp/s.log\n")
+        got2 = parse_deliver_output(kv)
+        assert got2["code"] == "WXYZ" and got2["blob_dir"] == "/tmp/blobs", got2
+
+        partial = parse_deliver_output('{"code":"ABCD","package_id":"x"}')
+        missing = [k for k in DELIVER_KEYS if k not in partial]
+        assert set(missing) == {"blob_dir", "db_url", "log_path"}, missing
+        return "JSON/key=value 均可解析；缺字段能逐个点名"
+
     def c_core_schema():
         """core-skeleton 白名单核对：缺表与白名单外的列都要能点出来。"""
         import unittest.mock as mock
@@ -875,6 +925,7 @@ def _selftest() -> int:
     case("SQLite（BLOB 原文 + TEXT 十六进制）", c_sqlite)
     case("空语料判 INCONCLUSIVE", c_empty)
     case("core 白名单核对", c_core_schema)
+    case("投递标识解析", c_deliver_ids)
     case("日志泄露检查", c_logs)
     case("--strict 升级口径", c_strict)
 
@@ -999,11 +1050,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         sample_json = args.sample or ""
         sample_bin = os.path.join(os.path.dirname(os.path.abspath(args.sample)), "sample.bin")
         try:
-            deliver_via_cmd(args.deliver_cmd, sample_json, sample_bin, spec,
-                            args.recipient_code, args.deliver_timeout)
+            deliver_out = deliver_via_cmd(args.deliver_cmd, sample_json, sample_bin, spec,
+                                          args.recipient_code, args.deliver_timeout)
         except (subprocess.TimeoutExpired, RuntimeError) as exc:
             print(f"[BLOCKED] 投递失败：{exc}", file=sys.stderr)
             return EXIT_BLOCKED
+
+        ids = parse_deliver_output(deliver_out)
+        missing = [k for k in DELIVER_KEYS if k not in ids]
+        if missing:
+            print(f"[PENDING] 投递命令的 stdout 里缺这些标识：{'、'.join(missing)}", file=sys.stderr)
+            print("          约定：输出 JSON 或 key=value 行，键为 "
+                  + " / ".join(DELIVER_KEYS) + "；缺字段按退出码 4 处理，不猜路径。",
+                  file=sys.stderr)
+            return EXIT_PENDING
+        print(f"[deliver] 标识：code={ids['code']} package_id={ids['package_id']} "
+              f"blob_dir={ids['blob_dir']} db_url={redact_dsn(ids['db_url'])} "
+              f"log_path={ids['log_path']}")
+        # 显式参数优先，其次用投递命令报出来的路径
+        args.storage_root = args.storage_root or ids["blob_dir"]
+        args.dsn = args.dsn or ids["db_url"]
+        args.log_path = args.log_path or ids["log_path"]
         if args.wait > 0:
             print(f"[deliver] 等待 {args.wait}s 让服务端落盘/提交")
             time.sleep(args.wait)

@@ -1217,6 +1217,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[BLOCKED] 读不了密文包：{exc}", file=sys.stderr)
         return EXIT_BLOCKED
 
+    if args.layout == LAYOUT_RUNE and not os.environ.get("YS_ALLOW_ARCHIVED_LAYOUT"):
+        print("[BLOCKED] LAYOUT_UNAVAILABLE：端侧已删除 rune-v1 布局（仓库只剩 YSPK/1.0），"
+              "本工具不再解析它。\n"
+              "           历史结果已归档在 results/rune-v1-noncontract/，不重跑；"
+              "确需复现旧结果时设 YS_ALLOW_ARCHIVED_LAYOUT=1。", file=sys.stderr)
+        return EXIT_BLOCKED
+
     try:
         env = parse_envelope(pristine, layout=args.layout)
     except EnvelopeError as exc:

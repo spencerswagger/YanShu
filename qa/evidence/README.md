@@ -6,8 +6,9 @@
 > * 默认布局 = **契约布局 `contract-v1`**（CRYPTO-PACK `YSPK/1.0`）。`rune-v1` 只能显式
 >   `--layout rune-v1` 使用，且输出会打「非契约实现、不作验收」横幅。
 > * 证据二**已按契约布局跑全量**（`results/contract-v1/`）：单块 5/5、多块 10/10、
->   补充变体 18/18，全部被明确拒绝，基线明文逐字节一致。入口是 Rust 原生 API
->   （`--entry-kind native-api`），**需在 wasm 生产导出路径上复跑后才算最终验收**。
+>   补充变体 18/18，全部被明确拒绝，基线明文逐字节一致。
+>   **生产导出路径已补跑**：wasm `ys_pack_v1` / `ys_unpack`（`--entry-kind production`），
+>   结果同样 5/5、10/10、18/18 —— 见 `...-contract-v1-wasm.md`。
 > * 旧布局（`rune-v1`）的历史结果留在 `results/rune-v1-noncontract/`，仅作对照。
 > * 证据一**已跑出真结果**（`results/contract-v1/`）：对服务端 `c3c2fc9` 起真服务、
 >   走完整投递，存储 / 数据库 / 日志三处零命中；并自动跑 3 组阳性对照
@@ -90,24 +91,35 @@ python3 qa/evidence/scan_plaintext.py \
 
 ### 出真证据需要哪些参数（可勾选清单）
 
-| # | 参数 | 从哪来 | 缺了会怎样 |
+| # | 参数 | 默认值 / 现状（2026-11-02 实测） | 缺了会怎样 |
 |---|---|---|---|
-| 1 | `YANSHU_BLOB_DIR` | 服务端启动配置（默认 `./data/blobs`） | 退出码 4，报"存储根目录不存在" |
-| 2 | `YANSHU_DATABASE_URL` | 服务端启动配置 | 退出码 4，报"拿不到 packages / package_chunks" |
-| 3 | migrations 已执行 | `server/internal/store/migrations/0001_init.sql`（按序跑） | 退出码 4，报"缺表：codes、auth_challenges…" |
-| 4 | 日志位置 `YANSHU_LOG_DIR` / `--log-path` / `--log-cmd` | 服务端部署方式（stdout 重定向 / systemd / 容器） | 退出码 4，报"日志路径未知" |
-| 5 | 一次完整投递怎么触发 | `--deliver-cmd '<命令>'`（Web 端脚本或 API 调用） | 能扫但语料为空 → 退出码 3（INCONCLUSIVE） |
+| 1 | `YANSHU_BLOB_DIR` | 默认 `./data/blobs`；布局 `<root>/<id[0:2]>/<id>/{prelude,chunks/<8 位序号>}` | 退出码 4，报"存储根目录不存在" |
+| 2 | `YANSHU_DATABASE_URL` | schema 由 DSN 的 `search_path` 决定，未指定即 `public`；本仓库脚本用 `--pg-schema` 传（psql 的 URI 不认 `search_path` 参数） | 退出码 4，报"拿不到 transfers / transfer_chunks" |
+| 3 | migrations | 服务端**启动时自动跑**（`internal/store` 里带 `schema_migrations` 记账）；手工跑法见 `server/README.md` | 退出码 4，报"缺表：codes、auth_challenges…" |
+| 4 | 日志位置 | `--log-path` / `--log-cmd`；**服务端只写 stdout，`YANSHU_LOG_DIR` 目前未被使用**，所以"扫哪儿"取决于部署方重定向到哪个文件 | 退出码 4，报"日志路径未知" |
+| 5 | 触发一次完整投递 | `--deliver-cmd '<命令>'`，命令 stdout 需给出 `code` / `package_id` / `blob_dir` / `db_url` / `log_path` 五个键 | 缺键 → 退出码 4 并点名；命令本身失败 → 2；命令成功但语料为空 → 3 |
 
 五项齐了才算"参数就绪"；任何一项缺，`--profile core-skeleton` 都会点名并以退出码 4 结束。
 
-### 投递钩子（等闭环一成就能接）
+### 投递钩子：任意命令 + 从 stdout 解析标识
 
-`--deliver-cmd '<命令>'` 会先跑一次投递，再检索。命令通过环境变量拿到样本：
+`--deliver-cmd '<命令>'` 先跑一次投递，再读它的 stdout 取标识。**不绑定任何具体实现**：
+换成另一套服务端，只要命令还能吐出这五个键，脚本不用改。
 
-```
-YS_SAMPLE_JSON / YS_SAMPLE_FILE / YS_SAMPLE_NAME / YS_SAMPLE_MIME / YS_SAMPLE_ID
-YS_RECIPIENT_CODE   收件方 4 位码（只透传，不打印、不落盘）
-```
+* 输入（传给命令的环境变量）：`YS_SAMPLE_JSON`、`YS_SAMPLE_FILE`（明文样本）、
+  `YS_SAMPLE_NAME`、`YS_SAMPLE_MIME`、`YS_SAMPLE_ID`、`YS_RECIPIENT_CODE`
+* 输出（stdout，JSON 或 `key=value` 行均可）：
+
+| 键 | 含义 |
+|---|---|
+| `code` | 收件方用户码 |
+| `package_id` | 服务端返回的传输 ID |
+| `blob_dir` | 服务端存储根目录 |
+| `db_url` | 数据库连接串（输出里打码，不落文件） |
+| `log_path` | 服务端日志路径 |
+
+**少任何一个 → 退出码 4 并点名缺哪个**，绝不猜路径。五个齐了就直接当检索目标用
+（显式 `--storage-root/--dsn/--log-path` 优先）。
 
 ### 输出与数据来源
 
@@ -157,7 +169,7 @@ PostgreSQL 走 `row_to_json`：`TEXT` 列明文原样、`BYTEA` 列以 `\x<hex>`
 | 布局 | 来源 | 特征 | 用途 |
 |---|---|---|---|
 | `contract-v1`（**默认**） | `docs/CRYPTO-PACK.md` v1 冻结稿 | HEADER 112B、块头 16B | 验收 |
-| `rune-v1` | `crypto/sm/src/pack.rs::layout` 旧实现 | HEADER 40B、块头 9B | 仅"非契约实现的临时验证"，输出带横幅、不作验收 |
+| `rune-v1` | 端侧旧实现（已被删除） | HEADER 40B、块头 9B | **已不可解析**：显式指定会报 `LAYOUT_UNAVAILABLE`；历史结果归档在 `results/rune-v1-noncontract/`，不重跑（确需复现设 `YS_ALLOW_ARCHIVED_LAYOUT=1`） |
 | `auto` | 按头部判别 | — | 排查用；判不出即报错 |
 
 两者**曾不一致**（差异清单见 `results/rune-v1-noncontract/2026-11-02-evidence2-rune-v1.md`）。脚本不猜测：
@@ -191,10 +203,12 @@ qa/evidence/
 ├─ scan_plaintext.py            证据一
 ├─ tamper_probe.py              证据二
 ├─ run_evidence1_core.sh        证据一一键复跑（起真服务 → 投递 → 三处扫 → 阳性对照）
-├─ run_evidence2_contract.sh    证据二一键复跑（契约布局，默认）
+├─ run_evidence2_contract.sh    证据二一键复跑（契约布局，Rust 原生入口）
+├─ run_evidence2_wasm.sh        证据二一键复跑（**wasm 生产导出路径**）
 ├─ run_evidence2_rune.sh        证据二一键复跑（旧布局，仅对照）
 ├─ adapters/
-│  ├─ ys_pack_probe.rs          Gate 侧驱动：用 yanshu-sm 打包 / 解包
+│  ├─ ys_pack_probe.rs          Gate 侧驱动（Rust 原生 API）
+│  ├─ wasm_pack_probe.mjs       Gate 侧驱动（wasm C ABI，生产导出路径）
 │  ├─ build_probe.sh            把驱动塞进端侧 crate 的临时副本并编译
 │  └─ README.md                 为什么这样构建、怎么接
 ├─ fixtures/                    契约公开测试向量 + 样本描述示例
