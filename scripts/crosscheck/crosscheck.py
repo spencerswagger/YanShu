@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
-"""雁书 YanShu · 测试向量比对
+"""雁书 YanShu · 测试向量比对（契约 YSPK/1.0）
 
-比对 `testdata/vectors.json`（本实现产出）与"对照值"。对照值有两个来源：
+比对本实现产出的 `testdata/vectors.json` 与外部对照值。对照值两个来源，有几个比几个：
 
-  1. **本机 GmSSL**（可选）：`gmssl` 命令行 + 链接 `libgmssl.a` 的 oracle，
-     逐字节重算；SM2 通过覆盖 rand_bytes 固定 k，所以密文/签名也能逐字节比。
-  2. **宿主侧对照值**：`testdata/gmssl-expected.json`（结构见 `--emit-template`）。
-     文件不存在或字段为空 → 该条打印 `SKIP 待宿主对照`，**不算 FAIL**。
-
-两个来源都没有时，脚本仍然跑完并给出 SKIP 汇总，退出码 0 —— 这样宿主值一到
-直接落文件再跑，不用改代码。
+  1. **本机 GmSSL**（可选）：`gmssl` 命令行 + 链接 `libgmssl.a` 的 oracle。
+  2. **宿主侧对照值**：`testdata/gmssl-expected.json`（模板由 `--emit-template` 生成）。
+     文件缺失或字段为空 → 该条打印 `SKIP 待宿主对照`，**不算 FAIL**。
 
 退出码：0 = 无 FAIL（可能全是 SKIP）；1 = 有 FAIL；2 = 环境/文件缺失。
-
-用法见同目录 run.sh 头部注释。
 """
 
 import argparse
@@ -31,14 +25,13 @@ YS_TOOL = os.environ.get("YS_TOOL", "")
 
 LOCAL = False
 EXT = None
-
 PASS = 0
 FAIL = 0
 SKIP = 0
 FAILURES = []
 
-
-# ---------------------------------------------------------------- 结果统计
+ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+CHECK_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ*~$=U"
 
 
 def ok(label):
@@ -60,30 +53,26 @@ def skip(label, why="待宿主对照"):
     print(f"  SKIP  {label}  ({why})")
 
 
-def first_diff(a: str, b: str):
+def first_diff(a, b):
     n = min(len(a), len(b))
     for i in range(n):
         if a[i] != b[i]:
             return i
-    if len(a) != len(b):
-        return n
-    return -1
+    return n if len(a) != len(b) else -1
 
 
 def cmp_text(label, ours, theirs):
     if ours == theirs:
         ok(label)
-    else:
-        d = first_diff(ours, theirs)
-        bad(
-            label,
-            f"first diff at {d}; ours={ours[max(0, d - 8): d + 24]!r} "
-            f"theirs={theirs[max(0, d - 8): d + 24]!r}",
-        )
+        return
+    d = first_diff(ours, theirs)
+    bad(
+        label,
+        f"first diff at {d}; ours={ours[max(0, d - 8): d + 24]!r} theirs={theirs[max(0, d - 8): d + 24]!r}",
+    )
 
 
 def compare(label, ours, local_fn=None, ext_val=None):
-    """本地 GmSSL 与宿主对照值，有几个比几个；都没有就 SKIP。"""
     ran = 0
     if LOCAL and local_fn is not None:
         cmp_text(label, ours, local_fn())
@@ -101,18 +90,11 @@ def ext_get(*path):
         if not isinstance(node, dict) or key not in node:
             return None
         node = node[key]
-    if node is None or node == "":
-        return None
-    if isinstance(node, bool):
+    if node is None or node == "" or isinstance(node, bool):
         return None
     if isinstance(node, int):
         return str(node)
-    if not isinstance(node, str):
-        return None
-    return node
-
-
-# ---------------------------------------------------------------- 外部命令
+    return node if isinstance(node, str) else None
 
 
 def run(cmd, stdin=None):
@@ -150,17 +132,18 @@ def memo(fn):
     return inner
 
 
-# ---------------------------------------------------------------- Crockford Base32
-
-ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+# ---------------------------------------------------------------- Crockford / DER
 
 
-def crockford_first4(digest: bytes) -> str:
+def crockford_code(pub65_hex):
+    digest = bytes.fromhex(cli("sm3", stdin=bytes.fromhex(pub65_hex)).decode().strip())
     bits = "".join(f"{b:08b}" for b in digest)
-    return "".join(ALPHABET[int(bits[i * 5 : i * 5 + 5], 2)] for i in range(4))
+    code = "".join(ALPHABET[int(bits[i * 5 : i * 5 + 5], 2)] for i in range(4))
+    value = int(bits[:20], 2)
+    return code, CHECK_ALPHABET[value % 37]
 
 
-def normalize_code(s: str) -> str:
+def normalize_code(s):
     out = []
     for ch in s:
         if ch in "- \t\r\n":
@@ -175,51 +158,63 @@ def normalize_code(s: str) -> str:
     return "".join(out)
 
 
-# ---------------------------------------------------------------- 加密包格式（按锚点重拼）
+def der_int(b32: bytes) -> bytes:
+    i = 0
+    while i < 31 and b32[i] == 0:
+        i += 1
+    body = b32[i:]
+    if body[0] & 0x80:
+        body = b"\x00" + body
+    return b"\x02" + bytes([len(body)]) + body
+
+
+def der_sig(raw64_hex: str) -> str:
+    raw = bytes.fromhex(raw64_hex)
+    body = der_int(raw[:32]) + der_int(raw[32:])
+    return (b"\x30" + bytes([len(body)]) + body).hex()
+
+
+# ---------------------------------------------------------------- 契约 YSPK/1.0 重拼
 
 MAGIC = b"YSPK"
-VERSION = 1
-SUITE = 1
-FLAGS = 1
-HEADER_LEN = 40
-TAG_LEN = 16
-KEY_REC_KIND = 1
-SIG_REC_KIND = 2
-BLOCK_FLAG_LAST = 1
-MANIFEST_NONCE = bytes([0xFF] * 8 + [0x80, 0, 0, 0])
-SALT_BLOCK = b"YanShu/v1/block"
-SALT_MANIFEST = b"YanShu/v1/manifest"
+VER = bytes([1, 0])
+CHUNK_HDR = 16
+TAG = 16
 
 
-def block_nonce(index: int, is_last: bool) -> bytes:
+def header_bytes(flags, chunk_size, chunk_count, plaintext_size, manifest_len,
+                 manifest_pt_len, salt, sig_len):
     return (
-        index.to_bytes(4, "big")
-        + b"\x00\x00\x00\x00"
-        + bytes([1 if is_last else 0])
-        + b"\x00\x00\x00"
+        MAGIC + VER + (112).to_bytes(2, "big") + flags.to_bytes(4, "big")
+        + bytes([1, 1, 1, 1])
+        + chunk_size.to_bytes(4, "big") + chunk_count.to_bytes(4, "big")
+        + plaintext_size.to_bytes(8, "big")
+        + (129).to_bytes(8, "big") + manifest_len.to_bytes(8, "big")
+        + manifest_pt_len.to_bytes(4, "big") + (65).to_bytes(4, "big")
+        + salt + sig_len.to_bytes(8, "big")
+        + b"\x00" * 32
     )
 
 
-def header_bytes(file_id, block_size, block_count, plain_size) -> bytes:
+def chunk_nonce(i, last):
+    return i.to_bytes(8, "big") + b"\x00\x00\x00" + bytes([1 if last else 0])
+
+
+def aad_chunk(chunk_size, chunk_count, plaintext_size, i, last, pt_len):
     return (
-        MAGIC
-        + bytes([VERSION, SUITE, FLAGS, 0])
-        + file_id
-        + block_size.to_bytes(4, "big")
-        + block_count.to_bytes(4, "big")
-        + plain_size.to_bytes(8, "big")
+        bytes([1]) + MAGIC + VER
+        + chunk_size.to_bytes(4, "big") + chunk_count.to_bytes(4, "big")
+        + plaintext_size.to_bytes(8, "big") + i.to_bytes(4, "big")
+        + bytes([1 if last else 0]) + pt_len.to_bytes(4, "big")
     )
 
 
-def expected_block_count(plain_size, block_size):
-    return 1 if plain_size == 0 else (plain_size + block_size - 1) // block_size
-
-
-def block_plain_len(plain_size, block_size, index):
-    count = expected_block_count(plain_size, block_size)
-    if index + 1 < count:
-        return block_size
-    return plain_size - (count - 1) * block_size
+def aad_manifest(flags, chunk_size, chunk_count, plaintext_size, manifest_pt_len):
+    return (
+        bytes([2]) + MAGIC + VER + flags.to_bytes(4, "big")
+        + chunk_size.to_bytes(4, "big") + chunk_count.to_bytes(4, "big")
+        + plaintext_size.to_bytes(8, "big") + manifest_pt_len.to_bytes(4, "big")
+    )
 
 
 def hkdf(salt, ikm, info, length):
@@ -228,145 +223,140 @@ def hkdf(salt, ikm, info, length):
 
 def gcm_enc(key, nonce, aad, pt):
     out = bytes.fromhex(oracle("gcm-enc", key.hex(), nonce.hex(), aad.hex(), pt.hex()))
-    return out[:-TAG_LEN], out[-TAG_LEN:]
+    return out[:-TAG], out[-TAG:]
 
 
 def sm3(data):
     return bytes.fromhex(oracle("sm3", data.hex()))
 
 
+def chunk_count_of(size, chunk_size):
+    return 1 if size == 0 else (size + chunk_size - 1) // chunk_size
+
+
+def chunk_pt_len(size, chunk_size, count, i):
+    return chunk_size if i + 1 < count else size - chunk_size * (count - 1)
+
+
 def rebuild_pack(v) -> bytes:
     data = bytes.fromhex(v["data"])
-    file_id = bytes.fromhex(v["file_id"])
     dk = bytes.fromhex(v["dk"])
-    block_size = v["block_size"]
-    plain_size = len(data)
-    block_count = expected_block_count(plain_size, block_size)
-    header = header_bytes(file_id, block_size, block_count, plain_size)
+    salt = bytes.fromhex(v["kdf_salt"])
+    recipient_pub = bytes.fromhex(v["recipient_pub"])
+    sender_priv = bytes.fromhex(v["sender_priv"])
+    assert recipient_pub[0] == 0x04
+    sender_pub = bytes([0x04]) + bytes.fromhex(oracle("sm2-pub", v["sender_priv"]))
 
-    block_key = hkdf(SALT_BLOCK, dk, file_id, 16)
-    manifest_key = hkdf(SALT_MANIFEST, dk, file_id, 16)
+    chunk_size = v["chunk_size"]
+    size = len(data)
+    count = chunk_count_of(size, chunk_size)
+    flags = 2  # SENDER_SIGNED
 
-    blocks = []
+    kek_c = hkdf(salt, dk, b"YANSHU/v1/chunk-key", 16)
+    kek_m = hkdf(salt, dk, b"YANSHU/v1/manifest-key", 16)
+
+    chunks = []
     digests = []
-    for i in range(block_count):
-        start = i * block_size
-        ln = block_plain_len(plain_size, block_size, i)
-        pt = data[start : start + ln]
-        is_last = i + 1 == block_count
-        ct, tag = gcm_enc(block_key, block_nonce(i, is_last), header, pt)
-        digests.append(sm3(ct + tag))
-        blocks.append((i, BLOCK_FLAG_LAST if is_last else 0, ct, tag))
+    for i in range(count):
+        pt_len = chunk_pt_len(size, chunk_size, count, i)
+        pt = data[i * chunk_size : i * chunk_size + pt_len]
+        last = i + 1 == count
+        ct, tag = gcm_enc(kek_c, chunk_nonce(i, last),
+                          aad_chunk(chunk_size, count, size, i, last, pt_len), pt)
+        digests.append(sm3(pt))
+        chunks.append(
+            i.to_bytes(4, "big") + pt_len.to_bytes(4, "big") + pt_len.to_bytes(4, "big")
+            + bytes([1 if last else 0, 0]) + b"\x00\x00" + ct + tag
+        )
 
     name = v["file_name"].encode()
     mime = v["mime"].encode()
-    manifest_plain = (
-        len(name).to_bytes(2, "big")
-        + name
-        + len(mime).to_bytes(2, "big")
-        + mime
-        + block_size.to_bytes(4, "big")
-        + block_count.to_bytes(4, "big")
-        + plain_size.to_bytes(8, "big")
-        + len(digests).to_bytes(4, "big")
-        + b"".join(digests)
+    ext = v["ext"].encode()
+    manifest_pt = (
+        b"YSM1" + bytes([1, 0, 1, 32])
+        + size.to_bytes(8, "big") + chunk_size.to_bytes(4, "big") + count.to_bytes(4, "big")
+        + v["created_at_ms"].to_bytes(8, "big")
+        + len(name).to_bytes(2, "big") + name
+        + len(mime).to_bytes(2, "big") + mime
+        + len(ext).to_bytes(2, "big") + ext
+        + (count * 32).to_bytes(4, "big") + b"".join(digests)
     )
-
-    sig = bytes.fromhex(
-        oracle("sm2-sign", v["sender_priv"], v["k_sign"], (header + manifest_plain).hex())
+    man_ct, man_tag = gcm_enc(
+        kek_m, bytes.fromhex("ffffffffffffffff00000001"),
+        aad_manifest(flags, chunk_size, count, size, len(manifest_pt)), manifest_pt,
     )
-    wrapped = bytes.fromhex(oracle("sm2-enc", v["recipient_pub"], v["k_wrap"], dk.hex()))
-    man_ct, man_tag = gcm_enc(manifest_key, MANIFEST_NONCE, header, manifest_plain)
+    manifest_sec = man_ct + man_tag
 
-    out = bytearray()
-    out += header
-    out += bytes([KEY_REC_KIND]) + len(wrapped).to_bytes(4, "big") + wrapped
-    out += bytes([SIG_REC_KIND]) + len(sig).to_bytes(4, "big") + sig
-    out += len(man_ct).to_bytes(4, "big") + man_ct + man_tag
-    for i, flags, ct, tag in blocks:
-        out += i.to_bytes(4, "big") + bytes([flags]) + len(ct).to_bytes(4, "big") + ct + tag
-    return bytes(out)
+    hdr_stub = header_bytes(flags, chunk_size, count, size, len(manifest_sec),
+                            len(manifest_pt), salt, 70)
+    sig_input = b"YSSIG1" + VER + hdr_stub[:72] + sender_pub + manifest_sec
+    raw_sig = oracle("sm2-sign", v["sender_priv"], v["k_sig"], sig_input.hex())
+    sig_der = bytes.fromhex(der_sig(raw_sig))
+
+    wrapped = bytes([0x04]) + bytes.fromhex(
+        oracle("sm2-enc", recipient_pub[1:].hex(), v["k_enc"], dk.hex())
+    )
+    assert len(wrapped) == 129, len(wrapped)
+
+    header = header_bytes(flags, chunk_size, count, size, len(manifest_sec),
+                          len(manifest_pt), salt, len(sig_der))
+    return header + sender_pub + wrapped + manifest_sec + sig_der + b"".join(chunks)
 
 
 # ---------------------------------------------------------------- 模板
 
 
 def emit_template(vectors, path):
-    """生成宿主侧对照值模板：填满 expected 字段后另存为 gmssl-expected.json。"""
     t = {
         "meta": {
-            "how": "用 GmSSL 3.1.1 按 vectors.json 的 conventions 复算，把空字符串填上；"
-            "填不出的留空即可（脚本会 SKIP 该条）。",
-            "suite": vectors["meta"]["suite"],
+            "how": "用 OpenSSL/GmSSL 按 vectors.json 的 conventions 复算，把空字符串填上；"
+            "填不出的留空（脚本会 SKIP 该条）。",
+            "pack_version": vectors["meta"]["pack_version"],
         },
-        "sm3": {},
-        "hmac_sm3": {},
-        "hkdf_sm3": {},
-        "sm4_gcm": {},
+        "sm3": {}, "hmac_sm3": {}, "hkdf_sm3": {}, "sm4_gcm": {},
         "sm2": {"keys": {}, "encrypt": {}, "sign": {}},
-        "user_codes": {},
-        "pack": {},
+        "user_codes": {}, "pack": {},
     }
     for c in vectors["sm3"]:
-        t["sm3"][c["name"]] = {"msg": c["msg"], "digest": ""}
+        t["sm3"][c["name"]] = {"msg": c.get("msg"), "msg_len": c.get("msg_len"), "digest": ""}
     for c in vectors["hmac_sm3"]:
         t["hmac_sm3"][c["name"]] = {"key": c["key"], "msg": c["msg"], "tag": ""}
     for c in vectors["hkdf_sm3"]:
         t["hkdf_sm3"][c["name"]] = {
-            "salt": c["salt"],
-            "ikm": c["ikm"],
-            "info": c["info"],
-            "len": c["len"],
-            "okm": "",
+            "salt": c["salt"], "ikm": c["ikm"], "info": c["info"], "len": c["len"], "okm": "",
         }
     for c in vectors["sm4_gcm"]:
         t["sm4_gcm"][c["name"]] = {
-            "key": c["key"],
-            "nonce": c["nonce"],
-            "aad": c["aad"],
-            "plaintext": c["plaintext"],
-            "ciphertext": "",
-            "tag": "",
+            "key": c["key"], "nonce": c["nonce"], "aad": c["aad"],
+            "plaintext": c["plaintext"], "ciphertext": "", "tag": "",
         }
     for k in vectors["sm2"]["keys"]:
-        t["sm2"]["keys"][k["name"]] = {"priv": k["priv"], "pub": "", "za": ""}
+        t["sm2"]["keys"][k["name"]] = {"priv": k["priv"], "pub": "", "pub65": "", "za": ""}
     for c in vectors["sm2"]["encrypt"]:
         t["sm2"]["encrypt"][c["name"]] = {
-            "pub": c["pub"],
-            "k": c["k"],
-            "plaintext": c["plaintext"],
-            "ciphertext": "",
+            "pub": c["pub"], "k": c["k"], "plaintext": c["plaintext"], "ciphertext": "",
         }
     for c in vectors["sm2"]["sign"]:
         t["sm2"]["sign"][c["name"]] = {
-            "priv": c["priv"],
-            "pub": c["pub"],
-            "k": c["k"],
-            "msg": c["msg"],
-            "sig": "",
+            "priv": c["priv"], "pub": c["pub"], "k": c["k"], "msg": c["msg"],
+            "sig_raw": "", "sig_der": "",
         }
     for c in vectors["user_codes"]:
-        t["user_codes"][c["name"]] = {"pub": c["pub"], "code": ""}
+        t["user_codes"][c["name"]] = {"pub65": c["pub65"], "code": "", "check": ""}
     for v in vectors["pack"]:
         t["pack"][v["name"]] = {
-            "recipient_pub": v["recipient_pub"],
-            "sender_priv": v["sender_priv"],
-            "sender_pub": v["sender_pub"],
-            "dk": v["dk"],
-            "file_id": v["file_id"],
-            "k_wrap": v["k_wrap"],
-            "k_sign": v["k_sign"],
-            "block_size": v["block_size"],
-            "file_name": v["file_name"],
-            "mime": v["mime"],
-            "data": v["data"],
-            "pack": "",
+            "recipient_pub": v["recipient_pub"], "sender_priv": v["sender_priv"],
+            "sender_pub": v["sender_pub"], "recipient_priv": v["recipient_priv"],
+            "dk": v["dk"], "kdf_salt": v["kdf_salt"], "k_enc": v["k_enc"],
+            "k_sig": v["k_sig"], "created_at_ms": v["created_at_ms"],
+            "chunk_size": v["chunk_size"], "file_name": v["file_name"],
+            "mime": v["mime"], "ext": v["ext"], "data": v["data"], "pack": "",
         }
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(t, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    print(f"模板已写入 {path}；填满空字符串后作为 --expected 传入（默认 testdata/gmssl-expected.json）。")
+    print(f"模板已写入 {path}；填满空字符串后作为 --expected 传入。")
 
 
 # ---------------------------------------------------------------- 主流程
@@ -378,8 +368,8 @@ def main():
     ap = argparse.ArgumentParser(description="雁书测试向量比对")
     ap.add_argument("--vectors", default=os.path.join(ROOT, "testdata", "vectors.json"))
     ap.add_argument("--expected", default=os.path.join(ROOT, "testdata", "gmssl-expected.json"))
-    ap.add_argument("--emit-template", metavar="PATH", help="生成宿主侧对照值模板后退出")
-    ap.add_argument("--no-local", action="store_true", help="忽略本机 GmSSL，只用外部对照值")
+    ap.add_argument("--emit-template", metavar="PATH")
+    ap.add_argument("--no-local", action="store_true")
     args = ap.parse_args()
 
     if not os.path.exists(args.vectors):
@@ -391,82 +381,60 @@ def main():
         emit_template(vectors, args.emit_template)
         return 0
 
-    local_ready = (
+    LOCAL = (
         not args.no_local
-        and bool(GMSSL_ORACLE)
-        and os.path.exists(GMSSL_ORACLE)
-        and bool(GMSSL_BIN)
-        and os.path.exists(GMSSL_BIN)
+        and bool(GMSSL_ORACLE) and os.path.exists(GMSSL_ORACLE)
+        and bool(GMSSL_BIN) and os.path.exists(GMSSL_BIN)
     )
-    LOCAL = local_ready
-    if os.path.exists(args.expected):
-        EXT = json.load(open(args.expected, encoding="utf-8"))
-        ext_desc = args.expected
-    else:
-        EXT = None
-        ext_desc = f"{args.expected}（不存在）"
+    EXT = json.load(open(args.expected, encoding="utf-8")) if os.path.exists(args.expected) else None
 
     print(f"vectors : {args.vectors}")
-    print(f"对照源1 : {'本机 GmSSL' if LOCAL else '不可用'}"
-          f"{'  ' + GMSSL_BIN if LOCAL else ''}")
-    print(f"对照源2 : {ext_desc}")
-
+    print(f"对照源1 : {'本机 GmSSL' if LOCAL else '不可用'}")
+    print(f"对照源2 : {args.expected}{'' if EXT else '（不存在）'}")
     if not LOCAL and EXT is None:
-        print(
-            "\n没有任何对照源：本实现自身的一致性由 `cargo test` 覆盖；"
-            "逐字节对照待宿主提供 testdata/gmssl-expected.json 后即可跑（无需改代码）。"
-        )
+        print("\n没有对照源：自洽性由 cargo test 覆盖；待宿主提供对照值后重跑（无需改代码）。")
 
-    # ---- A1. SM3
+    # A1 SM3
     print("\n[A1] SM3")
     for c in vectors["sm3"]:
-        compare(
-            f"sm3/{c['name']}",
-            c["digest"],
-            local_fn=lambda c=c: cli("sm3", stdin=bytes.fromhex(c["msg"])).decode().strip(),
-            ext_val=ext_get("sm3", c["name"], "digest"),
-        )
+        def local(c=c):
+            if c.get("msg") is not None:
+                data = bytes.fromhex(c["msg"])
+            else:
+                n = c["msg_len"]
+                data = bytes(((i * 31 + 7) & 0xFF) for i in range(n))
+            return cli("sm3", stdin=data).decode().strip()
 
-    # ---- A2. HMAC-SM3 / HKDF-SM3
+        compare(f"sm3/{c['name']}", c["digest"], local_fn=local,
+                ext_val=ext_get("sm3", c["name"], "digest"))
+
+    # A2 HMAC / HKDF
     print("\n[A2] HMAC-SM3 / HKDF-SM3")
     for c in vectors["hmac_sm3"]:
-        compare(
-            f"hmac-sm3/{c['name']}",
-            c["tag"],
-            local_fn=lambda c=c: oracle("hmac-sm3", c["key"], c["msg"]),
-            ext_val=ext_get("hmac_sm3", c["name"], "tag"),
-        )
+        compare(f"hmac-sm3/{c['name']}", c["tag"],
+                local_fn=lambda c=c: oracle("hmac-sm3", c["key"], c["msg"]),
+                ext_val=ext_get("hmac_sm3", c["name"], "tag"))
     for c in vectors["hkdf_sm3"]:
-        compare(
-            f"hkdf/{c['name']}",
-            c["okm"],
-            local_fn=lambda c=c: oracle("hkdf", c["salt"], c["ikm"], c["info"], str(c["len"])),
-            ext_val=ext_get("hkdf_sm3", c["name"], "okm"),
-        )
+        compare(f"hkdf/{c['name']}", c["okm"],
+                local_fn=lambda c=c: oracle("hkdf", c["salt"], c["ikm"], c["info"], str(c["len"])),
+                ext_val=ext_get("hkdf_sm3", c["name"], "okm"))
 
-    # ---- A3. SM4-GCM
+    # A3 SM4-GCM
     print("\n[A3] SM4-GCM")
     for c in vectors["sm4_gcm"]:
-        def _local(c=c):
+        def local(c=c):
             a = ["sm4", "-gcm", "-encrypt", "-key", c["key"], "-iv", c["nonce"]]
             if c["aad"]:
                 a += ["-aad_hex", c["aad"]]
             return cli(*a, stdin=bytes.fromhex(c["plaintext"])).hex()
 
-        combined = memo(_local) if LOCAL else None
-        compare(
-            f"sm4-gcm/{c['name']}/ct",
-            c["ciphertext"],
-            local_fn=(lambda f=combined: f()[:-32]) if LOCAL else None,
-            ext_val=ext_get("sm4_gcm", c["name"], "ciphertext"),
-        )
-        compare(
-            f"sm4-gcm/{c['name']}/tag",
-            c["tag"],
-            local_fn=(lambda f=combined: f()[-32:]) if LOCAL else None,
-            ext_val=ext_get("sm4_gcm", c["name"], "tag"),
-        )
-        # 反向：GmSSL 输出 → 本实现解密（只有本机有 GmSSL 才能做）
+        combined = memo(local) if LOCAL else None
+        compare(f"sm4-gcm/{c['name']}/ct", c["ciphertext"],
+                local_fn=(lambda f=combined: f()[:-32]) if LOCAL else None,
+                ext_val=ext_get("sm4_gcm", c["name"], "ciphertext"))
+        compare(f"sm4-gcm/{c['name']}/tag", c["tag"],
+                local_fn=(lambda f=combined: f()[-32:]) if LOCAL else None,
+                ext_val=ext_get("sm4_gcm", c["name"], "tag"))
         if LOCAL:
             ct, tag = combined()[:-32], combined()[-32:]
             rc, out, err = ystool("gcm-dec", c["key"], c["nonce"], c["aad"], ct, tag)
@@ -477,62 +445,49 @@ def main():
         else:
             skip(f"reverse/sm4-gcm/{c['name']}", "需要本机 GmSSL")
 
-    # ---- A4. SM2
+    # A4 SM2
     print("\n[A4] SM2")
     for k in vectors["sm2"]["keys"]:
-        compare(
-            f"sm2/{k['name']}/pubkey",
-            k["pub"],
-            local_fn=lambda k=k: oracle("sm2-pub", k["priv"]),
-            ext_val=ext_get("sm2", "keys", k["name"], "pub"),
-        )
-        compare(
-            f"sm2/{k['name']}/ZA",
-            k["za"],
-            local_fn=lambda k=k: oracle("sm2-za", k["pub"]),
-            ext_val=ext_get("sm2", "keys", k["name"], "za"),
-        )
-
+        compare(f"sm2/{k['name']}/pub", k["pub"],
+                local_fn=lambda k=k: oracle("sm2-pub", k["priv"]),
+                ext_val=ext_get("sm2", "keys", k["name"], "pub"))
+        compare(f"sm2/{k['name']}/ZA", k["za"],
+                local_fn=lambda k=k: oracle("sm2-za", k["pub65"]),
+                ext_val=ext_get("sm2", "keys", k["name"], "za"))
     for c in vectors["sm2"]["encrypt"]:
-        compare(
-            f"sm2-encrypt/{c['name']}/C1C3C2",
-            c["ciphertext"],
-            local_fn=lambda c=c: oracle("sm2-enc", c["pub"], c["k"], c["plaintext"]),
-            ext_val=ext_get("sm2", "encrypt", c["name"], "ciphertext"),
-        )
+        compare(f"sm2-encrypt/{c['name']}/C1C3C2", c["ciphertext"],
+                local_fn=lambda c=c: oracle("sm2-enc", c["pub"], c["k"], c["plaintext"]),
+                ext_val=ext_get("sm2", "encrypt", c["name"], "ciphertext"))
         if LOCAL:
             pt = oracle("sm2-dec", c["priv"], c["ciphertext"])
             cmp_text(f"reverse/sm2-encrypt/{c['name']}/gmssl-decrypt", c["plaintext"], pt)
         else:
-            skip(f"reverse/sm2-encrypt/{c['name']}/gmssl-decrypt", "需要本机 GmSSL")
-
+            skip(f"reverse/sm2-encrypt/{c['name']}", "需要本机 GmSSL")
     for c in vectors["sm2"]["sign"]:
-        compare(
-            f"sm2-sign/{c['name']}/r||s",
-            c["sig"],
-            local_fn=lambda c=c: oracle("sm2-sign", c["priv"], c["k"], c["msg"]),
-            ext_val=ext_get("sm2", "sign", c["name"], "sig"),
-        )
+        compare(f"sm2-sign/{c['name']}/r||s", c["sig_raw"],
+                local_fn=lambda c=c: oracle("sm2-sign", c["priv"], c["k"], c["msg"]),
+                ext_val=ext_get("sm2", "sign", c["name"], "sig_raw"))
+        compare(f"sm2-sign/{c['name']}/DER", c["sig_der"],
+                local_fn=lambda c=c: der_sig(oracle("sm2-sign", c["priv"], c["k"], c["msg"])),
+                ext_val=ext_get("sm2", "sign", c["name"], "sig_der"))
         if LOCAL:
-            res = oracle("sm2-verify", c["pub"], c["msg"], c["sig"])
+            res = oracle("sm2-verify", "04" + c["pub"], c["msg"], c["sig_raw"])
             if res == "OK":
                 ok(f"reverse/sm2-sign/{c['name']}/gmssl-verify")
             else:
                 bad(f"reverse/sm2-sign/{c['name']}/gmssl-verify", res)
         else:
-            skip(f"reverse/sm2-sign/{c['name']}/gmssl-verify", "需要本机 GmSSL")
+            skip(f"reverse/sm2-sign/{c['name']}", "需要本机 GmSSL")
 
-    # ---- A5. 用户码
+    # A5 用户码
     print("\n[A5] 用户码")
     for c in vectors["user_codes"]:
-        compare(
-            f"user-code/{c['name']}/4 位码",
-            c["code"],
-            local_fn=lambda c=c: crockford_first4(
-                bytes.fromhex(cli("sm3", stdin=bytes.fromhex(c["pub"])).decode().strip())
-            ),
-            ext_val=ext_get("user_codes", c["name"], "code"),
-        )
+        compare(f"user-code/{c['name']}/code", c["code"],
+                local_fn=lambda c=c: crockford_code(c["pub65"])[0],
+                ext_val=ext_get("user_codes", c["name"], "code"))
+        compare(f"user-code/{c['name']}/check", c["check"],
+                local_fn=lambda c=c: crockford_code(c["pub65"])[1],
+                ext_val=ext_get("user_codes", c["name"], "check"))
         for n in c["normalize"]:
             try:
                 got = normalize_code(n["in"])
@@ -541,56 +496,48 @@ def main():
                 continue
             cmp_text(f"user-code/{c['name']}/normalize({n['in']})", n["out"], got)
 
-    # ---- B. 加密包
-    print("\n[B] 加密包（整包字节）")
+    # B 加密包
+    print("\n[B] 加密包 YSPK/1.0（整包字节）")
     for v in vectors["pack"]:
-        compare(
-            f"pack/{v['name']}/full-bytes",
-            v["pack"],
-            local_fn=lambda v=v: rebuild_pack(v).hex(),
-            ext_val=ext_get("pack", v["name"], "pack"),
-        )
+        compare(f"pack/{v['name']}/full-bytes", v["pack"],
+                local_fn=lambda v=v: rebuild_pack(v).hex(),
+                ext_val=ext_get("pack", v["name"], "pack"))
         if LOCAL:
-            rc, out, err = ystool("pack-unpack", v["pack"], v["recipient_priv"], v["sender_pub"])
+            rc, out, err = ystool("pack-unpack", v["pack"], v["recipient_priv"])
             if rc == 0 and out == v["data"]:
                 ok(f"reverse/pack/{v['name']}/本实现解包")
             else:
                 bad(f"reverse/pack/{v['name']}/本实现解包", f"rc={rc} {err[:120]}")
-
             tampered = bytearray(bytes.fromhex(v["pack"]))
             tampered[8] ^= 0x01
-            rc, out, _ = ystool(
-                "pack-unpack", tampered.hex(), v["recipient_priv"], v["sender_pub"]
-            )
+            rc, out, _ = ystool("pack-unpack", tampered.hex(), v["recipient_priv"])
             if rc != 0:
-                ok(f"reverse/pack/{v['name']}/篡改包头被拒")
+                ok(f"reverse/pack/{v['name']}/篡改头部被拒")
             else:
-                bad(f"reverse/pack/{v['name']}/篡改包头被拒", "竟然解包成功")
+                bad(f"reverse/pack/{v['name']}/篡改头部被拒", "竟然解包成功")
         else:
             skip(f"reverse/pack/{v['name']}", "需要本机 GmSSL")
 
-    # ---- C. 反向：GmSSL 真随机 → 本实现
-    print("\n[C] 反向：GmSSL 随机输出 → 本实现解密/验签")
+    # C 反向随机
+    print("\n[C] 反向：GmSSL 随机输出 → 本实现")
     if LOCAL:
         for k in vectors["sm2"]["keys"]:
             msg = bytes(range(32))
             ct = oracle("sm2-enc-rand", k["pub"], msg.hex())
             rc, out, err = ystool("sm2-decrypt", k["priv"], ct)
             if rc == 0 and out == msg.hex():
-                ok(f"reverse/{k['name']}/GmSSL 随机加密 → 本实现解密")
+                ok(f"reverse/{k['name']}/随机加密→解密")
             else:
-                bad(f"reverse/{k['name']}/GmSSL 随机加密 → 本实现解密", f"rc={rc}")
-
+                bad(f"reverse/{k['name']}/随机加密→解密", f"rc={rc}")
             sig = oracle("sm2-sign-rand", k["priv"], msg.hex())
-            rc, out, err = ystool("sm2-verify", k["pub"], msg.hex(), sig)
+            rc, out, err = ystool("sm2-verify-raw", k["pub"], msg.hex(), sig)
             if rc == 0 and out == "OK":
-                ok(f"reverse/{k['name']}/GmSSL 随机签名 → 本实现验签")
+                ok(f"reverse/{k['name']}/随机签名→验签")
             else:
-                bad(f"reverse/{k['name']}/GmSSL 随机签名 → 本实现验签", f"rc={rc} out={out}")
+                bad(f"reverse/{k['name']}/随机签名→验签", f"rc={rc} out={out}")
     else:
         skip("reverse/GmSSL 随机加密/签名", "需要本机 GmSSL")
 
-    # ---- 汇总
     print("\n================ 汇总 ================")
     print(f"PASS {PASS} / FAIL {FAIL} / SKIP {SKIP}")
     if FAIL:
@@ -598,7 +545,7 @@ def main():
             print(f"  - {label}: {detail}")
         return 1
     if SKIP:
-        print("SKIP 的是本机跑不了、等宿主对照值的条目；拿到 testdata/gmssl-expected.json 再跑即可。")
+        print("SKIP 的是本机跑不了、等宿主对照值的条目。")
     return 0
 
 

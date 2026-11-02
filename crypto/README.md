@@ -55,6 +55,7 @@ cargo test                      # 28 个单元测试 + 6 个篡改矩阵测试
 cargo test --release            # 同上（快）
 cargo run --release --bin bench-sm4 -- 32
 cargo run --release --bin gen-vectors -- ../testdata/vectors.json
+cargo run --release --bin gen-host-crosscheck -- ../vectors   # 宿主对照请求（JSON + MD）
 ```
 
 > 有的镜像只有 `gcc` 没有 `cc`，需要时：
@@ -82,8 +83,18 @@ node scripts/wasm-smoke/smoke.mjs <上面那个 wasm>
 
 ## 加密包格式
 
-见 `docs/crypto-pack-v1-draft.md`（**临时锚点**，等 Ark 的 `docs/CRYPTO-PACK.md` 定稿后
-只改 `pack.rs::layout` 与 `Header`/`Manifest` 序列化）。
+严格按 **`docs/CRYPTO-PACK.md` v1（`YSPK/1.0`）** 实现：
+
+- HEADER 112 字节（字段偏移集中在 `pack::v1::OFF_*`）、SENDER_PUB 65、WRAPPED_KEY 129；
+- 块记录 = 16 字节块头 + 密文 + 16 字节 tag，nonce = `u64be(index) ‖ 000000 ‖ last`；
+- 清单 `YSM1` 整体加密，每块放 `SM3(明文)`；
+- 签名 `SIG_INPUT = "YSSIG1" ‖ 0100 ‖ HEADER[0..72) ‖ SENDER_PUB ‖ MANIFEST_SEC`，DER 编码。
+
+契约 §15 的四组样例在 `crypto/sm/tests/contract_samples.rs` 里逐字节断言；
+实现与契约的对照说明见 `docs/crypto-pack-impl-notes.md`。
+
+> 口径提醒：包内公钥是 **65 字节带 0x04**；原语层 API 用 64 字节 `X‖Y`。
+> 用户码是对 **65 字节**公钥做 SM3。
 
 ## 测试向量与交叉验证
 

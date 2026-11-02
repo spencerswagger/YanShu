@@ -1,26 +1,21 @@
-//! 加密包（`.ysp`）打包 / 解包，格式 v1。
+//! 加密包 `YSPK/1.0` 打包 / 解包 —— 严格按 `docs/CRYPTO-PACK.md` v1 实现。
 //!
-//! **格式锚点全部集中在 [`layout`] 模块**：字段偏移、长度、常量、nonce 构造规则、
-//! HKDF salt/info 都在那里。等 Ark 把 `docs/CRYPTO-PACK.md` 的定稿字段落盘后，
-//! 只需要改 [`layout`] 与 [`Header`]/[`Manifest`] 的序列化两处，其余调用方不动。
-//!
-//! 包布局（v1）：
+//! 包结构（§4）：
 //!
 //! ```text
-//! HEADER(40) | KEY_REC | SIG_REC | MANIFEST_REC | BLOCK(0) | BLOCK(1) | ...
+//! HEADER(112) | SENDER_PUB(65) | WRAPPED_KEY(129) | MANIFEST_SEC | SIG_SEC | CHUNK_SEC
 //! ```
 //!
-//! * `HEADER`：magic `YSPK`、version=1、suite=1、flags、file_id、block_size、
-//!   block_count、plain_size。**header 字节是每个块与清单的 AAD**，改一个字节全盘失效。
-//! * `KEY_REC`：`u8 kind=1 | u32 len=128 | C1C3C2(DK)`（收件人公钥 SM2 封装 32 字节 DK）。
-//! * `SIG_REC`：`u8 kind=2 | u32 len=64 | r||s`（发送方私钥对 `header||manifest_plain` 签名）。
-//! * `MANIFEST_REC`：`u32 ct_len | ct | tag(16)`，用 manifest key 加密的清单。
-//! * `BLOCK`：`u32 index | u8 flags | u32 ct_len | ct | tag(16)`。
+//! * HEADER 字段偏移见 [`v1`] 的常量表；`HDR_CORE = HEADER[0..72)` 参与签名。
+//! * 块记录 = 16 字节块头 + 密文 + 16 字节 tag；nonce 与 AAD 都是纯字节拼接（§6.4/§7.2）。
+//! * 清单整体加密（`YSM1` 明文结构见 §8.2），每块 `SM3(明文)` 进清单。
+//! * 签名输入 `SIG_INPUT = "YSSIG1" ‖ 0100 ‖ HDR_CORE ‖ SENDER_PUB ‖ MANIFEST_SEC`，
+//!   签名值 DER（§10）。
 //!
-//! 解包是**严格模式**：未知版本、块号重复/跳号/缺失、末块标志不符、tag 校验失败、
-//! 清单与包头或块不一致、尾部多余字节，全部返回明确错误，不做任何"尽力恢复"。
+//! 解包按 §13 的校验顺序执行，任何不一致都返回具体错误码，没有"尽力恢复"。
 
 use crate::bigint::U256;
+use crate::der;
 use crate::error::{Error, Result};
 use crate::gcm;
 use crate::hkdf::hkdf_sm3;
@@ -28,766 +23,898 @@ use crate::rng::Rng;
 use crate::sm2;
 use crate::sm3::{ct_eq, sm3};
 
-/// 格式锚点：**改格式只改这里**。
-pub mod layout {
-    /// 包魔数 `YSPK`
+/// `YSPK/1.0` 的字段偏移、长度与常量（契约 §5/§6/§7/§8/§10/§11）。
+pub mod v1 {
     pub const MAGIC: [u8; 4] = *b"YSPK";
-    /// 当前版本号（只接受这一个）
-    pub const VERSION: u8 = 1;
-    /// 套件编号：SM4-GCM-128 + SM3 + SM2(C1C3C2)
-    pub const SUITE_SM4GCM_SM3_SM2: u8 = 1;
-    /// flags bit0：包含加密清单（v1 恒为 1）
-    pub const FLAG_MANIFEST: u8 = 0x01;
+    pub const VERSION_MAJOR: u8 = 1;
+    pub const VERSION_MINOR: u8 = 0;
+    pub const VERSION_STRING: &str = "YSPK/1.0";
+    pub const HEADER_LEN: usize = 112;
 
-    /// 包头长度
-    pub const HEADER_LEN: usize = 40;
+    pub const AEAD_ID_SM4_GCM: u8 = 1;
+    pub const KDF_ID_HKDF_SM3: u8 = 1;
+    pub const SM2_WRAP_ID_C1C3C2: u8 = 1;
+    pub const SIG_ID_SM2_SM3_DER: u8 = 1;
+
+    pub const FLAG_NAME_OBFUSCATED: u32 = 1 << 0;
+    pub const FLAG_SENDER_SIGNED: u32 = 1 << 1;
+
+    // HEADER 偏移
     pub const OFF_MAGIC: usize = 0;
-    pub const OFF_VERSION: usize = 4;
-    pub const OFF_SUITE: usize = 5;
-    pub const OFF_FLAGS: usize = 6;
-    pub const OFF_RESERVED: usize = 7;
-    pub const OFF_FILE_ID: usize = 8;
-    pub const FILE_ID_LEN: usize = 16;
-    pub const OFF_BLOCK_SIZE: usize = 24;
-    pub const OFF_BLOCK_COUNT: usize = 28;
-    pub const OFF_PLAIN_SIZE: usize = 32;
+    pub const OFF_VERSION_MAJOR: usize = 4;
+    pub const OFF_VERSION_MINOR: usize = 5;
+    pub const OFF_HEADER_LEN: usize = 6;
+    pub const OFF_FLAGS: usize = 8;
+    pub const OFF_AEAD_ID: usize = 12;
+    pub const OFF_KDF_ID: usize = 13;
+    pub const OFF_WRAP_ID: usize = 14;
+    pub const OFF_SIG_ID: usize = 15;
+    pub const OFF_CHUNK_SIZE: usize = 16;
+    pub const OFF_CHUNK_COUNT: usize = 20;
+    pub const OFF_PLAINTEXT_SIZE: usize = 24;
+    pub const OFF_WRAPPED_KEY_LEN: usize = 32;
+    pub const OFF_MANIFEST_LEN: usize = 40;
+    pub const OFF_MANIFEST_PT_LEN: usize = 48;
+    pub const OFF_SENDER_PUB_LEN: usize = 52;
+    pub const OFF_KDF_SALT: usize = 56;
+    pub const OFF_SIG_LEN: usize = 72;
+    pub const OFF_RESERVED: usize = 80;
+    pub const HDR_CORE_LEN: usize = 72;
 
-    /// DK 封装记录类型：SM2 平文 C1C3C2
-    pub const KEY_REC_KIND_SM2: u8 = 1;
-    /// 签名记录类型：SM2 签名 r||s
-    pub const SIG_REC_KIND_SM2: u8 = 2;
-
-    /// GCM tag 长度
+    pub const KDF_SALT_LEN: usize = 16;
+    pub const SENDER_PUB_LEN: usize = 65;
+    pub const WRAPPED_KEY_LEN: usize = 129;
     pub const TAG_LEN: usize = 16;
-    /// GCM nonce 长度（96 位）
-    pub const NONCE_LEN: usize = 12;
-    /// 块 nonce 的末块标志字节
-    pub const BLOCK_FLAG_LAST: u8 = 0x01;
-    /// 清单 nonce（固定：索引全 F + 标志 0x80）
-    pub const MANIFEST_NONCE: [u8; NONCE_LEN] = [
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00,
+    pub const CHUNK_HEADER_LEN: usize = 16;
+    pub const MIN_SIG_LEN: usize = 70;
+    pub const MAX_SIG_LEN: usize = 72;
+
+    pub const MIN_CHUNK_SIZE: u32 = 16;
+    pub const MAX_CHUNK_SIZE: u32 = 1_048_576;
+    pub const DEFAULT_CHUNK_SIZE: u32 = 1_048_576;
+    pub const MAX_CHUNK_COUNT: u32 = 1_048_576;
+    pub const MAX_PLAINTEXT_SIZE: u64 = 4_294_967_296;
+
+    pub const MANIFEST_MAGIC: [u8; 4] = *b"YSM1";
+    pub const MANIFEST_VERSION: u8 = 1;
+    pub const NAME_MODE_REAL: u8 = 0;
+    pub const NAME_MODE_OBFUSCATED: u8 = 1;
+    pub const DIGEST_ALG_SM3: u8 = 1;
+    pub const DIGEST_LEN: u8 = 32;
+
+    pub const SIG_PREFIX: [u8; 6] = *b"YSSIG1";
+
+    pub const AAD_LABEL_CHUNK: u8 = 0x01;
+    pub const AAD_LABEL_MANIFEST: u8 = 0x02;
+
+    pub const KDF_INFO_CHUNK: &[u8] = b"YANSHU/v1/chunk-key";
+    pub const KDF_INFO_MANIFEST: &[u8] = b"YANSHU/v1/manifest-key";
+    pub const KEK_LEN: usize = 16;
+
+    /// 清单 nonce：`ff*8 ‖ 00 00 00 01`
+    pub const MANIFEST_NONCE: [u8; 12] = [
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x01,
     ];
 
-    /// 默认块大小 1 MiB
-    pub const DEFAULT_BLOCK_SIZE: u32 = 1 << 20;
-    /// 块大小上限（防内存放大攻击）
-    pub const MAX_BLOCK_SIZE: u32 = 64 << 20;
-
-    /// 块密钥派生 salt
-    pub const HKDF_SALT_BLOCK: &[u8] = b"YanShu/v1/block";
-    /// 清单密钥派生 salt
-    pub const HKDF_SALT_MANIFEST: &[u8] = b"YanShu/v1/manifest";
-    /// 块密钥长度
-    pub const BLOCK_KEY_LEN: usize = 16;
-
-    /// 块记录固定开销：index(4) + flags(1) + ct_len(4) + tag(16)
-    pub const BLOCK_OVERHEAD: usize = 4 + 1 + 4 + TAG_LEN;
-
-    /// 由块号 + 末块标志构造 96 位 nonce。
-    pub fn block_nonce(index: u32, is_last: bool) -> [u8; NONCE_LEN] {
-        let mut n = [0u8; NONCE_LEN];
-        n[..4].copy_from_slice(&index.to_be_bytes());
-        n[4..8].copy_from_slice(&[0, 0, 0, 0]);
-        n[8] = if is_last { BLOCK_FLAG_LAST } else { 0x00 };
+    /// 块 nonce：`u64be(index) ‖ 00 00 00 ‖ last_flag`
+    pub fn chunk_nonce(index: u32, last: bool) -> [u8; 12] {
+        let mut n = [0u8; 12];
+        n[..8].copy_from_slice(&(index as u64).to_be_bytes());
+        n[11] = if last { 0x01 } else { 0x00 };
         n
     }
 }
 
-use layout::*;
+use v1::*;
 
-/// 包头。
+/// 包头（HEADER，112 字节）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Header {
-    pub file_id: [u8; FILE_ID_LEN],
-    pub block_size: u32,
-    pub block_count: u32,
-    pub plain_size: u64,
+    pub flags: u32,
+    pub chunk_size: u32,
+    pub chunk_count: u32,
+    pub plaintext_size: u64,
+    pub wrapped_key_len: u64,
+    pub manifest_len: u64,
+    pub manifest_pt_len: u32,
+    pub sender_pub_len: u32,
+    pub kdf_salt: [u8; KDF_SALT_LEN],
+    pub sig_len: u64,
 }
 
 impl Header {
     pub fn encode(&self) -> [u8; HEADER_LEN] {
         let mut out = [0u8; HEADER_LEN];
         out[OFF_MAGIC..OFF_MAGIC + 4].copy_from_slice(&MAGIC);
-        out[OFF_VERSION] = VERSION;
-        out[OFF_SUITE] = SUITE_SM4GCM_SM3_SM2;
-        out[OFF_FLAGS] = FLAG_MANIFEST;
-        out[OFF_RESERVED] = 0;
-        out[OFF_FILE_ID..OFF_FILE_ID + FILE_ID_LEN].copy_from_slice(&self.file_id);
-        out[OFF_BLOCK_SIZE..OFF_BLOCK_SIZE + 4].copy_from_slice(&self.block_size.to_be_bytes());
-        out[OFF_BLOCK_COUNT..OFF_BLOCK_COUNT + 4].copy_from_slice(&self.block_count.to_be_bytes());
-        out[OFF_PLAIN_SIZE..OFF_PLAIN_SIZE + 8].copy_from_slice(&self.plain_size.to_be_bytes());
+        out[OFF_VERSION_MAJOR] = VERSION_MAJOR;
+        out[OFF_VERSION_MINOR] = VERSION_MINOR;
+        out[OFF_HEADER_LEN..OFF_HEADER_LEN + 2].copy_from_slice(&(HEADER_LEN as u16).to_be_bytes());
+        out[OFF_FLAGS..OFF_FLAGS + 4].copy_from_slice(&self.flags.to_be_bytes());
+        out[OFF_AEAD_ID] = AEAD_ID_SM4_GCM;
+        out[OFF_KDF_ID] = KDF_ID_HKDF_SM3;
+        out[OFF_WRAP_ID] = SM2_WRAP_ID_C1C3C2;
+        out[OFF_SIG_ID] = SIG_ID_SM2_SM3_DER;
+        out[OFF_CHUNK_SIZE..OFF_CHUNK_SIZE + 4].copy_from_slice(&self.chunk_size.to_be_bytes());
+        out[OFF_CHUNK_COUNT..OFF_CHUNK_COUNT + 4].copy_from_slice(&self.chunk_count.to_be_bytes());
+        out[OFF_PLAINTEXT_SIZE..OFF_PLAINTEXT_SIZE + 8]
+            .copy_from_slice(&self.plaintext_size.to_be_bytes());
+        out[OFF_WRAPPED_KEY_LEN..OFF_WRAPPED_KEY_LEN + 8]
+            .copy_from_slice(&self.wrapped_key_len.to_be_bytes());
+        out[OFF_MANIFEST_LEN..OFF_MANIFEST_LEN + 8]
+            .copy_from_slice(&self.manifest_len.to_be_bytes());
+        out[OFF_MANIFEST_PT_LEN..OFF_MANIFEST_PT_LEN + 4]
+            .copy_from_slice(&self.manifest_pt_len.to_be_bytes());
+        out[OFF_SENDER_PUB_LEN..OFF_SENDER_PUB_LEN + 4]
+            .copy_from_slice(&self.sender_pub_len.to_be_bytes());
+        out[OFF_KDF_SALT..OFF_KDF_SALT + KDF_SALT_LEN].copy_from_slice(&self.kdf_salt);
+        out[OFF_SIG_LEN..OFF_SIG_LEN + 8].copy_from_slice(&self.sig_len.to_be_bytes());
+        // OFF_RESERVED..HEADER_LEN 保持全 0
         out
     }
 
-    /// 严格解析：魔数 / 版本 / 套件 / flags / 保留位 / 字段取值范围全部校验。
+    /// 严格解析（契约 §13 的第 1–11 项）。
     pub fn decode(buf: &[u8]) -> Result<Header> {
         if buf.len() < HEADER_LEN {
-            return Err(Error::Truncated);
+            return Err(Error::LengthInconsistent);
         }
         if buf[OFF_MAGIC..OFF_MAGIC + 4] != MAGIC {
-            return Err(Error::BadMagic);
+            return Err(Error::MagicMismatch);
         }
-        if buf[OFF_VERSION] != VERSION {
-            return Err(Error::UnsupportedVersion);
+        if buf[OFF_VERSION_MAJOR] != VERSION_MAJOR || buf[OFF_VERSION_MINOR] != VERSION_MINOR {
+            return Err(Error::VersionUnsupported);
         }
-        if buf[OFF_SUITE] != SUITE_SM4GCM_SM3_SM2 {
-            return Err(Error::UnsupportedVersion);
-        }
-        if buf[OFF_FLAGS] & !FLAG_MANIFEST != 0 || buf[OFF_FLAGS] & FLAG_MANIFEST == 0 {
-            return Err(Error::BadFlags);
-        }
-        if buf[OFF_RESERVED] != 0 {
-            return Err(Error::BadFlags);
-        }
-        let mut file_id = [0u8; FILE_ID_LEN];
-        file_id.copy_from_slice(&buf[OFF_FILE_ID..OFF_FILE_ID + FILE_ID_LEN]);
-        let block_size = u32::from_be_bytes(
-            buf[OFF_BLOCK_SIZE..OFF_BLOCK_SIZE + 4]
+        let header_len = u16::from_be_bytes(
+            buf[OFF_HEADER_LEN..OFF_HEADER_LEN + 2]
                 .try_into()
-                .expect("4 bytes"),
-        );
-        let block_count = u32::from_be_bytes(
-            buf[OFF_BLOCK_COUNT..OFF_BLOCK_COUNT + 4]
-                .try_into()
-                .expect("4 bytes"),
-        );
-        let plain_size = u64::from_be_bytes(
-            buf[OFF_PLAIN_SIZE..OFF_PLAIN_SIZE + 8]
-                .try_into()
-                .expect("8 bytes"),
-        );
-        if block_size == 0 || block_size > MAX_BLOCK_SIZE {
-            return Err(Error::BadFlags);
+                .expect("2"),
+        ) as usize;
+        if header_len != HEADER_LEN {
+            return Err(Error::HeaderInvalid);
         }
-        let expected = expected_block_count(plain_size, block_size);
-        if block_count != expected {
-            return Err(Error::ManifestMismatch);
+        if buf[OFF_AEAD_ID] != AEAD_ID_SM4_GCM
+            || buf[OFF_KDF_ID] != KDF_ID_HKDF_SM3
+            || buf[OFF_WRAP_ID] != SM2_WRAP_ID_C1C3C2
+            || buf[OFF_SIG_ID] != SIG_ID_SM2_SM3_DER
+        {
+            return Err(Error::AlgUnsupported);
+        }
+        let flags = u32::from_be_bytes(buf[OFF_FLAGS..OFF_FLAGS + 4].try_into().expect("4"));
+        if flags & !(FLAG_NAME_OBFUSCATED | FLAG_SENDER_SIGNED) != 0 {
+            return Err(Error::FlagsUnknown);
+        }
+        if flags & FLAG_SENDER_SIGNED == 0 {
+            return Err(Error::Unsigned);
+        }
+        if buf[OFF_RESERVED..HEADER_LEN].iter().any(|&b| b != 0) {
+            return Err(Error::HeaderInvalid);
+        }
+        let chunk_size = u32::from_be_bytes(
+            buf[OFF_CHUNK_SIZE..OFF_CHUNK_SIZE + 4]
+                .try_into()
+                .expect("4"),
+        );
+        if !(MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&chunk_size) {
+            return Err(Error::HeaderInvalid);
+        }
+        let chunk_count = u32::from_be_bytes(
+            buf[OFF_CHUNK_COUNT..OFF_CHUNK_COUNT + 4]
+                .try_into()
+                .expect("4"),
+        );
+        let plaintext_size = u64::from_be_bytes(
+            buf[OFF_PLAINTEXT_SIZE..OFF_PLAINTEXT_SIZE + 8]
+                .try_into()
+                .expect("8"),
+        );
+        if plaintext_size > MAX_PLAINTEXT_SIZE {
+            return Err(Error::HeaderInvalid);
+        }
+        if chunk_count == 0
+            || chunk_count > MAX_CHUNK_COUNT
+            || chunk_count as u64 != expected_chunk_count(plaintext_size, chunk_size)
+        {
+            return Err(Error::LengthInconsistent);
+        }
+        let wrapped_key_len = u64::from_be_bytes(
+            buf[OFF_WRAPPED_KEY_LEN..OFF_WRAPPED_KEY_LEN + 8]
+                .try_into()
+                .expect("8"),
+        );
+        let manifest_len = u64::from_be_bytes(
+            buf[OFF_MANIFEST_LEN..OFF_MANIFEST_LEN + 8]
+                .try_into()
+                .expect("8"),
+        );
+        let manifest_pt_len = u32::from_be_bytes(
+            buf[OFF_MANIFEST_PT_LEN..OFF_MANIFEST_PT_LEN + 4]
+                .try_into()
+                .expect("4"),
+        );
+        let sender_pub_len = u32::from_be_bytes(
+            buf[OFF_SENDER_PUB_LEN..OFF_SENDER_PUB_LEN + 4]
+                .try_into()
+                .expect("4"),
+        );
+        if wrapped_key_len != WRAPPED_KEY_LEN as u64
+            || sender_pub_len != SENDER_PUB_LEN as u32
+            || manifest_len != manifest_pt_len as u64 + TAG_LEN as u64
+        {
+            return Err(Error::LengthInconsistent);
+        }
+        let mut kdf_salt = [0u8; KDF_SALT_LEN];
+        kdf_salt.copy_from_slice(&buf[OFF_KDF_SALT..OFF_KDF_SALT + KDF_SALT_LEN]);
+        let sig_len = u64::from_be_bytes(buf[OFF_SIG_LEN..OFF_SIG_LEN + 8].try_into().expect("8"));
+        if sig_len < MIN_SIG_LEN as u64 || sig_len > MAX_SIG_LEN as u64 {
+            return Err(Error::HeaderInvalid);
         }
         Ok(Header {
-            file_id,
-            block_size,
-            block_count,
-            plain_size,
+            flags,
+            chunk_size,
+            chunk_count,
+            plaintext_size,
+            wrapped_key_len,
+            manifest_len,
+            manifest_pt_len,
+            sender_pub_len,
+            kdf_salt,
+            sig_len,
         })
     }
 }
 
-/// 期望块数：空文件也占 1 个空块（保证末块标志机制总是有效）。
-pub fn expected_block_count(plain_size: u64, block_size: u32) -> u32 {
-    if plain_size == 0 {
+/// 块数：`n = ceil(S / C)`，空文件 `n = 1`。
+pub fn expected_chunk_count(plaintext_size: u64, chunk_size: u32) -> u64 {
+    if plaintext_size == 0 {
         1
     } else {
-        plain_size.div_ceil(block_size as u64) as u32
+        plaintext_size.div_ceil(chunk_size as u64)
     }
 }
 
-/// 第 `index` 块的明文字节数。
-pub fn block_plain_len(plain_size: u64, block_size: u32, index: u32) -> u32 {
-    let count = expected_block_count(plain_size, block_size);
-    if index + 1 < count {
-        block_size
+/// 第 `index` 块的明文字节数（契约 §4.2）。
+pub fn chunk_plain_len(plaintext_size: u64, chunk_size: u32, chunk_count: u32, index: u32) -> u32 {
+    if index + 1 < chunk_count {
+        chunk_size
     } else {
-        (plain_size - (count as u64 - 1) * block_size as u64) as u32
+        (plaintext_size - chunk_size as u64 * (chunk_count as u64 - 1)) as u32
     }
 }
 
-/// 清单（解密后）。
+/// `AAD_CHUNK`（32 字节，§7.2）。
+pub fn aad_chunk(header: &Header, index: u32, last: bool, pt_len: u32) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[0] = AAD_LABEL_CHUNK;
+    out[1..5].copy_from_slice(&MAGIC);
+    out[5] = VERSION_MAJOR;
+    out[6] = VERSION_MINOR;
+    out[7..11].copy_from_slice(&header.chunk_size.to_be_bytes());
+    out[11..15].copy_from_slice(&header.chunk_count.to_be_bytes());
+    out[15..23].copy_from_slice(&header.plaintext_size.to_be_bytes());
+    out[23..27].copy_from_slice(&index.to_be_bytes());
+    out[27] = if last { 1 } else { 0 };
+    out[28..32].copy_from_slice(&pt_len.to_be_bytes());
+    out
+}
+
+/// `AAD_MANIFEST`（31 字节，§7.3）。
+pub fn aad_manifest(header: &Header) -> [u8; 31] {
+    let mut out = [0u8; 31];
+    out[0] = AAD_LABEL_MANIFEST;
+    out[1..5].copy_from_slice(&MAGIC);
+    out[5] = VERSION_MAJOR;
+    out[6] = VERSION_MINOR;
+    out[7..11].copy_from_slice(&header.flags.to_be_bytes());
+    out[11..15].copy_from_slice(&header.chunk_size.to_be_bytes());
+    out[15..19].copy_from_slice(&header.chunk_count.to_be_bytes());
+    out[19..27].copy_from_slice(&header.plaintext_size.to_be_bytes());
+    out[27..31].copy_from_slice(&header.manifest_pt_len.to_be_bytes());
+    out
+}
+
+/// 清单明文（`YSM1`，§8.2）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Manifest {
+    pub name_mode: u8,
+    pub file_size: u64,
+    pub chunk_size: u32,
+    pub chunk_count: u32,
+    pub created_at_ms: u64,
     pub name: String,
     pub mime: String,
-    pub block_size: u32,
-    pub block_count: u32,
-    pub plain_size: u64,
-    pub block_digests: Vec<[u8; 32]>,
+    pub ext: String,
+    pub digests: Vec<[u8; 32]>,
 }
 
 impl Manifest {
-    fn encode(&self) -> Result<Vec<u8>> {
-        if self.name.len() > 512 || self.mime.len() > 128 {
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        if self.name.len() > 255
+            || self.mime.is_empty()
+            || self.mime.len() > 127
+            || self.ext.len() > 16
+        {
             return Err(Error::BadArgument);
         }
-        let mut out = Vec::with_capacity(64 + self.block_digests.len() * 32);
+        let mut out = Vec::with_capacity(
+            42 + self.name.len() + self.mime.len() + self.ext.len() + self.digests.len() * 32,
+        );
+        out.extend_from_slice(&MANIFEST_MAGIC);
+        out.push(MANIFEST_VERSION);
+        out.push(self.name_mode);
+        out.push(DIGEST_ALG_SM3);
+        out.push(DIGEST_LEN);
+        out.extend_from_slice(&self.file_size.to_be_bytes());
+        out.extend_from_slice(&self.chunk_size.to_be_bytes());
+        out.extend_from_slice(&self.chunk_count.to_be_bytes());
+        out.extend_from_slice(&self.created_at_ms.to_be_bytes());
         out.extend_from_slice(&(self.name.len() as u16).to_be_bytes());
         out.extend_from_slice(self.name.as_bytes());
         out.extend_from_slice(&(self.mime.len() as u16).to_be_bytes());
         out.extend_from_slice(self.mime.as_bytes());
-        out.extend_from_slice(&self.block_size.to_be_bytes());
-        out.extend_from_slice(&self.block_count.to_be_bytes());
-        out.extend_from_slice(&self.plain_size.to_be_bytes());
-        out.extend_from_slice(&(self.block_digests.len() as u32).to_be_bytes());
-        for d in &self.block_digests {
+        out.extend_from_slice(&(self.ext.len() as u16).to_be_bytes());
+        out.extend_from_slice(self.ext.as_bytes());
+        out.extend_from_slice(&((self.digests.len() * 32) as u32).to_be_bytes());
+        for d in &self.digests {
             out.extend_from_slice(d);
         }
         Ok(out)
     }
 
-    fn decode(buf: &[u8]) -> Result<Manifest> {
-        let mut r = Reader::new(buf);
-        let name_len = r.u16()? as usize;
-        if name_len == 0 || name_len > 512 {
-            return Err(Error::BadManifestRecord);
+    pub fn decode(buf: &[u8]) -> Result<Manifest> {
+        if buf.len() < 42 {
+            return Err(Error::ManifestInvalid);
         }
-        let name =
-            String::from_utf8(r.take(name_len)?.to_vec()).map_err(|_| Error::BadManifestRecord)?;
-        let mime_len = r.u16()? as usize;
-        if mime_len > 128 {
-            return Err(Error::BadManifestRecord);
+        if buf[0..4] != MANIFEST_MAGIC
+            || buf[4] != MANIFEST_VERSION
+            || buf[6] != DIGEST_ALG_SM3
+            || buf[7] != DIGEST_LEN
+        {
+            return Err(Error::ManifestInvalid);
         }
-        let mime =
-            String::from_utf8(r.take(mime_len)?.to_vec()).map_err(|_| Error::BadManifestRecord)?;
-        let block_size = r.u32()?;
-        let block_count = r.u32()?;
-        let plain_size = r.u64()?;
-        let digest_count = r.u32()? as usize;
-        if digest_count != block_count as usize {
-            return Err(Error::BadManifestRecord);
+        let name_mode = buf[5];
+        if name_mode != NAME_MODE_REAL && name_mode != NAME_MODE_OBFUSCATED {
+            return Err(Error::ManifestInvalid);
         }
-        if digest_count > 1 << 20 {
-            return Err(Error::BadManifestRecord);
+        let file_size = u64::from_be_bytes(buf[8..16].try_into().expect("8"));
+        let chunk_size = u32::from_be_bytes(buf[16..20].try_into().expect("4"));
+        let chunk_count = u32::from_be_bytes(buf[20..24].try_into().expect("4"));
+        let created_at_ms = u64::from_be_bytes(buf[24..32].try_into().expect("8"));
+
+        let mut pos = 32usize;
+        let name_len = u16::from_be_bytes(buf[pos..pos + 2].try_into().expect("2")) as usize;
+        pos += 2;
+        if name_len > 255 || pos + name_len > buf.len() {
+            return Err(Error::ManifestInvalid);
         }
-        let mut block_digests = Vec::with_capacity(digest_count);
-        for _ in 0..digest_count {
+        let name = core::str::from_utf8(&buf[pos..pos + name_len])
+            .map_err(|_| Error::ManifestInvalid)?
+            .to_string();
+        pos += name_len;
+
+        if pos + 2 > buf.len() {
+            return Err(Error::ManifestInvalid);
+        }
+        let mime_len = u16::from_be_bytes(buf[pos..pos + 2].try_into().expect("2")) as usize;
+        pos += 2;
+        if mime_len == 0 || mime_len > 127 || pos + mime_len > buf.len() {
+            return Err(Error::ManifestInvalid);
+        }
+        let mime = core::str::from_utf8(&buf[pos..pos + mime_len])
+            .map_err(|_| Error::ManifestInvalid)?
+            .to_string();
+        pos += mime_len;
+
+        if pos + 2 > buf.len() {
+            return Err(Error::ManifestInvalid);
+        }
+        let ext_len = u16::from_be_bytes(buf[pos..pos + 2].try_into().expect("2")) as usize;
+        pos += 2;
+        if ext_len > 16 || pos + ext_len > buf.len() {
+            return Err(Error::ManifestInvalid);
+        }
+        let ext = core::str::from_utf8(&buf[pos..pos + ext_len])
+            .map_err(|_| Error::ManifestInvalid)?
+            .to_string();
+        pos += ext_len;
+
+        if pos + 4 > buf.len() {
+            return Err(Error::ManifestInvalid);
+        }
+        let digest_table_len =
+            u32::from_be_bytes(buf[pos..pos + 4].try_into().expect("4")) as usize;
+        pos += 4;
+        if digest_table_len != chunk_count as usize * 32 {
+            return Err(Error::LengthInconsistent);
+        }
+        if pos + digest_table_len != buf.len() {
+            return Err(Error::ManifestInvalid);
+        }
+        let mut digests = Vec::with_capacity(chunk_count as usize);
+        for _ in 0..chunk_count {
             let mut d = [0u8; 32];
-            d.copy_from_slice(r.take(32)?);
-            block_digests.push(d);
-        }
-        if r.remaining() != 0 {
-            return Err(Error::BadManifestRecord);
+            d.copy_from_slice(&buf[pos..pos + 32]);
+            digests.push(d);
+            pos += 32;
         }
         Ok(Manifest {
+            name_mode,
+            file_size,
+            chunk_size,
+            chunk_count,
+            created_at_ms,
             name,
             mime,
-            block_size,
-            block_count,
-            plain_size,
-            block_digests,
+            ext,
+            digests,
         })
     }
 }
 
 /// 打包输入。
 pub struct PackInput<'a> {
-    /// 收件人公钥（64 字节 x||y）
-    pub recipient_public: &'a [u8; 64],
+    /// 接收方公钥（65 字节，`0x04 ‖ X ‖ Y`）
+    pub recipient_public: &'a [u8; SENDER_PUB_LEN],
     /// 发送方私钥（32 字节）
     pub sender_private: &'a [u8; 32],
     pub name: &'a str,
     pub mime: &'a str,
-    pub block_size: u32,
+    pub ext: &'a str,
+    /// Unix 毫秒（UTC）
+    pub created_at_ms: u64,
+    pub chunk_size: u32,
     pub data: &'a [u8],
 }
 
 /// 可复现打包参数（测试向量用；生产中由 [`pack`] 用 CSPRNG 生成）。
 pub struct PackParams {
     pub dk: [u8; 32],
-    pub file_id: [u8; 16],
-    pub k_wrap: U256,
-    pub k_sign: U256,
+    pub kdf_salt: [u8; KDF_SALT_LEN],
+    pub k_enc: U256,
+    pub k_sig: U256,
 }
 
-fn derive_block_key(dk: &[u8; 32], file_id: &[u8; 16]) -> [u8; BLOCK_KEY_LEN] {
-    let mut key = [0u8; BLOCK_KEY_LEN];
-    hkdf_sm3(HKDF_SALT_BLOCK, dk, file_id, &mut key);
-    key
+fn strip_pub_prefix(pub65: &[u8; SENDER_PUB_LEN]) -> Result<[u8; 64]> {
+    if pub65[0] != 0x04 {
+        return Err(Error::BadPoint);
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(&pub65[1..]);
+    Ok(out)
 }
 
-fn derive_manifest_key(dk: &[u8; 32], file_id: &[u8; 16]) -> [u8; BLOCK_KEY_LEN] {
-    let mut key = [0u8; BLOCK_KEY_LEN];
-    hkdf_sm3(HKDF_SALT_MANIFEST, dk, file_id, &mut key);
-    key
+fn kek_chunk(dk: &[u8; 32], salt: &[u8; KDF_SALT_LEN]) -> [u8; KEK_LEN] {
+    let mut k = [0u8; KEK_LEN];
+    hkdf_sm3(salt, dk, KDF_INFO_CHUNK, &mut k);
+    k
 }
 
-fn seal_block(
-    key: &[u8; 16],
-    nonce: &[u8; NONCE_LEN],
-    aad: &[u8],
-    pt: &[u8],
-) -> (Vec<u8>, [u8; TAG_LEN]) {
-    let mut ct = vec![0u8; pt.len()];
-    let mut tag = [0u8; TAG_LEN];
-    gcm::encrypt(key, nonce, aad, pt, &mut ct, &mut tag);
-    (ct, tag)
-}
-
-/// 打包。
-pub fn pack(input: &PackInput, rng: &mut impl Rng) -> Result<Vec<u8>> {
-    let mut dk = [0u8; 32];
-    rng.fill(&mut dk);
-    let mut file_id = [0u8; 16];
-    rng.fill(&mut file_id);
-    let k_wrap = random_scalar(rng)?;
-    let k_sign = random_scalar(rng)?;
-    pack_with(
-        input,
-        &PackParams {
-            dk,
-            file_id,
-            k_wrap,
-            k_sign,
-        },
-    )
+fn kek_manifest(dk: &[u8; 32], salt: &[u8; KDF_SALT_LEN]) -> [u8; KEK_LEN] {
+    let mut k = [0u8; KEK_LEN];
+    hkdf_sm3(salt, dk, KDF_INFO_MANIFEST, &mut k);
+    k
 }
 
 fn random_scalar(rng: &mut impl Rng) -> Result<U256> {
-    // 与 sm2 内部的拒绝采样一致：取 32 字节直到落在 [1, n-1]
+    let c = crate::sm2::curve_order();
     for _ in 0..64 {
         let mut b = [0u8; 32];
         rng.fill(&mut b);
         let v = U256::from_be_bytes(&b);
-        if !v.is_zero() {
+        if !v.is_zero() && v.cmp_u(&c) == core::cmp::Ordering::Less {
             return Ok(v);
         }
     }
     Err(Error::Rng)
 }
 
-/// 用固定参数打包（测试向量可复现）。
+/// 打包（随机 DK / KDF_SALT / k_enc / k_sig）。
+pub fn pack(input: &PackInput, rng: &mut impl Rng) -> Result<Vec<u8>> {
+    let mut dk = [0u8; 32];
+    rng.fill(&mut dk);
+    let mut kdf_salt = [0u8; KDF_SALT_LEN];
+    rng.fill(&mut kdf_salt);
+    let k_enc = random_scalar(rng)?;
+    let k_sig = random_scalar(rng)?;
+    pack_with(
+        input,
+        &PackParams {
+            dk,
+            kdf_salt,
+            k_enc,
+            k_sig,
+        },
+    )
+}
+
+/// 用固定参数打包（测试向量可复现；生产 MUST NOT 用固定值）。
 pub fn pack_with(input: &PackInput, params: &PackParams) -> Result<Vec<u8>> {
-    if input.block_size == 0 || input.block_size > MAX_BLOCK_SIZE {
+    if !(MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&input.chunk_size) {
         return Err(Error::BadArgument);
     }
-    if input.name.is_empty() || input.name.len() > 512 || input.mime.len() > 128 {
+    if input.data.len() as u64 > MAX_PLAINTEXT_SIZE {
         return Err(Error::BadArgument);
     }
-    let block_size = input.block_size;
-    let block_count = expected_block_count(input.data.len() as u64, block_size);
-    let header = Header {
-        file_id: params.file_id,
-        block_size,
-        block_count,
-        plain_size: input.data.len() as u64,
-    };
-    let header_bytes = header.encode();
+    let chunk_count64 = expected_chunk_count(input.data.len() as u64, input.chunk_size);
+    if chunk_count64 > MAX_CHUNK_COUNT as u64 {
+        return Err(Error::BadArgument);
+    }
+    let chunk_count = chunk_count64 as u32;
 
-    let block_key = derive_block_key(&params.dk, &params.file_id);
-    let manifest_key = derive_manifest_key(&params.dk, &params.file_id);
+    let sender_pub64 = sm2::public_from_private(input.sender_private)?;
+    let mut sender_pub = [0u8; SENDER_PUB_LEN];
+    sender_pub[0] = 0x04;
+    sender_pub[1..].copy_from_slice(&sender_pub64);
 
-    // 逐块加密
-    let mut blocks: Vec<(u32, u8, Vec<u8>, [u8; TAG_LEN])> = Vec::new();
-    let mut digests: Vec<[u8; 32]> = Vec::new();
-    for index in 0..block_count {
-        let start = index as usize * block_size as usize;
-        let len = block_plain_len(input.data.len() as u64, block_size, index) as usize;
-        let end = core::cmp::min(start + len, input.data.len());
+    let kc = kek_chunk(&params.dk, &params.kdf_salt);
+    let km = kek_manifest(&params.dk, &params.kdf_salt);
+
+    // 块先加密（清单里要放每块明文的 SM3）
+    let mut chunk_bytes: Vec<u8> = Vec::with_capacity(input.data.len() + chunk_count as usize * 32);
+    let mut digests: Vec<[u8; 32]> = Vec::with_capacity(chunk_count as usize);
+    for index in 0..chunk_count {
+        let start = index as usize * input.chunk_size as usize;
+        let pt_len = chunk_plain_len(
+            input.data.len() as u64,
+            input.chunk_size,
+            chunk_count,
+            index,
+        ) as usize;
+        let end = core::cmp::min(start + pt_len, input.data.len());
         let pt = &input.data[start..end];
-        let is_last = index + 1 == block_count;
-        let nonce = block_nonce(index, is_last);
-        let (ct, tag) = seal_block(&block_key, &nonce, &header_bytes, pt);
-        let mut digest_input = Vec::with_capacity(ct.len() + TAG_LEN);
-        digest_input.extend_from_slice(&ct);
-        digest_input.extend_from_slice(&tag);
-        digests.push(sm3(&digest_input));
-        blocks.push((index, if is_last { BLOCK_FLAG_LAST } else { 0 }, ct, tag));
+        let last = index + 1 == chunk_count;
+        digests.push(sm3(pt));
+
+        // AAD 依赖 header 的若干字段，先用等价值拼出来
+        let header_for_aad = Header {
+            flags: FLAG_SENDER_SIGNED,
+            chunk_size: input.chunk_size,
+            chunk_count,
+            plaintext_size: input.data.len() as u64,
+            wrapped_key_len: WRAPPED_KEY_LEN as u64,
+            manifest_len: 0,
+            manifest_pt_len: 0,
+            sender_pub_len: SENDER_PUB_LEN as u32,
+            kdf_salt: params.kdf_salt,
+            sig_len: 0,
+        };
+        let aad = aad_chunk(&header_for_aad, index, last, pt_len as u32);
+        let nonce = chunk_nonce(index, last);
+        let mut ct = vec![0u8; pt.len()];
+        let mut tag = [0u8; TAG_LEN];
+        gcm::encrypt(&kc, &nonce, &aad, pt, &mut ct, &mut tag);
+
+        chunk_bytes.extend_from_slice(&index.to_be_bytes());
+        chunk_bytes.extend_from_slice(&(pt_len as u32).to_be_bytes());
+        chunk_bytes.extend_from_slice(&(pt.len() as u32).to_be_bytes());
+        chunk_bytes.push(if last { 1 } else { 0 });
+        chunk_bytes.push(0);
+        chunk_bytes.extend_from_slice(&0u16.to_be_bytes());
+        chunk_bytes.extend_from_slice(&ct);
+        chunk_bytes.extend_from_slice(&tag);
     }
 
     let manifest = Manifest {
+        name_mode: NAME_MODE_REAL,
+        file_size: input.data.len() as u64,
+        chunk_size: input.chunk_size,
+        chunk_count,
+        created_at_ms: input.created_at_ms,
         name: input.name.to_string(),
         mime: input.mime.to_string(),
-        block_size,
-        block_count,
-        plain_size: input.data.len() as u64,
-        block_digests: digests,
+        ext: input.ext.to_string(),
+        digests,
     };
-    let manifest_plain = manifest.encode()?;
+    let manifest_pt = manifest.encode()?;
 
-    // 签名覆盖 header || manifest_plain
-    let mut signed = Vec::with_capacity(HEADER_LEN + manifest_plain.len());
-    signed.extend_from_slice(&header_bytes);
-    signed.extend_from_slice(&manifest_plain);
-    let sig = sm2::sign_with_k(
+    let mut header = Header {
+        flags: FLAG_SENDER_SIGNED,
+        chunk_size: input.chunk_size,
+        chunk_count,
+        plaintext_size: input.data.len() as u64,
+        wrapped_key_len: WRAPPED_KEY_LEN as u64,
+        manifest_len: manifest_pt.len() as u64 + TAG_LEN as u64,
+        manifest_pt_len: manifest_pt.len() as u32,
+        sender_pub_len: SENDER_PUB_LEN as u32,
+        kdf_salt: params.kdf_salt,
+        sig_len: MIN_SIG_LEN as u64, // 先占位，签名后回填（SIG_LEN 不在 HDR_CORE 里）
+    };
+
+    let aad_m = aad_manifest(&header);
+    let mut manifest_ct = vec![0u8; manifest_pt.len()];
+    let mut manifest_tag = [0u8; TAG_LEN];
+    gcm::encrypt(
+        &km,
+        &MANIFEST_NONCE,
+        &aad_m,
+        &manifest_pt,
+        &mut manifest_ct,
+        &mut manifest_tag,
+    );
+    let mut manifest_sec = manifest_ct;
+    manifest_sec.extend_from_slice(&manifest_tag);
+
+    // SIG_INPUT = "YSSIG1" ‖ 0100 ‖ HDR_CORE ‖ SENDER_PUB ‖ MANIFEST_SEC
+    let header_bytes = header.encode();
+    let mut sig_input = Vec::with_capacity(8 + HDR_CORE_LEN + SENDER_PUB_LEN + manifest_sec.len());
+    sig_input.extend_from_slice(&SIG_PREFIX);
+    sig_input.push(VERSION_MAJOR);
+    sig_input.push(VERSION_MINOR);
+    sig_input.extend_from_slice(&header_bytes[..HDR_CORE_LEN]);
+    sig_input.extend_from_slice(&sender_pub);
+    sig_input.extend_from_slice(&manifest_sec);
+
+    let raw = sm2::sign_with_k(
         input.sender_private,
-        &signed,
+        &sig_input,
         sm2::DEFAULT_ID,
-        &params.k_sign,
+        &params.k_sig,
     )?
     .ok_or(Error::Internal)?;
-
-    // DK 封装
-    let wrapped = sm2::encrypt(input.recipient_public, &params.dk, &params.k_wrap)?;
-    if wrapped.len() != 128 {
+    let mut r = [0u8; 32];
+    let mut s = [0u8; 32];
+    r.copy_from_slice(&raw[..32]);
+    s.copy_from_slice(&raw[32..]);
+    let sig_der = der::encode_signature(&r, &s);
+    if sig_der.len() < MIN_SIG_LEN || sig_der.len() > MAX_SIG_LEN {
         return Err(Error::Internal);
     }
+    header.sig_len = sig_der.len() as u64;
 
-    // 清单密文
-    let (man_ct, man_tag) = seal_block(
-        &manifest_key,
-        &MANIFEST_NONCE,
-        &header_bytes,
-        &manifest_plain,
-    );
+    // 封装 DK（C1 带 0x04 前缀）
+    let recipient64 = strip_pub_prefix(input.recipient_public)?;
+    let wrapped64 = sm2::encrypt(&recipient64, &params.dk, &params.k_enc)?;
+    if wrapped64.len() != WRAPPED_KEY_LEN - 1 {
+        return Err(Error::Internal);
+    }
+    let mut wrapped = Vec::with_capacity(WRAPPED_KEY_LEN);
+    wrapped.push(0x04);
+    wrapped.extend_from_slice(&wrapped64);
 
+    let header_bytes = header.encode();
     let mut out = Vec::with_capacity(
         HEADER_LEN
-            + 1
-            + 4
-            + 128
-            + 1
-            + 4
-            + 64
-            + 4
-            + man_ct.len()
-            + TAG_LEN
-            + blocks.len() * BLOCK_OVERHEAD
-            + input.data.len(),
+            + SENDER_PUB_LEN
+            + WRAPPED_KEY_LEN
+            + manifest_sec.len()
+            + sig_der.len()
+            + chunk_bytes.len(),
     );
     out.extend_from_slice(&header_bytes);
-
-    out.push(KEY_REC_KIND_SM2);
-    out.extend_from_slice(&(wrapped.len() as u32).to_be_bytes());
+    out.extend_from_slice(&sender_pub);
     out.extend_from_slice(&wrapped);
-
-    out.push(SIG_REC_KIND_SM2);
-    out.extend_from_slice(&(sig.len() as u32).to_be_bytes());
-    out.extend_from_slice(&sig);
-
-    out.extend_from_slice(&(man_ct.len() as u32).to_be_bytes());
-    out.extend_from_slice(&man_ct);
-    out.extend_from_slice(&man_tag);
-
-    for (index, flags, ct, tag) in &blocks {
-        out.extend_from_slice(&index.to_be_bytes());
-        out.push(*flags);
-        out.extend_from_slice(&(ct.len() as u32).to_be_bytes());
-        out.extend_from_slice(ct);
-        out.extend_from_slice(tag);
-    }
-
+    out.extend_from_slice(&manifest_sec);
+    out.extend_from_slice(&sig_der);
+    out.extend_from_slice(&chunk_bytes);
     Ok(out)
 }
 
 /// 解包结果。
 #[derive(Debug)]
 pub struct Unpacked {
+    pub header: Header,
     pub manifest: Manifest,
+    pub sender_public: [u8; SENDER_PUB_LEN],
+    pub sender_code: String,
     pub data: Vec<u8>,
-}
-
-/// 只解包头（用于发送前预校验 / 展示前校验）。
-pub fn read_header(pack: &[u8]) -> Result<Header> {
-    Header::decode(pack)
 }
 
 struct Opened {
     header: Header,
     manifest: Manifest,
+    sender_public: [u8; SENDER_PUB_LEN],
+    sender_code: String,
     dk: [u8; 32],
-    /// 第一个块记录在 `pack` 中的偏移
-    block_offset: usize,
+    chunk_offset: usize,
 }
 
-/// 解到清单为止：包头 → DK 封装 → 签名记录 → 清单 → 验签。
-/// 不解任何数据块，用于接收端先展示文件名/大小。
-fn open(pack: &[u8], recipient_private: &[u8; 32], sender_public: &[u8; 64]) -> Result<Opened> {
-    let header = Header::decode(pack)?;
-    let header_bytes = &pack[..HEADER_LEN];
-    let mut r = Reader::new(&pack[HEADER_LEN..]);
+fn total_envelope_len(header: &Header) -> Result<usize> {
+    let prelude = HEADER_LEN
+        + SENDER_PUB_LEN
+        + WRAPPED_KEY_LEN
+        + header.manifest_len as usize
+        + header.sig_len as usize;
+    let mut chunks = 0usize;
+    for i in 0..header.chunk_count {
+        chunks += CHUNK_HEADER_LEN
+            + TAG_LEN
+            + chunk_plain_len(
+                header.plaintext_size,
+                header.chunk_size,
+                header.chunk_count,
+                i,
+            ) as usize;
+    }
+    prelude.checked_add(chunks).ok_or(Error::LengthInconsistent)
+}
 
-    // KEY_REC
-    let key_kind = r.u8()?;
-    if key_kind != KEY_REC_KIND_SM2 {
-        return Err(Error::BadKeyRecord);
+/// 解到清单为止（含验签），不解数据块。
+fn open(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
+    let header = Header::decode(pack)?;
+    let expected_len = total_envelope_len(&header)?;
+    if pack.len() != expected_len {
+        return Err(Error::LengthInconsistent);
     }
-    let key_len = r.u32()? as usize;
-    if key_len != 128 {
-        return Err(Error::BadKeyRecord);
+
+    let mut pos = HEADER_LEN;
+    let mut sender_public = [0u8; SENDER_PUB_LEN];
+    sender_public.copy_from_slice(&pack[pos..pos + SENDER_PUB_LEN]);
+    pos += SENDER_PUB_LEN;
+    if sender_public[0] != 0x04 {
+        return Err(Error::BadPoint);
     }
-    let wrapped = r.take(key_len)?;
-    let dk_vec = sm2::decrypt(recipient_private, wrapped).map_err(|_| Error::BadKeyRecord)?;
+
+    let wrapped = &pack[pos..pos + WRAPPED_KEY_LEN];
+    pos += WRAPPED_KEY_LEN;
+    if wrapped[0] != 0x04 {
+        return Err(Error::KeyUnwrapFailed);
+    }
+    let dk_vec =
+        sm2::decrypt(recipient_private, &wrapped[1..]).map_err(|_| Error::KeyUnwrapFailed)?;
     if dk_vec.len() != 32 {
-        return Err(Error::BadKeyRecord);
+        return Err(Error::KeyUnwrapFailed);
     }
     let mut dk = [0u8; 32];
     dk.copy_from_slice(&dk_vec);
 
-    // SIG_REC
-    let sig_kind = r.u8()?;
-    if sig_kind != SIG_REC_KIND_SM2 {
-        return Err(Error::BadSignatureRecord);
-    }
-    let sig_len = r.u32()? as usize;
-    if sig_len != sm2::SIGNATURE_SIZE {
-        return Err(Error::BadSignatureRecord);
-    }
-    let mut sig = [0u8; sm2::SIGNATURE_SIZE];
-    sig.copy_from_slice(r.take(sig_len)?);
+    let manifest_sec = &pack[pos..pos + header.manifest_len as usize];
+    pos += header.manifest_len as usize;
+    let sig_sec = &pack[pos..pos + header.sig_len as usize];
+    pos += header.sig_len as usize;
 
-    // MANIFEST_REC
-    let man_key = derive_manifest_key(&dk, &header.file_id);
-    let man_ct_len = r.u32()? as usize;
-    if man_ct_len > 1 << 20 {
-        return Err(Error::BadManifestRecord);
-    }
-    let man_ct = r.take(man_ct_len)?;
-    let mut man_tag = [0u8; TAG_LEN];
-    man_tag.copy_from_slice(r.take(TAG_LEN)?);
-    let manifest_plain = gcm::decrypt(&man_key, &MANIFEST_NONCE, header_bytes, man_ct, &man_tag)
-        .ok_or(Error::ManifestMismatch)?;
-    let manifest = Manifest::decode(&manifest_plain)?;
+    // 清单解密
+    let km = kek_manifest(&dk, &header.kdf_salt);
+    let aad_m = aad_manifest(&header);
+    let ct = &manifest_sec[..manifest_sec.len() - TAG_LEN];
+    let mut tag = [0u8; TAG_LEN];
+    tag.copy_from_slice(&manifest_sec[manifest_sec.len() - TAG_LEN..]);
+    let manifest_pt =
+        gcm::decrypt(&km, &MANIFEST_NONCE, &aad_m, ct, &tag).ok_or(Error::ManifestAuthFailed)?;
+    let manifest = Manifest::decode(&manifest_pt)?;
 
-    if manifest.block_size != header.block_size
-        || manifest.block_count != header.block_count
-        || manifest.plain_size != header.plain_size
-        || manifest.block_digests.len() != header.block_count as usize
+    if manifest.file_size != header.plaintext_size
+        || manifest.chunk_size != header.chunk_size
+        || manifest.chunk_count != header.chunk_count
+        || manifest.digests.len() != header.chunk_count as usize
     {
-        return Err(Error::ManifestMismatch);
+        return Err(Error::LengthInconsistent);
     }
 
-    // 签名校验（header || manifest_plain）
-    let mut signed = Vec::with_capacity(HEADER_LEN + manifest_plain.len());
-    signed.extend_from_slice(header_bytes);
-    signed.extend_from_slice(&manifest_plain);
-    if !sm2::verify(sender_public, &signed, sm2::DEFAULT_ID, &sig)? {
-        return Err(Error::SignatureMismatch);
+    // 验签（SIG_INPUT 用包内的 HDR_CORE / SENDER_PUB / MANIFEST_SEC）
+    let mut sig_input = Vec::with_capacity(8 + HDR_CORE_LEN + SENDER_PUB_LEN + manifest_sec.len());
+    sig_input.extend_from_slice(&SIG_PREFIX);
+    sig_input.push(VERSION_MAJOR);
+    sig_input.push(VERSION_MINOR);
+    sig_input.extend_from_slice(&pack[..HDR_CORE_LEN]);
+    sig_input.extend_from_slice(&sender_public);
+    sig_input.extend_from_slice(manifest_sec);
+
+    let (r, s) = der::decode_signature(sig_sec)?;
+    let mut raw = [0u8; 64];
+    raw[..32].copy_from_slice(&r);
+    raw[32..].copy_from_slice(&s);
+    let pub64 = {
+        let mut p = [0u8; 64];
+        p.copy_from_slice(&sender_public[1..]);
+        p
+    };
+    if !sm2::verify(&pub64, &sig_input, sm2::DEFAULT_ID, &raw)? {
+        return Err(Error::SignatureInvalid);
     }
+
+    let sender_code = crate::code::from_public_key(&sender_public);
 
     Ok(Opened {
         header,
         manifest,
+        sender_public,
+        sender_code,
         dk,
-        block_offset: HEADER_LEN + (pack[HEADER_LEN..].len() - r.remaining()),
+        chunk_offset: pos,
     })
 }
 
-/// 只解到清单（不解密数据块），供接收端先展示元信息。
+/// 只解到清单（不解数据块），供接收端先展示元信息。
 pub fn open_manifest(
     pack: &[u8],
     recipient_private: &[u8; 32],
-    sender_public: &[u8; 64],
-) -> Result<(Header, Manifest)> {
-    let o = open(pack, recipient_private, sender_public)?;
-    Ok((o.header, o.manifest))
+) -> Result<(Header, Manifest, [u8; SENDER_PUB_LEN], String)> {
+    let o = open(pack, recipient_private)?;
+    Ok((o.header, o.manifest, o.sender_public, o.sender_code))
 }
 
-/// 严格解包。任何篡改都返回错误，绝不"尽力恢复"。
+/// 严格解包（契约 §13 全表）。
+///
+/// `expected_sender_code`：调用方从 API 元数据拿到的发送方 4 位码；给 `Some` 时做 §13 #18 比对。
 pub fn unpack(
     pack: &[u8],
     recipient_private: &[u8; 32],
-    sender_public: &[u8; 64],
+    expected_sender_code: Option<&str>,
 ) -> Result<Unpacked> {
-    let opened = open(pack, recipient_private, sender_public)?;
+    let opened = open(pack, recipient_private)?;
+    if let Some(expected) = expected_sender_code {
+        if opened.sender_code != expected {
+            return Err(Error::SenderMismatch);
+        }
+    }
     let header = opened.header;
     let manifest = opened.manifest;
-    let header_bytes = &pack[..HEADER_LEN];
-    let mut r = Reader::new(&pack[opened.block_offset..]);
+    let kc = kek_chunk(&opened.dk, &header.kdf_salt);
 
-    // BLOCK*
-    let block_key = derive_block_key(&opened.dk, &header.file_id);
-    let mut data = Vec::with_capacity(header.plain_size as usize);
-    let mut expected_index: u32 = 0;
-    while expected_index < header.block_count {
-        if r.remaining() == 0 {
-            return Err(Error::MissingBlock);
+    let mut data = Vec::with_capacity(header.plaintext_size as usize);
+    let mut pos = opened.chunk_offset;
+    for index in 0..header.chunk_count {
+        let end_of_header = pos + CHUNK_HEADER_LEN;
+        if end_of_header > pack.len() {
+            return Err(Error::ChunkMissing);
         }
-        let index = r.u32()?;
-        if index < expected_index {
-            return Err(Error::DuplicateBlock);
+        let hdr = &pack[pos..end_of_header];
+        let got_index = u32::from_be_bytes(hdr[0..4].try_into().expect("4"));
+        let pt_len = u32::from_be_bytes(hdr[4..8].try_into().expect("4"));
+        let ct_len = u32::from_be_bytes(hdr[8..12].try_into().expect("4"));
+        let last_flag = hdr[12];
+        let reserved8 = hdr[13];
+        let reserved16 = u16::from_be_bytes(hdr[14..16].try_into().expect("2"));
+
+        if got_index != index {
+            return if got_index < index {
+                Err(Error::ChunkOrder)
+            } else {
+                Err(Error::ChunkMissing)
+            };
         }
-        if index > expected_index || index >= header.block_count {
-            return Err(Error::BlockSequence);
+        let last = index + 1 == header.chunk_count;
+        if last_flag != if last { 1 } else { 0 } {
+            return Err(Error::ChunkOrder);
         }
-        let flags = r.u8()?;
-        let is_last = index + 1 == header.block_count;
-        let expected_flags = if is_last { BLOCK_FLAG_LAST } else { 0 };
-        if flags != expected_flags {
-            return Err(Error::LastFlagMismatch);
+        if reserved8 != 0 || reserved16 != 0 {
+            return Err(Error::HeaderInvalid);
         }
-        let ct_len = r.u32()? as usize;
-        let expected_len = block_plain_len(header.plain_size, header.block_size, index) as usize;
-        if ct_len != expected_len {
-            return Err(Error::ManifestMismatch);
-        }
-        let ct = r.take(ct_len)?;
-        let mut tag = [0u8; TAG_LEN];
-        tag.copy_from_slice(r.take(TAG_LEN)?);
-
-        // 清单摘要（对 ct||tag）
-        let mut digest_input = Vec::with_capacity(ct_len + TAG_LEN);
-        digest_input.extend_from_slice(ct);
-        digest_input.extend_from_slice(&tag);
-        let digest = sm3(&digest_input);
-        if !ct_eq(&digest, &manifest.block_digests[index as usize]) {
-            return Err(Error::ManifestMismatch);
-        }
-
-        let nonce = block_nonce(index, is_last);
-        let pt =
-            gcm::decrypt(&block_key, &nonce, header_bytes, ct, &tag).ok_or(Error::TagMismatch)?;
-        data.extend_from_slice(&pt);
-        expected_index += 1;
-    }
-
-    if expected_index != header.block_count {
-        return Err(Error::MissingBlock);
-    }
-    if r.remaining() != 0 {
-        return Err(Error::TrailingBytes);
-    }
-    if data.len() as u64 != header.plain_size {
-        return Err(Error::ManifestMismatch);
-    }
-
-    Ok(Unpacked { manifest, data })
-}
-
-struct Reader<'a> {
-    buf: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn new(buf: &'a [u8]) -> Self {
-        Reader { buf, pos: 0 }
-    }
-    fn remaining(&self) -> usize {
-        self.buf.len() - self.pos
-    }
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        if self.remaining() < n {
-            return Err(Error::Truncated);
-        }
-        let s = &self.buf[self.pos..self.pos + n];
-        self.pos += n;
-        Ok(s)
-    }
-    fn u8(&mut self) -> Result<u8> {
-        Ok(self.take(1)?[0])
-    }
-    fn u16(&mut self) -> Result<u16> {
-        Ok(u16::from_be_bytes(self.take(2)?.try_into().expect("2")))
-    }
-    fn u32(&mut self) -> Result<u32> {
-        Ok(u32::from_be_bytes(self.take(4)?.try_into().expect("4")))
-    }
-    fn u64(&mut self) -> Result<u64> {
-        Ok(u64::from_be_bytes(self.take(8)?.try_into().expect("8")))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::rng::SeedRng;
-
-    fn identities() -> (sm2::KeyPair, sm2::KeyPair) {
-        let mut rng = SeedRng::new(b"pack-identities");
-        let alice = sm2::keygen(&mut rng);
-        let bob = sm2::keygen(&mut rng);
-        (alice, bob)
-    }
-
-    fn build(data: &[u8], block_size: u32) -> Vec<u8> {
-        let (alice, bob) = identities();
-        let mut rng = SeedRng::new(b"pack-rng");
-        let input = PackInput {
-            recipient_public: &bob.public_key,
-            sender_private: &alice.private_key,
-            name: "报告.pdf",
-            mime: "application/pdf",
-            block_size,
-            data,
-        };
-        pack(&input, &mut rng).unwrap()
-    }
-
-    #[test]
-    fn pack_unpack_roundtrip() {
-        let (alice, bob) = identities();
-        for (len, bs) in [
-            (0usize, 16u32),
-            (1, 16),
-            (15, 16),
-            (16, 16),
-            (17, 16),
-            (1000, 256),
-        ] {
-            let data: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
-            let pack = build(&data, bs);
-            let out = unpack(&pack, &bob.private_key, &alice.public_key).unwrap();
-            assert_eq!(out.data, data);
-            assert_eq!(out.manifest.name, "报告.pdf");
-            assert_eq!(
-                out.manifest.block_count,
-                expected_block_count(len as u64, bs)
-            );
-        }
-    }
-
-    #[test]
-    fn flip_one_byte_fails() {
-        let data: Vec<u8> = (0..64).map(|i| i as u8).collect();
-        let pack = build(&data, 16);
-        let (alice, bob) = identities();
-        for pos in [0usize, 5, 12, 45, 60, 100, 200, pack.len() - 1] {
-            let mut bad = pack.clone();
-            bad[pos] ^= 0x01;
-            assert!(
-                unpack(&bad, &bob.private_key, &alice.public_key).is_err(),
-                "flip at {} should fail",
-                pos
-            );
-        }
-    }
-
-    #[test]
-    fn swap_and_delete_blocks_fail() {
-        let data: Vec<u8> = (0..64).map(|i| i as u8).collect();
-        let pack = build(&data, 16); // 4 块
-        let (alice, bob) = identities();
-        // 定位块起点：header + keyrec + sigrec + manifest rec
-        let mut pos = HEADER_LEN + 1 + 4 + 128 + 1 + 4 + 64;
-        let man_len = u32::from_be_bytes(pack[pos..pos + 4].try_into().unwrap()) as usize;
-        pos += 4 + man_len + TAG_LEN;
-        let mut block_spans = Vec::new();
-        let mut p = pos;
-        for _ in 0..4 {
-            let len = u32::from_be_bytes(pack[p + 5..p + 9].try_into().unwrap()) as usize;
-            block_spans.push(p..p + 9 + len + TAG_LEN);
-            p += 9 + len + TAG_LEN;
-        }
-        assert_eq!(p, pack.len());
-
-        // 交换块 0 与块 1
-        let mut swapped = Vec::new();
-        swapped.extend_from_slice(&pack[..block_spans[0].start]);
-        swapped.extend_from_slice(&pack[block_spans[1].clone()]);
-        swapped.extend_from_slice(&pack[block_spans[0].clone()]);
-        swapped.extend_from_slice(&pack[block_spans[2].start..]);
-        assert!(unpack(&swapped, &bob.private_key, &alice.public_key).is_err());
-
-        // 删除块 1
-        let mut deleted = Vec::new();
-        deleted.extend_from_slice(&pack[..block_spans[1].start]);
-        deleted.extend_from_slice(&pack[block_spans[2].start..]);
-        assert!(unpack(&deleted, &bob.private_key, &alice.public_key).is_err());
-
-        // 复制块 1 到块 0 位置（重复块）
-        let mut dup = Vec::new();
-        dup.extend_from_slice(&pack[..block_spans[0].start]);
-        dup.extend_from_slice(&pack[block_spans[1].clone()]);
-        dup.extend_from_slice(&pack[block_spans[1].start..]);
-        assert!(unpack(&dup, &bob.private_key, &alice.public_key).is_err());
-    }
-
-    #[test]
-    fn unknown_version_rejected() {
-        let data = vec![1u8, 2, 3];
-        let mut pack = build(&data, 16);
-        pack[OFF_VERSION] = 9;
-        let (alice, bob) = identities();
-        assert_eq!(
-            unpack(&pack, &bob.private_key, &alice.public_key).unwrap_err(),
-            Error::UnsupportedVersion
+        let expected_pt_len = chunk_plain_len(
+            header.plaintext_size,
+            header.chunk_size,
+            header.chunk_count,
+            index,
         );
+        if pt_len != expected_pt_len || ct_len != expected_pt_len {
+            return Err(Error::LengthInconsistent);
+        }
+
+        pos = end_of_header;
+        let ct_end = pos + ct_len as usize;
+        let tag_end = ct_end + TAG_LEN;
+        if tag_end > pack.len() {
+            return Err(Error::ChunkMissing);
+        }
+        let ct = &pack[pos..ct_end];
+        let mut tag = [0u8; TAG_LEN];
+        tag.copy_from_slice(&pack[ct_end..tag_end]);
+        pos = tag_end;
+
+        let aad = aad_chunk(&header, index, last, pt_len);
+        let nonce = chunk_nonce(index, last);
+        let pt = gcm::decrypt(&kc, &nonce, &aad, ct, &tag).ok_or(Error::ChunkAuthFailed)?;
+        if !ct_eq(&sm3(&pt), &manifest.digests[index as usize]) {
+            return Err(Error::DigestMismatch);
+        }
+        data.extend_from_slice(&pt);
     }
 
-    #[test]
-    fn truncated_rejected() {
-        let data = vec![0u8; 40];
-        let pack = build(&data, 16);
-        let (alice, bob) = identities();
-        for cut in [1usize, 10, HEADER_LEN, HEADER_LEN + 5, pack.len() - 1] {
-            assert!(unpack(&pack[..cut], &bob.private_key, &alice.public_key).is_err());
-        }
+    if pos != pack.len() {
+        return Err(Error::LengthInconsistent);
     }
+    if data.len() as u64 != header.plaintext_size {
+        return Err(Error::LengthInconsistent);
+    }
+
+    Ok(Unpacked {
+        header,
+        manifest,
+        sender_public: opened.sender_public,
+        sender_code: opened.sender_code,
+        data,
+    })
+}
+
+/// 只读包头（不解密），用于上传前/展示前的快速校验。
+pub fn read_header(pack: &[u8]) -> Result<Header> {
+    Header::decode(pack)
 }

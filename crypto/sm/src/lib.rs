@@ -17,6 +17,7 @@
 
 pub mod bigint;
 pub mod code;
+pub mod der;
 pub mod error;
 pub mod ffi;
 pub mod gcm;

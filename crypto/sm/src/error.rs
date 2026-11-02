@@ -1,55 +1,56 @@
-//! 统一错误类型。错误码是对 Web 侧 C ABI 的稳定契约（负数）。
+//! 统一错误类型。错误名与 `docs/CRYPTO-PACK.md` §13 的端侧错误码一一对应，
+//! 错误码（负数）是 C ABI 的稳定契约。
 
 use core::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
-    /// 参数非法（空指针、长度越界、密钥长度不对）
+    /// 参数非法（空指针、长度越界）
     BadArgument,
     /// 输出缓冲区太小
     BufferTooSmall,
     /// 随机源不可用
     Rng,
-    /// 加密包魔数不符
-    BadMagic,
-    /// 不支持的版本号（只接受 v1）
-    UnsupportedVersion,
-    /// suite / flags / reserved 非法
-    BadFlags,
-    /// 输入被截断
-    Truncated,
-    /// DK 封装记录非法
-    BadKeyRecord,
-    /// 签名记录非法
-    BadSignatureRecord,
-    /// 清单记录非法
-    BadManifestRecord,
-    /// 块序号不连续 / 越界
-    BlockSequence,
-    /// 块重复
-    DuplicateBlock,
-    /// 缺少块
-    MissingBlock,
-    /// 末块标志与块位置不符
-    LastFlagMismatch,
-    /// SM4-GCM tag 校验失败（密文被篡改）
-    TagMismatch,
-    /// 清单与包头 / 块不一致
-    ManifestMismatch,
-    /// 签名验签失败
-    SignatureMismatch,
-    /// 末尾有多余字节
-    TrailingBytes,
-    /// SM2 曲线点非法（不在曲线上 / 无穷远点）
-    BadPoint,
-    /// SM2 KDF 输出全零
-    BadKdf,
-    /// SM2 密文非法（C1 不在曲线上 / C3 校验失败）
-    BadCiphertext,
+    /// 魔数不是 `YSPK`
+    MagicMismatch,
+    /// 版本不是 1.0 / 未知算法 ID
+    VersionUnsupported,
+    /// 头部字段非法（HEADER_LEN、RESERVED、CHUNK_SIZE、SIG_LEN…）
+    HeaderInvalid,
+    /// 长度不自洽（分段长度、块数、包尾多余字节）
+    LengthInconsistent,
+    /// 未知算法 ID
+    AlgUnsupported,
+    /// FLAGS 保留位非 0
+    FlagsUnknown,
+    /// `FLAGS.SENDER_SIGNED == 0`
+    Unsigned,
+    /// SM2 解封失败
+    KeyUnwrapFailed,
+    /// 清单 GCM 认证失败
+    ManifestAuthFailed,
+    /// 清单结构非法
+    ManifestInvalid,
+    /// 签名非法 / 验签失败 / DER 非规范
+    SignatureInvalid,
+    /// 包里 SENDER_PUB 派生的码与元数据里的码不一致
+    SenderMismatch,
+    /// 块号不连续 / 重复 / 末块标志不符
+    ChunkOrder,
+    /// 块 GCM 认证失败
+    ChunkAuthFailed,
+    /// 缺块
+    ChunkMissing,
+    /// 明文块摘要与清单不符
+    DigestMismatch,
     /// 用户码非法
     BadCode,
-    /// 用户码连续撞码，重试耗尽
+    /// 撞码重试耗尽
     CodeExhausted,
+    /// SM2 曲线点非法
+    BadPoint,
+    /// SM2 密文非法（C3 不符）
+    BadCiphertext,
     /// 内部一致性错误
     Internal,
 }
@@ -61,57 +62,57 @@ impl Error {
             Error::BadArgument => -1,
             Error::BufferTooSmall => -2,
             Error::Rng => -3,
-            Error::BadMagic => -4,
-            Error::UnsupportedVersion => -5,
-            Error::BadFlags => -6,
-            Error::Truncated => -7,
-            Error::BadKeyRecord => -8,
-            Error::BadSignatureRecord => -9,
-            Error::BadManifestRecord => -10,
-            Error::BlockSequence => -11,
-            Error::DuplicateBlock => -12,
-            Error::MissingBlock => -13,
-            Error::LastFlagMismatch => -14,
-            Error::TagMismatch => -15,
-            Error::ManifestMismatch => -16,
-            Error::SignatureMismatch => -17,
-            Error::TrailingBytes => -18,
-            Error::BadPoint => -19,
-            Error::BadKdf => -20,
+            Error::MagicMismatch => -4,
+            Error::VersionUnsupported => -5,
+            Error::HeaderInvalid => -6,
+            Error::LengthInconsistent => -7,
+            Error::AlgUnsupported => -8,
+            Error::FlagsUnknown => -9,
+            Error::Unsigned => -10,
+            Error::KeyUnwrapFailed => -11,
+            Error::ManifestAuthFailed => -12,
+            Error::ManifestInvalid => -13,
+            Error::SignatureInvalid => -14,
+            Error::SenderMismatch => -15,
+            Error::ChunkOrder => -16,
+            Error::ChunkAuthFailed => -17,
+            Error::ChunkMissing => -18,
+            Error::DigestMismatch => -19,
+            Error::BadCode => -20,
+            Error::CodeExhausted => -21,
+            Error::BadPoint => -22,
             Error::BadCiphertext => -23,
-            Error::BadCode => -21,
-            Error::CodeExhausted => -22,
             Error::Internal => -99,
         }
     }
 
-    /// 稳定的错误名（供 JS 侧日志使用）。
+    /// 与契约 §13 一致的错误名（Web 侧直接拿去映射文案）。
     pub fn name(self) -> &'static str {
         match self {
-            Error::BadArgument => "BAD_ARGUMENT",
-            Error::BufferTooSmall => "BUFFER_TOO_SMALL",
-            Error::Rng => "RNG",
-            Error::BadMagic => "BAD_MAGIC",
-            Error::UnsupportedVersion => "UNSUPPORTED_VERSION",
-            Error::BadFlags => "BAD_FLAGS",
-            Error::Truncated => "TRUNCATED",
-            Error::BadKeyRecord => "BAD_KEY_RECORD",
-            Error::BadSignatureRecord => "BAD_SIGNATURE_RECORD",
-            Error::BadManifestRecord => "BAD_MANIFEST_RECORD",
-            Error::BlockSequence => "BLOCK_SEQUENCE",
-            Error::DuplicateBlock => "DUPLICATE_BLOCK",
-            Error::MissingBlock => "MISSING_BLOCK",
-            Error::LastFlagMismatch => "LAST_FLAG_MISMATCH",
-            Error::TagMismatch => "TAG_MISMATCH",
-            Error::ManifestMismatch => "MANIFEST_MISMATCH",
-            Error::SignatureMismatch => "SIGNATURE_MISMATCH",
-            Error::TrailingBytes => "TRAILING_BYTES",
-            Error::BadPoint => "BAD_POINT",
-            Error::BadKdf => "BAD_KDF",
-            Error::BadCiphertext => "BAD_CIPHERTEXT",
-            Error::BadCode => "BAD_CODE",
-            Error::CodeExhausted => "CODE_EXHAUSTED",
-            Error::Internal => "INTERNAL",
+            Error::BadArgument => "CRYPTO_BAD_ARGUMENT",
+            Error::BufferTooSmall => "CRYPTO_BUFFER_TOO_SMALL",
+            Error::Rng => "CRYPTO_RNG_FAILED",
+            Error::MagicMismatch => "CRYPTO_MAGIC_MISMATCH",
+            Error::VersionUnsupported => "CRYPTO_VERSION_UNSUPPORTED",
+            Error::HeaderInvalid => "CRYPTO_HEADER_INVALID",
+            Error::LengthInconsistent => "CRYPTO_LENGTH_INCONSISTENT",
+            Error::AlgUnsupported => "CRYPTO_ALG_UNSUPPORTED",
+            Error::FlagsUnknown => "CRYPTO_FLAGS_UNKNOWN",
+            Error::Unsigned => "CRYPTO_UNSIGNED",
+            Error::KeyUnwrapFailed => "CRYPTO_KEY_UNWRAP_FAILED",
+            Error::ManifestAuthFailed => "CRYPTO_MANIFEST_AUTH_FAILED",
+            Error::ManifestInvalid => "CRYPTO_MANIFEST_INVALID",
+            Error::SignatureInvalid => "CRYPTO_SIGNATURE_INVALID",
+            Error::SenderMismatch => "CRYPTO_SENDER_MISMATCH",
+            Error::ChunkOrder => "CRYPTO_CHUNK_ORDER",
+            Error::ChunkAuthFailed => "CRYPTO_CHUNK_AUTH_FAILED",
+            Error::ChunkMissing => "CRYPTO_CHUNK_MISSING",
+            Error::DigestMismatch => "CRYPTO_DIGEST_MISMATCH",
+            Error::BadCode => "CRYPTO_CODE_INVALID",
+            Error::CodeExhausted => "CRYPTO_CODE_EXHAUSTED",
+            Error::BadPoint => "CRYPTO_CURVE_INVALID",
+            Error::BadCiphertext => "CRYPTO_CIPHERTEXT_INVALID",
+            Error::Internal => "CRYPTO_INTERNAL",
         }
     }
 }

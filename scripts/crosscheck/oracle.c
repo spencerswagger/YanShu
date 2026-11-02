@@ -283,8 +283,11 @@ static int cmd_sm2_za(int argc, char **argv)
 {
 	if (argc < 3) die("usage: sm2-za <pub>");
 	size_t pl = 0;
-	uint8_t *pub = alloc_hex(argv[2], &pl);
-	if (pl != 64) die("pub must be 64 bytes");
+	uint8_t *pub_raw = alloc_hex(argv[2], &pl);
+	/* 接受 65 字节（0x04 前缀）或 64 字节（X||Y） */
+	uint8_t *pub = pub_raw;
+	if (pl == 65 && pub_raw[0] == 0x04) { pub = pub_raw + 1; pl = 64; }
+	if (pl != 64) die("pub must be 64 or 65 bytes");
 	SM2_KEY key;
 	key_from_pub(&key, pub);
 	uint8_t z[32];
@@ -293,7 +296,7 @@ static int cmd_sm2_za(int argc, char **argv)
 	}
 	print_hex(z, 32);
 	printf("\n");
-	free(pub);
+	free(pub_raw);
 	return 0;
 }
 
@@ -399,10 +402,12 @@ static int cmd_sm2_verify(int argc, char **argv)
 {
 	if (argc < 5) die("usage: sm2-verify <pub> <msg> <sig>");
 	size_t pl = 0, ml = 0, sl = 0;
-	uint8_t *pub = alloc_hex(argv[2], &pl);
+	uint8_t *pub_raw = alloc_hex(argv[2], &pl);
 	uint8_t *msg = alloc_hex(argv[3], &ml);
 	uint8_t *raw = alloc_hex(argv[4], &sl);
-	if (pl != 64) die("pub must be 64 bytes");
+	uint8_t *pub = pub_raw;
+	if (pl == 65 && pub_raw[0] == 0x04) { pub = pub_raw + 1; pl = 64; }
+	if (pl != 64) die("pub must be 64 or 65 bytes");
 	if (sl != 64) die("sig must be 64 bytes");
 
 	SM2_KEY key;
@@ -424,7 +429,7 @@ static int cmd_sm2_verify(int argc, char **argv)
 	memcpy(sig.s, raw + 32, 32);
 	int ok = sm2_do_verify(&key, dgst, &sig);
 	printf("%s\n", ok == 1 ? "OK" : "FAIL");
-	free(pub);
+	free(pub_raw);
 	free(msg);
 	free(raw);
 	return ok == 1 ? 0 : 1;

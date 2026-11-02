@@ -2,7 +2,8 @@
 //!
 //! 约定：
 //! * 所有长度参数为 `size_t`（wasm32 下 4 字节）；所有指针为线性内存偏移。
-//! * 返回值 `0` = 成功，负数为错误码（见 [`crate::error::Error::code`]）。
+//! * 返回值 `0` = 成功，负数为错误码（见 [`crate::error::Error::code`]，命名对齐
+//!   `docs/CRYPTO-PACK.md` §13 的端侧错误码）。
 //! * `out_len` 指针在成功时写入实际字节数；缓冲区不足时也写入所需字节数并返回 -2。
 //! * 需要随机数的接口都接收 `seed`（JS 侧用 `crypto.getRandomValues` 现取），
 //!   ABI 内部再混入进程内单调计数器展开为 SM3-DRBG。**同一个 seed 不要复用**。
@@ -16,7 +17,7 @@ use crate::code;
 use crate::error::{Error, Result};
 use crate::gcm;
 use crate::hkdf::hkdf_sm3;
-use crate::pack::{self, layout, Header, Manifest, PackInput};
+use crate::pack::{self, Manifest, PackInput};
 use crate::rng::SeedRng;
 use crate::sm2;
 use crate::sm3;
@@ -80,7 +81,6 @@ fn rc(r: Result<()>) -> i32 {
     }
 }
 
-/// 由 JS 传入的种子构造 DRBG，并混入进程内计数器。
 fn seeded_rng(seed: &[u8]) -> Result<SeedRng> {
     if seed.is_empty() {
         return Err(Error::Rng);
@@ -95,7 +95,6 @@ fn seeded_rng(seed: &[u8]) -> Result<SeedRng> {
 
 // ---------------------------------------------------------------- 内存 / 元信息
 
-/// 申请 `len` 字节线性内存，返回指针（失败返回 0）。
 #[no_mangle]
 pub extern "C" fn ys_alloc(len: usize) -> *mut u8 {
     if len == 0 {
@@ -107,7 +106,6 @@ pub extern "C" fn ys_alloc(len: usize) -> *mut u8 {
     ptr
 }
 
-/// 释放 `ys_alloc` 申请的内存（长度必须与申请时一致）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_free(ptr: *mut u8, len: usize) {
     if ptr.is_null() || len == 0 {
@@ -116,25 +114,48 @@ pub unsafe extern "C" fn ys_free(ptr: *mut u8, len: usize) {
     drop(Vec::from_raw_parts(ptr, 0, len));
 }
 
-/// 内核版本，`0x0001_0000` = 1.0。
 #[no_mangle]
 pub extern "C" fn ys_version() -> u32 {
     VERSION
 }
 
-/// 默认块大小（字节）。
 #[no_mangle]
-pub extern "C" fn ys_default_block_size() -> u32 {
-    layout::DEFAULT_BLOCK_SIZE
+pub extern "C" fn ys_default_chunk_size() -> u32 {
+    pack::v1::DEFAULT_CHUNK_SIZE
 }
 
-/// 包头长度（字节）。
 #[no_mangle]
 pub extern "C" fn ys_header_len() -> u32 {
-    layout::HEADER_LEN as u32
+    pack::v1::HEADER_LEN as u32
 }
 
-/// 错误名写入 `out`（ASCII，不含结尾 0）。
+static ERROR_TABLE: &[Error] = &[
+    Error::BadArgument,
+    Error::BufferTooSmall,
+    Error::Rng,
+    Error::MagicMismatch,
+    Error::VersionUnsupported,
+    Error::HeaderInvalid,
+    Error::LengthInconsistent,
+    Error::AlgUnsupported,
+    Error::FlagsUnknown,
+    Error::Unsigned,
+    Error::KeyUnwrapFailed,
+    Error::ManifestAuthFailed,
+    Error::ManifestInvalid,
+    Error::SignatureInvalid,
+    Error::SenderMismatch,
+    Error::ChunkOrder,
+    Error::ChunkAuthFailed,
+    Error::ChunkMissing,
+    Error::DigestMismatch,
+    Error::BadCode,
+    Error::CodeExhausted,
+    Error::BadPoint,
+    Error::BadCiphertext,
+    Error::Internal,
+];
+
 #[no_mangle]
 pub unsafe extern "C" fn ys_error_name(
     code: i32,
@@ -142,64 +163,30 @@ pub unsafe extern "C" fn ys_error_name(
     cap: usize,
     out_len: *mut usize,
 ) -> i32 {
-    let name = match code {
-        0 => "OK",
-        c => {
-            let mut found = "UNKNOWN";
-            for e in ERROR_TABLE {
-                if e.code() == c {
-                    found = e.name();
-                    break;
-                }
-            }
-            found
-        }
+    let name = if code == 0 {
+        "OK"
+    } else {
+        ERROR_TABLE
+            .iter()
+            .find(|e| e.code() == code)
+            .map(|e| e.name())
+            .unwrap_or("CRYPTO_UNKNOWN")
     };
     rc(write_out(name.as_bytes(), out, cap, out_len))
 }
 
-static ERROR_TABLE: &[Error] = &[
-    Error::BadArgument,
-    Error::BufferTooSmall,
-    Error::Rng,
-    Error::BadMagic,
-    Error::UnsupportedVersion,
-    Error::BadFlags,
-    Error::Truncated,
-    Error::BadKeyRecord,
-    Error::BadSignatureRecord,
-    Error::BadManifestRecord,
-    Error::BlockSequence,
-    Error::DuplicateBlock,
-    Error::MissingBlock,
-    Error::LastFlagMismatch,
-    Error::TagMismatch,
-    Error::ManifestMismatch,
-    Error::SignatureMismatch,
-    Error::TrailingBytes,
-    Error::BadPoint,
-    Error::BadKdf,
-    Error::BadCode,
-    Error::CodeExhausted,
-    Error::BadCiphertext,
-    Error::Internal,
-];
-
 // ---------------------------------------------------------------- SM3 / HMAC / HKDF
 
-/// SM3：`out` 32 字节。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm3(input: *const u8, input_len: usize, out: *mut u8) -> i32 {
     rc((|| {
         let data = as_slice(input, input_len)?;
         let digest = sm3::sm3(data);
-        let out = as_slice_mut(out, 32)?;
-        out.copy_from_slice(&digest);
+        as_slice_mut(out, 32)?.copy_from_slice(&digest);
         Ok(())
     })())
 }
 
-/// HMAC-SM3：`out` 32 字节。
 #[no_mangle]
 pub unsafe extern "C" fn ys_hmac_sm3(
     key: *const u8,
@@ -212,13 +199,11 @@ pub unsafe extern "C" fn ys_hmac_sm3(
         let k = as_slice(key, key_len)?;
         let m = as_slice(msg, msg_len)?;
         let tag = sm3::hmac_sm3(k, m);
-        let out = as_slice_mut(out, 32)?;
-        out.copy_from_slice(&tag);
+        as_slice_mut(out, 32)?.copy_from_slice(&tag);
         Ok(())
     })())
 }
 
-/// HKDF-SM3。
 #[no_mangle]
 pub unsafe extern "C" fn ys_hkdf_sm3(
     ikm: *const u8,
@@ -234,15 +219,13 @@ pub unsafe extern "C" fn ys_hkdf_sm3(
         let ikm = as_slice(ikm, ikm_len)?;
         let salt = as_slice(salt, salt_len)?;
         let info = as_slice(info, info_len)?;
-        let out = as_slice_mut(out, out_len)?;
-        hkdf_sm3(salt, ikm, info, out);
+        hkdf_sm3(salt, ikm, info, as_slice_mut(out, out_len)?);
         Ok(())
     })())
 }
 
 // ---------------------------------------------------------------- SM4 / GCM
 
-/// SM4 单块加密（16 字节）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm4_encrypt_block(
     key: *const u8,
@@ -252,14 +235,11 @@ pub unsafe extern "C" fn ys_sm4_encrypt_block(
     rc((|| {
         let key = fixed::<16>(key)?;
         let block = fixed::<16>(input)?;
-        let ct = sm4::encrypt_block(&key, &block);
-        let out = as_slice_mut(out, 16)?;
-        out.copy_from_slice(&ct);
+        as_slice_mut(out, 16)?.copy_from_slice(&sm4::encrypt_block(&key, &block));
         Ok(())
     })())
 }
 
-/// SM4 单块解密（16 字节）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm4_decrypt_block(
     key: *const u8,
@@ -269,14 +249,11 @@ pub unsafe extern "C" fn ys_sm4_decrypt_block(
     rc((|| {
         let key = fixed::<16>(key)?;
         let block = fixed::<16>(input)?;
-        let pt = sm4::decrypt_block(&key, &block);
-        let out = as_slice_mut(out, 16)?;
-        out.copy_from_slice(&pt);
+        as_slice_mut(out, 16)?.copy_from_slice(&sm4::decrypt_block(&key, &block));
         Ok(())
     })())
 }
 
-/// SM4-GCM 加密：`out` 与明文等长，`tag_out` 16 字节。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm4_gcm_encrypt(
     key: *const u8,
@@ -297,13 +274,11 @@ pub unsafe extern "C" fn ys_sm4_gcm_encrypt(
         let out = as_slice_mut(out, input_len)?;
         let mut tag = [0u8; 16];
         gcm::encrypt(&key, nonce, aad, pt, out, &mut tag);
-        let tag_out = as_slice_mut(tag_out, 16)?;
-        tag_out.copy_from_slice(&tag);
+        as_slice_mut(tag_out, 16)?.copy_from_slice(&tag);
         Ok(())
     })())
 }
 
-/// SM4-GCM 解密：tag 校验失败返回 -15（TAG_MISMATCH）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm4_gcm_decrypt(
     key: *const u8,
@@ -322,16 +297,14 @@ pub unsafe extern "C" fn ys_sm4_gcm_decrypt(
         let aad = as_slice(aad, aad_len)?;
         let ct = as_slice(input, input_len)?;
         let tag = fixed::<16>(tag)?;
-        let pt = gcm::decrypt(&key, nonce, aad, ct, &tag).ok_or(Error::TagMismatch)?;
-        let out = as_slice_mut(out, input_len)?;
-        out.copy_from_slice(&pt);
+        let pt = gcm::decrypt(&key, nonce, aad, ct, &tag).ok_or(Error::ChunkAuthFailed)?;
+        as_slice_mut(out, input_len)?.copy_from_slice(&pt);
         Ok(())
     })())
 }
 
 // ---------------------------------------------------------------- SM2
 
-/// 生成密钥对：`priv_out` 32 字节，`pub_out` 64 字节。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_keygen(
     seed: *const u8,
@@ -343,27 +316,27 @@ pub unsafe extern "C" fn ys_sm2_keygen(
         let seed = as_slice(seed, seed_len)?;
         let mut rng = seeded_rng(seed)?;
         let kp = sm2::keygen(&mut rng);
-        let p = as_slice_mut(priv_out, 32)?;
-        p.copy_from_slice(&kp.private_key);
-        let q = as_slice_mut(pub_out, 64)?;
-        q.copy_from_slice(&kp.public_key);
+        as_slice_mut(priv_out, 32)?.copy_from_slice(&kp.private_key);
+        let pub65 = as_slice_mut(pub_out, 65)?;
+        pub65[0] = 0x04;
+        pub65[1..].copy_from_slice(&kp.public_key);
         Ok(())
     })())
 }
 
-/// 由私钥派生公钥。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_pubkey(priv_key: *const u8, pub_out: *mut u8) -> i32 {
     rc((|| {
         let sk = fixed::<32>(priv_key)?;
         let pk = sm2::public_from_private(&sk)?;
-        let q = as_slice_mut(pub_out, 64)?;
-        q.copy_from_slice(&pk);
+        let pub65 = as_slice_mut(pub_out, 65)?;
+        pub65[0] = 0x04;
+        pub65[1..].copy_from_slice(&pk);
         Ok(())
     })())
 }
 
-/// SM2 加密（C1C3C2 平文拼接）。
+/// 加密：公钥 65 字节（`0x04‖X‖Y`），输出 `0x04‖C1‖C3‖C2`（= 96+明文长度+1）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_encrypt(
     public_key: *const u8,
@@ -376,16 +349,23 @@ pub unsafe extern "C" fn ys_sm2_encrypt(
     out_len: *mut usize,
 ) -> i32 {
     rc((|| {
-        let pk = fixed::<64>(public_key)?;
+        let pub65 = fixed::<65>(public_key)?;
+        if pub65[0] != 0x04 {
+            return Err(Error::BadPoint);
+        }
         let seed = as_slice(seed, seed_len)?;
         let msg = as_slice(input, input_len)?;
+        let pub64: [u8; 64] = pub65[1..].try_into().expect("64");
         let mut rng = seeded_rng(seed)?;
-        let ct = sm2::encrypt_with_rng(&pk, msg, &mut rng)?;
-        write_out(&ct, out, out_cap, out_len)
+        let ct = sm2::encrypt_with_rng(&pub64, msg, &mut rng)?;
+        let mut outv = Vec::with_capacity(ct.len() + 1);
+        outv.push(0x04);
+        outv.extend_from_slice(&ct);
+        write_out(&outv, out, out_cap, out_len)
     })())
 }
 
-/// SM2 解密（C1C3C2）。
+/// 解密：输入 `0x04‖C1‖C3‖C2`。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_decrypt(
     priv_key: *const u8,
@@ -398,12 +378,15 @@ pub unsafe extern "C" fn ys_sm2_decrypt(
     rc((|| {
         let sk = fixed::<32>(priv_key)?;
         let ct = as_slice(input, input_len)?;
-        let msg = sm2::decrypt(&sk, ct)?;
+        if ct.len() < 98 || ct[0] != 0x04 {
+            return Err(Error::BadCiphertext);
+        }
+        let msg = sm2::decrypt(&sk, &ct[1..])?;
         write_out(&msg, out, out_cap, out_len)
     })())
 }
 
-/// SM2 签名：`sig_out` 64 字节（r||s）。
+/// 签名：输入任意消息字节，输出 DER（70..72 字节）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_sign(
     priv_key: *const u8,
@@ -412,32 +395,46 @@ pub unsafe extern "C" fn ys_sm2_sign(
     msg: *const u8,
     msg_len: usize,
     sig_out: *mut u8,
+    sig_cap: usize,
+    sig_len_out: *mut usize,
 ) -> i32 {
     rc((|| {
         let sk = fixed::<32>(priv_key)?;
         let seed = as_slice(seed, seed_len)?;
         let msg = as_slice(msg, msg_len)?;
         let mut rng = seeded_rng(seed)?;
-        let sig = sm2::sign(&sk, msg, sm2::DEFAULT_ID, &mut rng)?;
-        let out = as_slice_mut(sig_out, 64)?;
-        out.copy_from_slice(&sig);
-        Ok(())
+        let raw = sm2::sign(&sk, msg, sm2::DEFAULT_ID, &mut rng)?;
+        let mut r = [0u8; 32];
+        let mut s = [0u8; 32];
+        r.copy_from_slice(&raw[..32]);
+        s.copy_from_slice(&raw[32..]);
+        let der = crate::der::encode_signature(&r, &s);
+        write_out(&der, sig_out, sig_cap, sig_len_out)
     })())
 }
 
-/// SM2 验签：1 = 通过，0 = 不通过，负数 = 参数/曲线错误。
+/// 验签：1 = 通过，0 = 不通过，负数 = 参数/曲线错误。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_verify(
     public_key: *const u8,
     msg: *const u8,
     msg_len: usize,
-    sig: *const u8,
+    sig_der: *const u8,
+    sig_len: usize,
 ) -> i32 {
     let r = (|| -> Result<bool> {
-        let pk = fixed::<64>(public_key)?;
+        let pub65 = fixed::<65>(public_key)?;
+        if pub65[0] != 0x04 {
+            return Err(Error::BadPoint);
+        }
         let msg = as_slice(msg, msg_len)?;
-        let sig = fixed::<64>(sig)?;
-        sm2::verify(&pk, msg, sm2::DEFAULT_ID, &sig)
+        let der = as_slice(sig_der, sig_len)?;
+        let (r, s) = crate::der::decode_signature(der)?;
+        let mut raw = [0u8; 64];
+        raw[..32].copy_from_slice(&r);
+        raw[32..].copy_from_slice(&s);
+        let pub64: [u8; 64] = pub65[1..].try_into().expect("64");
+        sm2::verify(&pub64, msg, sm2::DEFAULT_ID, &raw)
     })();
     match r {
         Ok(true) => 1,
@@ -448,19 +445,33 @@ pub unsafe extern "C" fn ys_sm2_verify(
 
 // ---------------------------------------------------------------- 用户码
 
-/// 由公钥派生 4 位用户码，`out` 4 字节 ASCII（大写）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_user_code(public_key: *const u8, out: *mut u8) -> i32 {
     rc((|| {
-        let pk = fixed::<64>(public_key)?;
-        let code = code::from_public_key(&pk);
-        let out = as_slice_mut(out, 4)?;
-        out.copy_from_slice(code.as_bytes());
+        let pub65 = fixed::<65>(public_key)?;
+        if pub65[0] != 0x04 {
+            return Err(Error::BadPoint);
+        }
+        let code = code::from_public_key(&pub65);
+        as_slice_mut(out, 4)?.copy_from_slice(code.as_bytes());
         Ok(())
     })())
 }
 
-/// 规范化用户输入（大小写 / O→0 / I,L→1 / 去 `-`），`out` 4 字节 ASCII。
+/// 校验字符（第 5 位，展示用），写入 `out` 1 字节。
+#[no_mangle]
+pub unsafe extern "C" fn ys_check_symbol(public_key: *const u8, out: *mut u8) -> i32 {
+    rc((|| {
+        let pub65 = fixed::<65>(public_key)?;
+        if pub65[0] != 0x04 {
+            return Err(Error::BadPoint);
+        }
+        let sym = code::check_symbol(&pub65) as u8;
+        as_slice_mut(out, 1)?.copy_from_slice(&[sym]);
+        Ok(())
+    })())
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn ys_normalize_code(
     input: *const u8,
@@ -471,15 +482,14 @@ pub unsafe extern "C" fn ys_normalize_code(
         let raw = as_slice(input, input_len)?;
         let s = core::str::from_utf8(raw).map_err(|_| Error::BadCode)?;
         let normalized = code::normalize(s)?;
-        let out = as_slice_mut(out, 4)?;
-        out.copy_from_slice(normalized.as_bytes());
+        as_slice_mut(out, 4)?.copy_from_slice(normalized.as_bytes());
         Ok(())
     })())
 }
 
 // ---------------------------------------------------------------- 加密包
 
-/// 打包。返回包字节；`out_len` 写实际长度（缓冲区不足时也写所需长度）。
+/// 打包（`YSPK/1.0`）。
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn ys_pack(
@@ -489,7 +499,10 @@ pub unsafe extern "C" fn ys_pack(
     name_len: usize,
     mime: *const u8,
     mime_len: usize,
-    block_size: u32,
+    ext: *const u8,
+    ext_len: usize,
+    created_at_ms: u64,
+    chunk_size: u32,
     seed: *const u8,
     seed_len: usize,
     data: *const u8,
@@ -499,12 +512,13 @@ pub unsafe extern "C" fn ys_pack(
     out_len: *mut usize,
 ) -> i32 {
     rc((|| {
-        let recipient_public = fixed::<64>(recipient_public)?;
+        let recipient_public = fixed::<65>(recipient_public)?;
         let sender_private = fixed::<32>(sender_private)?;
         let name =
             core::str::from_utf8(as_slice(name, name_len)?).map_err(|_| Error::BadArgument)?;
         let mime =
             core::str::from_utf8(as_slice(mime, mime_len)?).map_err(|_| Error::BadArgument)?;
+        let ext = core::str::from_utf8(as_slice(ext, ext_len)?).map_err(|_| Error::BadArgument)?;
         let seed = as_slice(seed, seed_len)?;
         let data = as_slice(data, data_len)?;
         let mut rng = seeded_rng(seed)?;
@@ -513,16 +527,27 @@ pub unsafe extern "C" fn ys_pack(
             sender_private: &sender_private,
             name,
             mime,
-            block_size: if block_size == 0 {
-                layout::DEFAULT_BLOCK_SIZE
+            ext,
+            created_at_ms,
+            chunk_size: if chunk_size == 0 {
+                pack::v1::DEFAULT_CHUNK_SIZE
             } else {
-                block_size
+                chunk_size
             },
             data,
         };
-        let pack = pack::pack(&input, &mut rng)?;
-        write_out(&pack, out, out_cap, out_len)
+        let envelope = pack::pack(&input, &mut rng)?;
+        write_out(&envelope, out, out_cap, out_len)
     })())
+}
+
+unsafe fn opt_code<'a>(ptr: *const u8, len: usize) -> Result<Option<&'a str>> {
+    if len == 0 {
+        return Ok(None);
+    }
+    let raw = as_slice(ptr, len)?;
+    let s = core::str::from_utf8(raw).map_err(|_| Error::BadCode)?;
+    Ok(Some(s))
 }
 
 /// 只解清单（不解数据块），输出 JSON 元信息。
@@ -531,7 +556,8 @@ pub unsafe extern "C" fn ys_unpack_meta(
     pack: *const u8,
     pack_len: usize,
     recipient_private: *const u8,
-    sender_public: *const u8,
+    expected_sender_code: *const u8,
+    expected_sender_code_len: usize,
     out: *mut u8,
     out_cap: usize,
     out_len: *mut usize,
@@ -539,20 +565,25 @@ pub unsafe extern "C" fn ys_unpack_meta(
     rc((|| {
         let pack_bytes = as_slice(pack, pack_len)?;
         let sk = fixed::<32>(recipient_private)?;
-        let pk = fixed::<64>(sender_public)?;
-        let (header, manifest) = pack::open_manifest(pack_bytes, &sk, &pk)?;
-        let json = manifest_json(&header, &manifest);
+        let (header, manifest, sender_public, sender_code) = pack::open_manifest(pack_bytes, &sk)?;
+        if let Some(expected) = opt_code(expected_sender_code, expected_sender_code_len)? {
+            if sender_code != expected {
+                return Err(Error::SenderMismatch);
+            }
+        }
+        let json = manifest_json(&header, &manifest, &sender_public, &sender_code);
         write_out(json.as_bytes(), out, out_cap, out_len)
     })())
 }
 
-/// 完整解包（解密全部数据块），输出明文。
+/// 完整解包（严格模式），输出明文。
 #[no_mangle]
 pub unsafe extern "C" fn ys_unpack(
     pack: *const u8,
     pack_len: usize,
     recipient_private: *const u8,
-    sender_public: *const u8,
+    expected_sender_code: *const u8,
+    expected_sender_code_len: usize,
     out: *mut u8,
     out_cap: usize,
     out_len: *mut usize,
@@ -560,8 +591,8 @@ pub unsafe extern "C" fn ys_unpack(
     rc((|| {
         let pack_bytes = as_slice(pack, pack_len)?;
         let sk = fixed::<32>(recipient_private)?;
-        let pk = fixed::<64>(sender_public)?;
-        let unpacked = pack::unpack(pack_bytes, &sk, &pk)?;
+        let expected = opt_code(expected_sender_code, expected_sender_code_len)?;
+        let unpacked = pack::unpack(pack_bytes, &sk, expected)?;
         write_out(&unpacked.data, out, out_cap, out_len)
     })())
 }
@@ -582,31 +613,32 @@ fn json_escape(s: &str) -> String {
     out
 }
 
-fn manifest_json(header: &Header, manifest: &Manifest) -> String {
-    let mut s = String::new();
-    s.push('{');
-    s.push_str(&format!("\"name\":\"{}\"", json_escape(&manifest.name)));
-    s.push_str(&format!(",\"mime\":\"{}\"", json_escape(&manifest.mime)));
-    s.push_str(&format!(",\"size\":{}", manifest.plain_size));
-    s.push_str(&format!(",\"block_size\":{}", manifest.block_size));
-    s.push_str(&format!(",\"block_count\":{}", manifest.block_count));
-    s.push_str(&format!(",\"version\":{}", layout::VERSION));
-    s.push_str(",\"file_id\":\"");
-    for b in header.file_id.iter() {
-        s.push_str(&format!("{:02x}", b));
+fn hex(b: &[u8]) -> String {
+    let mut s = String::with_capacity(b.len() * 2);
+    for x in b {
+        s.push_str(&format!("{:02x}", x));
     }
-    s.push('"');
-    s.push_str(",\"block_digests\":[");
-    for (i, d) in manifest.block_digests.iter().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
-        s.push('"');
-        for b in d.iter() {
-            s.push_str(&format!("{:02x}", b));
-        }
-        s.push('"');
-    }
-    s.push_str("]}");
     s
+}
+
+fn manifest_json(
+    header: &pack::Header,
+    manifest: &Manifest,
+    sender_public: &[u8; 65],
+    sender_code: &str,
+) -> String {
+    format!(
+        "{{\"version\":\"{}\",\"name\":\"{}\",\"mime\":\"{}\",\"ext\":\"{}\",\"size\":{},\"chunk_size\":{},\"chunk_count\":{},\"created_at_ms\":{},\"sender_code\":\"{}\",\"sender_pub\":\"{}\",\"kdf_salt\":\"{}\"}}",
+        pack::v1::VERSION_STRING,
+        json_escape(&manifest.name),
+        json_escape(&manifest.mime),
+        json_escape(&manifest.ext),
+        manifest.file_size,
+        manifest.chunk_size,
+        manifest.chunk_count,
+        manifest.created_at_ms,
+        sender_code,
+        hex(sender_public),
+        hex(&header.kdf_salt),
+    )
 }

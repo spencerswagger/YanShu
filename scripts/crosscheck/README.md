@@ -104,10 +104,14 @@ GmSSL 的 `sm2_do_encrypt` / `sm2_sign` 内部调 `rand_bytes()`。`oracle.c` **
 ## 实测（GmSSL 3.1.1 / Rust 1.99.1）
 
 ```text
-本地 GmSSL 全开：PASS 77 / FAIL 0 / SKIP 0
-仅宿主对照值：  PASS 48 / FAIL 0 / SKIP 20（SKIP = 只有本机 GmSSL 才能做的反向项）
-两个都没有：    PASS 6  / FAIL 0 / SKIP 62（仅自洽类检查，退出码 0）
+本地 GmSSL 全开：PASS 84 / FAIL 0 / SKIP 0
+仅宿主对照值：  只跑「宿主能给的值」，反向项 SKIP（退出码 0）
+两个都没有：    全部 SKIP + 自洽类检查，退出码 0
 ```
+
+> 宿主侧要填的对照值清单见仓库根目录 `vectors/host-crosscheck.json`（+ `.md` 表格），
+> 条目覆盖 SM3 / HMAC-SM3 / HKDF-SM3 / SM4-GCM / SM2 加密 / SM2 签名（`YSAUTH1` 与 `YSSIG1`）/
+> 两个完整 `YSPK/1.0` 包。
 
 ## 文件
 

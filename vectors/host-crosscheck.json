@@ -1,0 +1,260 @@
+{
+  "meta": {
+    "contract": "docs/CRYPTO-PACK.md v1（YSPK/1.0）",
+    "api_contract": "docs/API.md §1.3（SIG_INPUT / YSAUTH1）",
+    "generated_by": "yanshu-sm gen-host-crosscheck",
+    "entries": 22,
+    "encoding": "全部 hex 小写、无 0x 前缀；整数大端",
+    "how_to_use": "按 conventions 复算每条，把结果与 expected_hex 逐字节比；不一致时先查字节序/AAD 字段顺序/KDF info",
+    "tool_legend": {
+      "openssl": "OpenSSL 3.5.7 命令行可直接算（SM3 / HMAC）",
+      "openssl-lib": "需要 OpenSSL 库（EVP_KDF 等），CLI 子命令不足以完成",
+      "gmssl-cli": "需要 GmSSL 命令行（gmssl sm4 -gcm），OpenSSL CLI 的 enc 不支持 AEAD",
+      "gmssl-lib": "必须 GmSSL 库（可固定 k）才能逐字节；OpenSSL 只能做解密/验签方向"
+    }
+  },
+  "entries": [
+    {
+      "id": "sm3-001",
+      "algo": "SM3",
+      "plaintext": "",
+      "expected_len": 32,
+      "expected_encoding": "hex",
+      "expected_hex": "1ab21d8355cfa17f8e61194831e81a8f22bec8c728fefb747ed035eb5082aa2b",
+      "tool_requirement": "openssl",
+      "verify_mode": "byte-exact",
+      "note": "空串"
+    },
+    {
+      "id": "sm3-002",
+      "algo": "SM3",
+      "plaintext": "00",
+      "expected_len": 32,
+      "expected_encoding": "hex",
+      "expected_hex": "2daef60e7a0b8f5e024c81cd2ab3109f2b4f155cf83adeb2ae5532f74a157fdf",
+      "tool_requirement": "openssl",
+      "verify_mode": "byte-exact",
+      "note": "1 字节 0x00"
+    },
+    {
+      "id": "sm3-003",
+      "algo": "SM3",
+      "plaintext": "616263",
+      "expected_len": 32,
+      "expected_encoding": "hex",
+      "expected_hex": "66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0",
+      "tool_requirement": "openssl",
+      "verify_mode": "byte-exact",
+      "note": "标准 abc"
+    },
+    {
+      "id": "sm3-004",
+      "algo": "SM3",
+      "plaintext": "e99b81e4b9a6efbc9ae4b880e6aca1e58fafe4bfa1e79a84e4bca0e8be93",
+      "expected_len": 32,
+      "expected_encoding": "hex",
+      "expected_hex": "b44e0a32eb7da352dedb4d13985e6c5507d5ed857e4834f7342ba0139fecbd8b",
+      "tool_requirement": "openssl",
+      "verify_mode": "byte-exact",
+      "note": "中文 UTF-8（14 个汉字 + 标点）"
+    },
+    {
+      "id": "sm3-005",
+      "algo": "SM3",
+      "plaintext": null, "plaintext_len": 1048576, "plaintext_rule": "byte[i] = (i*31 + 7) & 0xff, i = 0..1048575",
+      "expected_len": 32,
+      "expected_encoding": "hex",
+      "expected_hex": "d0b2cd4a34e3fe514d41a3546f8f88a8541ccf89b2243ae1a663f077ae225fb7",
+      "tool_requirement": "openssl",
+      "verify_mode": "byte-exact",
+      "note": "1 MiB 数据只给摘要与生成规则（不塞全文）"
+    },
+    {
+      "id": "hmac-001",
+      "algo": "HMAC-SM3",
+      "key": "6b6579", "plaintext": "54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f67",
+      "expected_len": 32,
+      "expected_encoding": "hex",
+      "expected_hex": "bd4a34077888162b210645b8ebf74b9af357303789357a27c7fc457244ebd398",
+      "tool_requirement": "openssl",
+      "verify_mode": "byte-exact",
+      "note": "HMAC 块长 64；OpenSSL 3.x 用 -mac HMAC -digest SM3"
+    },
+    {
+      "id": "hkdf-001",
+      "algo": "HKDF-SM3",
+      "ikm": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "salt": "000102030405060708090a0b0c0d0e0f", "info": "59414e5348552f76312f6368756e6b2d6b6579", "info_text": "YANSHU/v1/chunk-key",
+      "expected_len": 16,
+      "expected_encoding": "hex",
+      "expected_hex": "f8a4b7977b28e093f1bbc91f62089400",
+      "tool_requirement": "openssl-lib",
+      "verify_mode": "byte-exact",
+      "note": "RFC 5869 结构，PRF=HMAC-SM3；OpenSSL CLI 无 HKDF-SM3 子命令，需 EVP_KDF 或脚本"
+    },
+    {
+      "id": "hkdf-002",
+      "algo": "HKDF-SM3",
+      "ikm": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "salt": "000102030405060708090a0b0c0d0e0f", "info": "59414e5348552f76312f6d616e69666573742d6b6579", "info_text": "YANSHU/v1/manifest-key",
+      "expected_len": 16,
+      "expected_encoding": "hex",
+      "expected_hex": "e05971b0c4e3a8f648d9854a064cb648",
+      "tool_requirement": "openssl-lib",
+      "verify_mode": "byte-exact",
+      "note": "同 hkdf-001，info 换成清单密钥"
+    },
+    {
+      "id": "sm4gcm-001",
+      "algo": "SM4-GCM",
+      "key": "00000000000000000000000000000000", "nonce": "000000000000000000000000", "aad": "", "plaintext": "",
+      "expected_len": 16,
+      "expected_encoding": "hex（ciphertext ‖ tag，tag 为末尾 16 字节）",
+      "expected_hex": "232f0cfe308b49ea6fc88229b5dc858d",
+      "tool_requirement": "gmssl-cli",
+      "verify_mode": "byte-exact",
+      "note": "空明文 / 零 key / 零 nonce / 无 AAD"
+    },
+    {
+      "id": "sm4gcm-002",
+      "algo": "SM4-GCM",
+      "key": "01010101010101010101010101010101", "nonce": "aaaaaaaaaaaaaaaaaaaaaaaa", "aad": "", "plaintext": "61",
+      "expected_len": 17,
+      "expected_encoding": "hex（ciphertext ‖ tag，tag 为末尾 16 字节）",
+      "expected_hex": "288bc6ec4d09dcbd2d50954f4af77f1882",
+      "tool_requirement": "gmssl-cli",
+      "verify_mode": "byte-exact",
+      "note": "1 字节明文"
+    },
+    {
+      "id": "sm4gcm-003",
+      "algo": "SM4-GCM",
+      "key": "02020202020202020202020202020202", "nonce": "000000000000000000000001", "aad": "", "plaintext": "000102030405060708090a0b0c0d0e0f",
+      "expected_len": 32,
+      "expected_encoding": "hex（ciphertext ‖ tag，tag 为末尾 16 字节）",
+      "expected_hex": "638bc04b08bee73bad7e099ef9bc257a703c0dc7be473bcddbfa5f8347b82325",
+      "tool_requirement": "gmssl-cli",
+      "verify_mode": "byte-exact",
+      "note": "正好一整块 16 字节"
+    },
+    {
+      "id": "sm4gcm-004",
+      "algo": "SM4-GCM",
+      "key": "03030303030303030303030303030303", "nonce": "5a5a5a5a5a5a5a5a5a5a5a5a", "aad": "", "plaintext": "000102030405060708090a0b0c0d0e",
+      "expected_len": 31,
+      "expected_encoding": "hex（ciphertext ‖ tag，tag 为末尾 16 字节）",
+      "expected_hex": "3fad88e1279b509ce506049687156248ef85f00b81e25f5268a848c0cc956c",
+      "tool_requirement": "gmssl-cli",
+      "verify_mode": "byte-exact",
+      "note": "非整块 15 字节"
+    },
+    {
+      "id": "sm4gcm-005",
+      "algo": "SM4-GCM",
+      "key": "04040404040404040404040404040404", "nonce": "111111111111111111111111", "aad": "00050a0f14191e23282d32373c41464b50555a5f", "plaintext": "0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9aa7b4c1cedbe8f5020f1c293643505d6a7784919eabb8c5d2dfecf90613202d3a4754616e7b8895a2afbcc9d6e3f0fd0a1724313e4b5865727f8c99a6b3c0cddae7f4010e1b2835424f5c697683909daab7c4d1deebf805121f2c394653606d7a8794a1aebbc8d5e2effc091623303d4a5764717e8b98a5b2bfccd9e6f3000d1a2734414e5b6875828f9ca9b6c3d0ddeaf704111e2b3845525f6c798693a0adbac7d4e1eefb0815222f3c495663707d8a97a4b1becbd8e5f2ff0c192633404d5a6774818e9ba8b5c2cfdce9f603101d2a3744515e6b7885929facb9c6d3e0edfa0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9aa7b4c1cedbe8f5020f1c293643505d6a7784919eabb8c5d2dfecf90613202d3a4754616e7b8895a2afbcc9d6e3f0fd0a1724313e4b5865727f8c99a6b3c0cddae7f4010e1b2835424f5c697683909daab7c4d1deebf805121f2c394653606d7a8794a1aebbc8d5e2effc091623303d4a5764717e8b98a5b2bfccd9e6f3000d1a2734414e5b6875828f9ca9b6c3d0ddeaf704111e2b3845525f6c798693a0adbac7d4e1eefb0815222f3c495663707d8a97a4b1becbd8e5f2ff0c192633404d5a6774818e9ba8b5c2cfdce9f603101d2a3744515e6b7885929facb9c6d3e0edfa0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9aa7b4c1cedbe8f5020f1c293643505d6a7784919eabb8c5d2dfecf90613202d3a4754616e7b8895a2afbcc9d6e3f0fd0a1724313e4b5865727f8c99a6b3c0cddae7f4010e1b2835424f5c697683909daab7c4d1deebf805121f2c394653606d7a8794a1aebbc8d5e2effc091623303d4a5764717e8b98a5b2bfccd9e6f3000d1a2734414e5b6875828f9ca9b6c3d0ddeaf704111e2b3845525f6c798693a0adbac7d4e1eefb0815222f3c495663707d8a97a4b1becbd8e5f2ff0c192633404d5a6774818e9ba8b5c2cfdce9f603101d2a3744515e6b7885929facb9c6d3e0edfa0714212e3b4855626f7c8996a3b0bdcad7e4f1fe0b1825323f4c596673808d9aa7b4c1cedbe8f5020f1c293643505d6a7784919eabb8c5d2dfecf90613202d3a4754616e7b8895a2afbcc9d6e3f0fd0a1724313e4b5865727f8c99a6b3c0cddae7f4010e1b2835424f5c697683909daab7c4d1deebf805121f2c394653606d7a8794a1aebbc8d5e2effc091623303d4a5764717e8b98a5b2bfccd9e6f3000d1a2734414e5b6875828f9ca9b6c3d0ddeaf704111e2b3845525f6c798693a0adbac7d4e1eefb0815222f3c495663707d8a97a4b1becbd8e5f2ff0c192633404d5a6774818e9ba8b5c2",
+      "expected_len": 1016,
+      "expected_encoding": "hex（ciphertext ‖ tag，tag 为末尾 16 字节）",
+      "expected_hex": "2293a6767921f3f8987c47aa522bd8bedf766acba7eb4c1ced207bc74b3d54f3cb32d70cf3f6f3d1fee92b084669e9a5bddf05f0cce5550cd58e224ce7b674cd5ec26f1db48842a169e060e1503983de2a54486484cf6d22c0066f5b1019b87434de25503bc61190f96466df76c5e02dddbfb047846cf200fb4a2c4b41dd63f160c99d38839a85c09b046d816ed153468466ecd752c63a1395c4449f4ec871238d20d28c79a5f989c56697df8b9d82e5d84cc4266586bb63ae00a1ceeff89b1156cf1037252c565d62c01eeebe062f028c4a00ecaeccf22a14215644669e16200021921893d2e84c225721f6c4827ab723b1c044380f1828144feb6c0cc5b130ca6c5f271ef971e08ca05e993d47cf86ae01f88f52cd7ab27972588c8a8bd24a944f9ed464cbb168202fb481cec338e46341c740c4d107cceb06031c514b89da113864b3e720f885bd99d687085b93f002370a213afceb63040bd2a607c6c5e9b19ed01266e0609437e8c44171dfff7880a0de473de077608c8e02b4f19427b0cc8da1938cd5a0f739e1600d7e11322d92268ab0ba41d8ac0e92e9d3c772c7069609e72049c9ad1d3e55cb33bd43f39d1f982c0b5140a4857928105c6148b1ca24baab45f85cf52c7cde58cac88a2449f4df4c7451b0a3e04a4cdcc83ab0fca181f9cbe5bf2da390f670e4cfcbd534af172ea8656c9a5fd6abed29d3bbb0d3b9b23fdda90316a44a60dbf644ee8b97dd9800488dcfdf097f9ff7565a225b22f4a4268bafe870d34a922d3c5f550d86bf6784dc4079e314741865de7afad8c57659783a10608a2b2894e71874f10d71a63fd7c29c7fdd489c7a645cad43bf30c432f2ca04ee2214eef9ec88822cb88b4bde655110041ea36dc20ee3f8311d91577f146198ce8eff503d474b37d82e5dc884802854f524cead403eca3f7aff1393f3d671c320a1d69e90d63072a47839474d5f7be8548fb78f28ff615266120777de81c8bec70d118e84f6389d98cc1460b05c513f2c086af03e506db4a4d923f2665ccef3c743950a1f28080eb8a4d75243e73a066d9755524ed721c91280d5bca9377a0c62904efa711925a8a7ad39b13600327af2e8dff2c2a147ea907c6ac3a01d02774333ba0d975ce2e0a92fa759fd588faaba23fbe4a6ace8c295d7679a21cb137c9515c7ff8bed254e852bc0636238ac37b60133de76b5df6c067085a15a22a10a70f374bfb459a0dec6cd0f08c38ebec9ff25c3cf1af3340e14cae5dc9ce3dba3215b5e5331ffef3b1ef23a576735b58b0e60a73b5c30bd4d22d47da28923fd6cc3f83f149c1c0c9ed2e5b6cb7d69c17effd2b38fba04324864ba1b8626fde0e90bf432a6c79158b7d4c1f47f3c90de6bea0a17e8597da620fe70f73df562b9b355fbbbff1e24572cd7ef781dbb9023e102959a2d",
+      "tool_requirement": "gmssl-cli",
+      "verify_mode": "byte-exact",
+      "note": "跨块 1000 字节 + 20 字节 AAD"
+    },
+    {
+      "id": "sm4gcm-006",
+      "algo": "SM4-GCM",
+      "key": "05050505050505050505050505050505", "nonce": "000000000000000000000001", "aad": "015953504b010000100000000000010000000000000005000000000100000005", "plaintext": "68656c6c6f",
+      "expected_len": 21,
+      "expected_encoding": "hex（ciphertext ‖ tag，tag 为末尾 16 字节）",
+      "expected_hex": "95e7baf4752ac502c6dc9c668e6fa35eef95e49f49",
+      "tool_requirement": "gmssl-cli",
+      "verify_mode": "byte-exact",
+      "note": "契约 §15.2 块 0：真实 AAD_CHUNK(32B) + 块 nonce（末块）"
+    },
+    {
+      "id": "sm2-enc-001",
+      "algo": "SM2-encrypt",
+      "pub": "0409f9df311e5421a150dd7d161e4bc5c672179fad1833fc076bb08ff356f35020ccea490ce26775a52dc6ea718cc1aa600aed05fbf35e084a6632f6072da9ad13", "k": "59276e27d506861a16680f3ad9c02dccef3cc1fa3cdbe4ce6d54b80deac1bc21", "plaintext": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "expected_len": 129,
+      "expected_encoding": "hex（0x04 ‖ C1.x(32) ‖ C1.y(32) ‖ C3(32) ‖ C2）",
+      "expected_hex": "0404ebfc718e8d1798620432268e77feb6415e2ede0e073c0f4f640ecd2e149a73e858f9d81e5430a57b36daab8f950a3c64e6ee6a63094d99283aff767e124df0f2510ae3cfc74e4eb31b5460e61a55a59c1ad9f8a1b56fcfe425e00b3a6a467344e70dd8f4bfee133f6f597fb2ff6946147d8c1092763f5d3ceaf6d74f234985",
+      "tool_requirement": "gmssl-lib",
+      "verify_mode": "byte-exact-with-fixed-k",
+      "note": "契约 §15.1 夹具：封装 32 字节 DK（长度必须 32）"
+    },
+    {
+      "id": "sm2-enc-002",
+      "algo": "SM2-encrypt",
+      "pub": "04bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d", "k": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0", "plaintext": "00",
+      "expected_len": 98,
+      "expected_encoding": "hex（0x04 ‖ C1.x(32) ‖ C1.y(32) ‖ C3(32) ‖ C2）",
+      "expected_hex": "04d2d14495815a955c95893f971e88c6d39e5382967b73b601a485a4a698eabec351d6ddc9e82d784e060d3ca01ae7ca2b5373b009b0169e9f653e7c5725d7b9dd9725dca15bdd7e77149f3e9a68d8c7103698a46438d57848d613beb4c3765ba823",
+      "tool_requirement": "gmssl-lib",
+      "verify_mode": "byte-exact-with-fixed-k",
+      "note": "1 字节边界（每个实现都应支持的最小长度）"
+    },
+    {
+      "id": "sm2-sign-001",
+      "algo": "SM2-sign",
+      "priv": "00c1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f", "pub": "04bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d", "k": "6cb28d99385c175c94f94e934817663fc176d925dd72b727260dbaae1fb2f96f", "sig_input": "5953415554483101000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f4157515704bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d", "sig_input_len": 109,
+      "expected_len": 70,
+      "expected_encoding": "DER（SEQUENCE{r,s}，70..72 字节）",
+      "expected_hex": "304402200c6522f534a5fe98b0b0687da4eeb800e3692c92140375076527ac7e04f3a3400220476791163ef37ea8d8978f8ff2aef3e7aaa1d96f646d57430f965dd77bab7a89",
+      "tool_requirement": "gmssl-lib",
+      "verify_mode": "byte-exact-with-fixed-k",
+      "note": "API §1.3 REGISTER（CODE=AWQW）"
+    },
+    {
+      "id": "sm2-sign-002",
+      "algo": "SM2-sign",
+      "priv": "00c1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f", "pub": "04bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d", "k": "6cb28d99385c175c94f94e934817663fc176d925dd72b727260dbaae1fb2f96f", "sig_input": "5953415554483103000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f4157515757544a4600000000000000050010000000000001000001e58625ec587744caa7bdf47f65120dc5ce3bb41d9ddc72c1fc0a21224a1a814179", "sig_input_len": 100,
+      "expected_len": 71,
+      "expected_encoding": "DER（SEQUENCE{r,s}，70..72 字节）",
+      "expected_hex": "30450220340401900db5f3611004aca6c49854e9a0955fe4eccb0787511a7f3423cc1163022100af37b2e8f2cb888dfc8c5e707b698fd72121ea58240d15d6b6a5fb7c0a1ced3c",
+      "tool_requirement": "gmssl-lib",
+      "verify_mode": "byte-exact-with-fixed-k",
+      "note": "API §1.3 TRANSFER_CREATE（prelude_sm3 取契约 §15.2 的 prelude）"
+    },
+    {
+      "id": "sm2-sign-003",
+      "algo": "SM2-sign",
+      "priv": "00c1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f", "pub": "04bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d", "k": "6cb28d99385c175c94f94e934817663fc176d925dd72b727260dbaae1fb2f96f", "sig_input": "5953415554483102000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f41575157000ce99b81e4b9a6e794a8e688b7", "sig_input_len": 58,
+      "expected_len": 72,
+      "expected_encoding": "DER（SEQUENCE{r,s}，70..72 字节）",
+      "expected_hex": "3046022100e366591e365936578b960d62621f545a510c9aeac6b30c2eda750afe60f1a6f7022100d4692df4a2a38d59ddb0011c2f63a934200cd4892e84308e7c6a543f6ac7f6d2",
+      "tool_requirement": "gmssl-lib",
+      "verify_mode": "byte-exact-with-fixed-k",
+      "note": "API §1.3 NICKNAME_UPDATE（昵称 UTF-8）"
+    },
+    {
+      "id": "sm2-sign-004",
+      "algo": "SM2-sign",
+      "priv": "00c1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f", "pub": "04bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d", "k": "6cb28d99385c175c94f94e934817663fc176d925dd72b727260dbaae1fb2f96f", "sig_input": "59535349473101005953504b010000700000000201010101001000000000000100000000000000050000000000000081000000000000006d0000005d00000041000102030405060708090a0b0c0d0e0f04bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d186874ecd599472da43a0d5a866014eeb5b072e634f2b72b67ec329825dafbb48343ff0ba9b0063b1fe02070b21d20c6b3e86781a5e9a5463f72040e925397a7cb97e6b8d25f6065aede90354b013789ecbe2c6662730b6faa60bdd0f1578349057322670a37cac504041ce16f", "sig_input_len": 254,
+      "expected_len": 70,
+      "expected_encoding": "DER（SEQUENCE{r,s}，70..72 字节）",
+      "expected_hex": "3044022063287a23c4ed9288dd091ad23495200bf98ed1e89cf1ffaf6ecba6013ec5b413022035654a55f88a4a5960318fbebdf6c0585354f2d471c15a7a0b48b1df91f3c567",
+      "tool_requirement": "gmssl-lib",
+      "verify_mode": "byte-exact-with-fixed-k",
+      "note": "契约 §10.2 包签名 SIG_INPUT（YSSIG1，§15.5 样例）"
+    },
+    {
+      "id": "yspk-v1-min",
+      "algo": "YSPK/1.0 pack",
+      "recipient_pub": "0409f9df311e5421a150dd7d161e4bc5c672179fad1833fc076bb08ff356f35020ccea490ce26775a52dc6ea718cc1aa600aed05fbf35e084a6632f6072da9ad13", "sender_priv": "00c1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f", "dk": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "kdf_salt": "000102030405060708090a0b0c0d0e0f", "k_enc": "59276e27d506861a16680f3ad9c02dccef3cc1fa3cdbe4ce6d54b80deac1bc21", "k_sig": "6cb28d99385c175c94f94e934817663fc176d925dd72b727260dbaae1fb2f96f", "created_at_ms": 1767225600000, "chunk_size": 1048576, "file_name": "hi.txt", "mime": "text/plain", "ext": "txt", "plaintext": "68656c6c6f",
+      "expected_len": 522,
+      "expected_encoding": "hex（完整包字节）",
+      "expected_hex": "5953504b010000700000000201010101001000000000000100000000000000050000000000000081000000000000006d0000005d00000041000102030405060708090a0b0c0d0e0f0000000000000046000000000000000000000000000000000000000000000000000000000000000004bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d0404ebfc718e8d1798620432268e77feb6415e2ede0e073c0f4f640ecd2e149a73e858f9d81e5430a57b36daab8f950a3c64e6ee6a63094d99283aff767e124df0f2510ae3cfc74e4eb31b5460e61a55a59c1ad9f8a1b56fcfe425e00b3a6a467344e70dd8f4bfee133f6f597fb2ff6946147d8c1092763f5d3ceaf6d74f234985186874ecd599472da43a0d5a866014eeb5b072e634f2b72b67ec329825dafbb48343ff0ba9b0063b1fe02070b21d20c6b3e86781a5e9a5463f72040e925397a7cb97e6b8d25f6065aede90354b013789ecbe2c6662730b6faa60bdd0f1578349057322670a37cac504041ce16f3044022063287a23c4ed9288dd091ad23495200bf98ed1e89cf1ffaf6ecba6013ec5b413022035654a55f88a4a5960318fbebdf6c0585354f2d471c15a7a0b48b1df91f3c5670000000000000005000000050100000084bf7e96d2590df9b1343a6dd6ea84c381578472ef",
+      "tool_requirement": "gmssl-lib",
+      "verify_mode": "byte-exact-with-fixed-k",
+      "note": "契约 §15.2 最小单块包（522 字节），已逐字节核对"
+    },
+    {
+      "id": "yspk-v1-multi",
+      "algo": "YSPK/1.0 pack",
+      "recipient_pub": "0409f9df311e5421a150dd7d161e4bc5c672179fad1833fc076bb08ff356f35020ccea490ce26775a52dc6ea718cc1aa600aed05fbf35e084a6632f6072da9ad13", "sender_priv": "00c1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f", "dk": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "kdf_salt": "000102030405060708090a0b0c0d0e0f", "k_enc": "59276e27d506861a16680f3ad9c02dccef3cc1fa3cdbe4ce6d54b80deac1bc21", "k_sig": "6cb28d99385c175c94f94e934817663fc176d925dd72b727260dbaae1fb2f96f", "created_at_ms": 1767225600000, "chunk_size": 32, "file_name": "multi.bin", "mime": "application/octet-stream", "ext": "bin", "plaintext": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f", "plaintext_len": 80,
+      "expected_len": 743,
+      "expected_encoding": "hex（完整包字节）",
+      "expected_hex": "5953504b01000070000000020101010100000020000000030000000000000050000000000000008100000000000000be000000ae00000041000102030405060708090a0b0c0d0e0f0000000000000047000000000000000000000000000000000000000000000000000000000000000004bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d0404ebfc718e8d1798620432268e77feb6415e2ede0e073c0f4f640ecd2e149a73e858f9d81e5430a57b36daab8f950a3c64e6ee6a63094d99283aff767e124df0f2510ae3cfc74e4eb31b5460e61a55a59c1ad9f8a1b56fcfe425e00b3a6a467344e70dd8f4bfee133f6f597fb2ff6946147d8c1092763f5d3ceaf6d74f234985186874ecd599472da43a0d5a866014bbb5a072c634f2b72967ec329825dafbb4834cfa17ebb017617d833a15d2087fc6b3e06d8ed183be50641d677ad799716b1503d75234afaccd1212e1b6867a2bb4b4fdff906302486c2f146c1c9898816f22debef0423bae283565b1f763b192d1254bcb70b3008aaf6bfc2a26ad3b016215dbcf159736e366bf9feac2e3f009ab893e622ef3fd102d93a43c4a497b6a0fdc05a78b558d89b1b69e75953ee9ba8c48a50b71f6f8f061bde469085bc43045022100f88983fb66ae091af5f9ffddc01036ea454f7fdd76c6122ea4869a3a774ddc03022027348d7ac905dffde6ba2ed6fb8916503629560c23aa24e93580dbe3e0e5e31100000000000000200000002000000000e53cc98b73ce1316f88b40d72eb4ad007de4c4eb3b998e61423fa7375862a128ccfc7d2ea872b6d68cba78bdf0d49c5c000000010000002000000020000000007f6eac8eb153c5a03bda573764795c7106e16c370c917266d7e6aacda5776ac17eae13a1a8abf32f27d4986b385173df00000002000000100000001001000000a06a9b48c7f97001d12c94ce07507a0864c4c34b507721fe15c9c7cae50f0811",
+      "tool_requirement": "gmssl-lib",
+      "verify_mode": "byte-exact-with-fixed-k",
+      "note": "契约 §15.3 多块包（CHUNK_SIZE=32，3 块，743 字节），已逐字节核对"
+    }
+  ]
+}

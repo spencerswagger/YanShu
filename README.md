@@ -13,7 +13,8 @@
 |---|---|
 | `crypto/` | 端侧国密内核（Rust，自研 SM3 / SM4-GCM / SM2，编译到 wasm32，raw C ABI） |
 | `crypto/include/yanshu_sm.h` | Web 侧调用的 C ABI 头（函数清单 + 错误码） |
-| `docs/crypto-pack-v1-draft.md` | 加密包 v1 字段布局（临时锚点，待定稿替换） |
+| `docs/crypto-pack-impl-notes.md` | 实现与 `docs/CRYPTO-PACK.md` v1 的对照（§15 样例逐字节核对） |
+| `vectors/host-crosscheck.json` / `.md` | 宿主侧对照请求（机器可读 + 人读表格） |
 | `testdata/vectors.json` | 全 hex 测试向量（SM3/SM4-GCM/SM2/用户码/完整加密包） |
 | `scripts/crosscheck/` | GmSSL 逐字节交叉验证（`run.sh` 一键复跑） |
 | `scripts/wasm-smoke/` | wasm C ABI 冒烟测试（Node，无 wasm-bindgen） |

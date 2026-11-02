@@ -1,197 +1,281 @@
-//! 加密包严格性矩阵：每一种篡改都必须落到**具体错误码**（不是笼统的"失败"）。
+//! `YSPK/1.0` 严格性矩阵：每种篡改都要落到**契约 §13 的具体错误码**。
 
+use yanshu_sm::bigint::U256;
 use yanshu_sm::error::Error;
-use yanshu_sm::pack::{self, layout, PackInput};
-use yanshu_sm::rng::SeedRng;
+use yanshu_sm::pack::{self, PackInput, PackParams};
+use yanshu_sm::rng::{Rng, SeedRng};
 use yanshu_sm::sm2;
+
+const HDR: usize = 112;
+const PUB: usize = 65;
+const WRAP: usize = 129;
 
 struct Fixture {
     pack: Vec<u8>,
     recipient_priv: [u8; 32],
-    sender_pub: [u8; 64],
-    /// 第 i 个块在包内的字节范围
-    blocks: Vec<(usize, usize)>,
+    sender_pub: [u8; 65],
+    sender_code: String,
+    manifest_off: usize,
+    sig_off: usize,
+    chunk_off: usize,
+    chunk_ends: Vec<usize>,
+    plain: Vec<u8>,
 }
 
-fn build(data: &[u8], block_size: u32) -> Fixture {
+fn build(plain_len: usize, chunk_size: u32) -> Fixture {
     let mut rng = SeedRng::new(b"strictness-fixture");
-    let alice = sm2::keygen(&mut rng);
-    let bob = sm2::keygen(&mut rng);
+    let sender = sm2::keygen(&mut rng);
+    let recipient = sm2::keygen(&mut rng);
+    let mut recipient_pub = [0u8; 65];
+    recipient_pub[0] = 0x04;
+    recipient_pub[1..].copy_from_slice(&recipient.public_key);
+    let mut sender_pub = [0u8; 65];
+    sender_pub[0] = 0x04;
+    sender_pub[1..].copy_from_slice(&sender.public_key);
+
+    let plain: Vec<u8> = (0..plain_len).map(|i| (i * 37 + 11) as u8).collect();
+    let mut dk = [0u8; 32];
+    rng.fill(&mut dk);
+    let mut salt = [0u8; 16];
+    rng.fill(&mut salt);
+    let params = PackParams {
+        dk,
+        kdf_salt: salt,
+        k_enc: U256::from_be_bytes(&{
+            let mut b = [0u8; 32];
+            rng.fill(&mut b);
+            b
+        }),
+        k_sig: U256::from_be_bytes(&{
+            let mut b = [0u8; 32];
+            rng.fill(&mut b);
+            b
+        }),
+    };
     let input = PackInput {
-        recipient_public: &bob.public_key,
-        sender_private: &alice.private_key,
+        recipient_public: &recipient_pub,
+        sender_private: &sender.private_key,
         name: "f.bin",
         mime: "application/octet-stream",
-        block_size,
-        data,
+        ext: "bin",
+        created_at_ms: 1_767_225_600_000,
+        chunk_size,
+        data: &plain,
     };
-    let pack = pack::pack(&input, &mut rng).expect("pack");
-
-    // 定位块边界
-    let mut pos = layout::HEADER_LEN;
-    pos += 1 + 4 + 128; // KEY_REC
-    pos += 1 + 4 + 64; // SIG_REC
-    let man_len = u32::from_be_bytes(pack[pos..pos + 4].try_into().unwrap()) as usize;
-    pos += 4 + man_len + layout::TAG_LEN;
-    let mut blocks = Vec::new();
-    while pos < pack.len() {
-        let ct_len = u32::from_be_bytes(pack[pos + 5..pos + 9].try_into().unwrap()) as usize;
-        let end = pos + 9 + ct_len + layout::TAG_LEN;
-        blocks.push((pos, end));
-        pos = end;
+    let pack = pack::pack_with(&input, &params).expect("pack");
+    let header = pack::read_header(&pack).expect("header");
+    let manifest_off = HDR + PUB + WRAP;
+    let sig_off = manifest_off + header.manifest_len as usize;
+    let chunk_off = sig_off + header.sig_len as usize;
+    let mut chunk_ends = Vec::new();
+    let mut pos = chunk_off;
+    for i in 0..header.chunk_count {
+        let pt_len = pack::chunk_plain_len(
+            header.plaintext_size,
+            header.chunk_size,
+            header.chunk_count,
+            i,
+        ) as usize;
+        pos += 16 + pt_len + 16;
+        chunk_ends.push(pos);
     }
     assert_eq!(pos, pack.len());
 
+    let code = {
+        let mut p = [0u8; 65];
+        p[0] = 0x04;
+        p[1..].copy_from_slice(&sender.public_key);
+        yanshu_sm::code::from_public_key(&p)
+    };
+
     Fixture {
         pack,
-        recipient_priv: bob.private_key,
-        sender_pub: alice.public_key,
-        blocks,
+        recipient_priv: recipient.private_key,
+        sender_pub,
+        sender_code: code,
+        manifest_off,
+        sig_off,
+        chunk_off,
+        chunk_ends,
+        plain,
     }
 }
 
-fn err(f: &Fixture, pack: &[u8]) -> Error {
-    pack::unpack(pack, &f.recipient_priv, &f.sender_pub).unwrap_err()
-}
-
-fn ok(f: &Fixture, pack: &[u8], expect: &[u8]) {
-    let out = pack::unpack(pack, &f.recipient_priv, &f.sender_pub).expect("unpack ok");
-    assert_eq!(out.data, expect);
+fn err(f: &Fixture, p: &[u8]) -> Error {
+    pack::unpack(p, &f.recipient_priv, None).unwrap_err()
 }
 
 #[test]
-fn header_mutations_map_to_specific_errors() {
-    let data: Vec<u8> = (0..64).map(|i| i as u8).collect();
-    let f = build(&data, 16);
+fn header_checks_map_to_contract_errors() {
+    let f = build(64, 32);
 
     let mut p = f.pack.clone();
     p[0] ^= 0x01;
-    assert_eq!(err(&f, &p), Error::BadMagic);
+    assert_eq!(err(&f, &p), Error::MagicMismatch);
 
     let mut p = f.pack.clone();
-    p[layout::OFF_VERSION] = 2;
-    assert_eq!(err(&f, &p), Error::UnsupportedVersion);
+    p[4] = 2;
+    assert_eq!(err(&f, &p), Error::VersionUnsupported);
 
     let mut p = f.pack.clone();
-    p[layout::OFF_SUITE] = 9;
-    assert_eq!(err(&f, &p), Error::UnsupportedVersion);
+    p[5] = 1;
+    assert_eq!(err(&f, &p), Error::VersionUnsupported);
 
     let mut p = f.pack.clone();
-    p[layout::OFF_FLAGS] = 0;
-    assert_eq!(err(&f, &p), Error::BadFlags);
+    p[6..8].copy_from_slice(&111u16.to_be_bytes());
+    assert_eq!(err(&f, &p), Error::HeaderInvalid);
 
     let mut p = f.pack.clone();
-    p[layout::OFF_RESERVED] = 1;
-    assert_eq!(err(&f, &p), Error::BadFlags);
+    p[12] = 9;
+    assert_eq!(err(&f, &p), Error::AlgUnsupported);
 
+    // FLAGS 保留位
     let mut p = f.pack.clone();
-    p[layout::OFF_BLOCK_SIZE..layout::OFF_BLOCK_SIZE + 4].copy_from_slice(&0u32.to_be_bytes());
-    assert_eq!(err(&f, &p), Error::BadFlags);
+    p[11] |= 0x04;
+    assert_eq!(err(&f, &p), Error::FlagsUnknown);
 
-    // 块数与 plain_size 不自洽
+    // SENDER_SIGNED = 0
     let mut p = f.pack.clone();
-    p[layout::OFF_BLOCK_COUNT..layout::OFF_BLOCK_COUNT + 4].copy_from_slice(&3u32.to_be_bytes());
-    assert_eq!(err(&f, &p), Error::ManifestMismatch);
+    p[11] &= !0x02;
+    assert_eq!(err(&f, &p), Error::Unsigned);
 
-    // 改 plain_size（与 block_count / 清单不自洽）
+    // RESERVED 非零
     let mut p = f.pack.clone();
-    p[layout::OFF_PLAIN_SIZE..layout::OFF_PLAIN_SIZE + 8].copy_from_slice(&65u64.to_be_bytes());
-    assert_eq!(err(&f, &p), Error::ManifestMismatch);
+    p[100] = 1;
+    assert_eq!(err(&f, &p), Error::HeaderInvalid);
+
+    // CHUNK_SIZE 越界
+    let mut p = f.pack.clone();
+    p[16..20].copy_from_slice(&8u32.to_be_bytes());
+    assert_eq!(err(&f, &p), Error::HeaderInvalid);
+
+    // CHUNK_COUNT 与 PLAINTEXT_SIZE 不自洽
+    let mut p = f.pack.clone();
+    p[20..24].copy_from_slice(&5u32.to_be_bytes());
+    assert_eq!(err(&f, &p), Error::LengthInconsistent);
+
+    // WRAPPED_KEY_LEN
+    let mut p = f.pack.clone();
+    p[32..40].copy_from_slice(&128u64.to_be_bytes());
+    assert_eq!(err(&f, &p), Error::LengthInconsistent);
+
+    // SIG_LEN 越界
+    let mut p = f.pack.clone();
+    p[72..80].copy_from_slice(&10u64.to_be_bytes());
+    assert_eq!(err(&f, &p), Error::HeaderInvalid);
 }
 
 #[test]
-fn record_kinds_are_enforced() {
-    let data: Vec<u8> = (0..64).map(|i| i as u8).collect();
-    let f = build(&data, 16);
-
-    let mut p = f.pack.clone();
-    p[layout::HEADER_LEN] = 9; // KEY_REC kind
-    assert_eq!(err(&f, &p), Error::BadKeyRecord);
-
-    let sig_kind_pos = layout::HEADER_LEN + 1 + 4 + 128;
-    let mut p = f.pack.clone();
-    p[sig_kind_pos] = 9;
-    assert_eq!(err(&f, &p), Error::BadSignatureRecord);
-}
-
-#[test]
-fn block_reorder_delete_duplicate_trailing() {
-    let data: Vec<u8> = (0..64).map(|i| i as u8).collect();
-    let f = build(&data, 16); // 4 块
-    assert_eq!(f.blocks.len(), 4);
-
-    // 交换块 0 / 块 1：第 2 条记录的块号 0 落在期望 1 之后 → 跳号
-    let mut p = Vec::new();
-    p.extend_from_slice(&f.pack[..f.blocks[0].0]);
-    p.extend_from_slice(&f.pack[f.blocks[1].0..f.blocks[1].1]);
-    p.extend_from_slice(&f.pack[f.blocks[0].0..f.blocks[0].1]);
-    p.extend_from_slice(&f.pack[f.blocks[2].0..]);
-    assert_eq!(err(&f, &p), Error::BlockSequence);
-
-    // 删除块 1
-    let mut p = Vec::new();
-    p.extend_from_slice(&f.pack[..f.blocks[1].0]);
-    p.extend_from_slice(&f.pack[f.blocks[2].0..]);
-    assert_eq!(err(&f, &p), Error::BlockSequence);
-
-    // 用块 0 的副本占掉块 1 的位置：块号序列 0,0,2,3 → 重复块
-    let mut p = Vec::new();
-    p.extend_from_slice(&f.pack[..f.blocks[0].0]);
-    p.extend_from_slice(&f.pack[f.blocks[0].0..f.blocks[0].1]);
-    p.extend_from_slice(&f.pack[f.blocks[0].0..f.blocks[0].1]);
-    p.extend_from_slice(&f.pack[f.blocks[2].0..]);
-    assert_eq!(err(&f, &p), Error::DuplicateBlock);
-
-    // 截断包尾（少一个块）
-    let p = f.pack[..f.blocks[3].0].to_vec();
-    assert_eq!(err(&f, &p), Error::MissingBlock);
-
-    // 末尾多 1 字节
+fn truncation_and_trailing_are_rejected() {
+    let f = build(64, 32);
+    // 截掉尾部
+    for cut in [1usize, 10, HDR, HDR + PUB + WRAP, f.pack.len() - 1] {
+        assert!(pack::unpack(&f.pack[..cut], &f.recipient_priv, None).is_err());
+    }
+    // 尾部多字节
     let mut p = f.pack.clone();
     p.push(0);
-    assert_eq!(err(&f, &p), Error::TrailingBytes);
-
-    // 末块标志被改
-    let last = f.blocks[3].0;
-    let mut p = f.pack.clone();
-    p[last + 4] = 0; // 末块应 flags=1
-    assert_eq!(err(&f, &p), Error::LastFlagMismatch);
+    assert_eq!(err(&f, &p), Error::LengthInconsistent);
 }
 
 #[test]
-fn byte_flips_are_rejected_everywhere() {
-    let data: Vec<u8> = (0..64).map(|i| i as u8).collect();
-    let f = build(&data, 16);
-    // 逐个字节翻一位，整包任何位置都不许解包成功
+fn crypto_sections_map_to_errors() {
+    let f = build(64, 32);
+
+    // 清单密文改 1 字节 → 清单认证失败
+    let mut p = f.pack.clone();
+    p[f.manifest_off] ^= 0x01;
+    assert_eq!(err(&f, &p), Error::ManifestAuthFailed);
+
+    // 签名改 1 字节 → 签名非法
+    let mut p = f.pack.clone();
+    p[f.sig_off] ^= 0x01;
+    assert_eq!(err(&f, &p), Error::SignatureInvalid);
+
+    // 块密文改 1 字节 → 块认证失败（tag 覆盖）
+    let mut p = f.pack.clone();
+    p[f.chunk_off + 20] ^= 0x01;
+    assert_eq!(err(&f, &p), Error::ChunkAuthFailed);
+
+    // 换收件人私钥 → 解封失败
+    let mut rng = SeedRng::new(b"other-recipient");
+    let other = sm2::keygen(&mut rng);
+    assert_eq!(
+        pack::unpack(&f.pack, &other.private_key, None).unwrap_err(),
+        Error::KeyUnwrapFailed
+    );
+
+    // SENDER_PUB 换掉 → 签名失败或曲线错误（C1 与签名都绑了公钥）
+    let mut p = f.pack.clone();
+    p[HDR + 10] ^= 0x01;
+    assert!(pack::unpack(&p, &f.recipient_priv, None).is_err());
+
+    // 期望码不匹配 → CRYPTO_SENDER_MISMATCH
+    assert_eq!(
+        pack::unpack(&f.pack, &f.recipient_priv, Some("ZZZZ")).unwrap_err(),
+        Error::SenderMismatch
+    );
+}
+
+#[test]
+fn chunk_order_missing_duplicate() {
+    let f = build(96, 32); // 3 块
+    assert_eq!(f.chunk_ends.len(), 3);
+    let c0 = f.chunk_off;
+    let c1 = f.chunk_ends[0];
+    let c2 = f.chunk_ends[1];
+
+    // 交换块 0 与块 1 → 首条记录 index=1 而期望 0 → 缺块
+    let mut p = Vec::new();
+    p.extend_from_slice(&f.pack[..c0]);
+    p.extend_from_slice(&f.pack[c1..c2]);
+    p.extend_from_slice(&f.pack[c0..c1]);
+    p.extend_from_slice(&f.pack[c2..]);
+    assert_eq!(err(&f, &p), Error::ChunkMissing);
+
+    // 用块 0 覆盖块 1（块号 0,0,2）→ 重复块 / 顺序错
+    let mut p = Vec::new();
+    p.extend_from_slice(&f.pack[..c0]);
+    p.extend_from_slice(&f.pack[c0..c1]);
+    p.extend_from_slice(&f.pack[c0..c1]);
+    p.extend_from_slice(&f.pack[c2..]);
+    assert_eq!(err(&f, &p), Error::ChunkOrder);
+
+    // 直接删掉块 1 的字节 → 包长与 ENVELOPE_LEN 不符，先被长度校验拦下
+    let mut p = Vec::new();
+    p.extend_from_slice(&f.pack[..c1]);
+    p.extend_from_slice(&f.pack[c2..]);
+    assert_eq!(err(&f, &p), Error::LengthInconsistent);
+
+    // 末块标志被改
+    let last = f.chunk_off;
+    let _ = last;
+    let mut p = f.pack.clone();
+    let last_rec = f.chunk_ends[1];
+    p[last_rec + 12] = 0; // 块 2 是末块，LAST_FLAG 应为 1
+    assert_eq!(err(&f, &p), Error::ChunkOrder);
+
+    // 块头 PT_LEN 篡改
+    let mut p = f.pack.clone();
+    p[c0 + 4..c0 + 8].copy_from_slice(&16u32.to_be_bytes());
+    assert_eq!(err(&f, &p), Error::LengthInconsistent);
+
+    // 正常包可解
+    let out = pack::unpack(&f.pack, &f.recipient_priv, Some(&f.sender_code)).expect("ok");
+    assert_eq!(out.data, f.plain);
+    let _ = f.sender_pub;
+}
+
+#[test]
+fn every_byte_flip_is_rejected_or_covered() {
+    let f = build(40, 16);
     for pos in 0..f.pack.len() {
         let mut p = f.pack.clone();
         p[pos] ^= 0x01;
         assert!(
-            pack::unpack(&p, &f.recipient_priv, &f.sender_pub).is_err(),
-            "byte {} flipped but pack still unpacked",
+            pack::unpack(&p, &f.recipient_priv, None).is_err(),
+            "byte {} flipped but unpacked",
             pos
         );
     }
-    // 原包仍可解
-    ok(&f, &f.pack, &data);
-}
-
-#[test]
-fn signature_from_wrong_sender_rejected() {
-    let data = b"hello yanshu".to_vec();
-    let f = build(&data, 16);
-    let mut rng = SeedRng::new(b"other-sender");
-    let mallory = sm2::keygen(&mut rng);
-    let e = pack::unpack(&f.pack, &f.recipient_priv, &mallory.public_key).unwrap_err();
-    assert_eq!(e, Error::SignatureMismatch);
-}
-
-#[test]
-fn wrong_recipient_key_rejected() {
-    let data = b"hello yanshu".to_vec();
-    let f = build(&data, 16);
-    let mut rng = SeedRng::new(b"other-recipient");
-    let other = sm2::keygen(&mut rng);
-    let e = pack::unpack(&f.pack, &other.private_key, &f.sender_pub).unwrap_err();
-    assert_eq!(e, Error::BadKeyRecord);
 }

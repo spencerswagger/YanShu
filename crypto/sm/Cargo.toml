@@ -23,4 +23,8 @@ path = "src/bin/bench_sm4.rs"
 name = "ys-tool"
 path = "src/bin/ys_tool.rs"
 
+[[bin]]
+name = "gen-host-crosscheck"
+path = "src/bin/gen_host_crosscheck.rs"
+
 [dependencies]

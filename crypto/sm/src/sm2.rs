@@ -260,6 +260,11 @@ fn scalar_from_bytes(b: &[u8; 32]) -> U256 {
     }
 }
 
+/// 曲线阶 `n`（标量域模数）。
+pub fn curve_order() -> U256 {
+    curve().n
+}
+
 /// 由 32 字节私钥派生 64 字节公钥；私钥非法时返回 [`Error::BadArgument`]。
 pub fn public_from_private(priv_bytes: &[u8; PRIVATE_KEY_SIZE]) -> Result<[u8; PUBLIC_KEY_SIZE]> {
     let c = curve();
@@ -329,7 +334,7 @@ fn kdf(z: &[u8], outlen: usize) -> Result<Vec<u8>> {
     }
     out.truncate(outlen);
     if out.iter().all(|&b| b == 0) {
-        return Err(Error::BadKdf);
+        return Err(Error::BadCiphertext);
     }
     Ok(out)
 }
@@ -385,7 +390,7 @@ pub fn encrypt_with_rng(
 /// SM2 解密（C1C3C2 平文拼接）。
 pub fn decrypt(priv_bytes: &[u8; PRIVATE_KEY_SIZE], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if ciphertext.len() < 64 + 32 + 1 {
-        return Err(Error::Truncated);
+        return Err(Error::BadCiphertext);
     }
     let c = curve();
     let d = scalar_from_bytes(priv_bytes);
