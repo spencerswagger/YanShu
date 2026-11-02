@@ -1,6 +1,9 @@
 package auth
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -144,6 +147,27 @@ func TestUploadTokenIsDeterministic(t *testing.T) {
 	}
 	if VerifyUploadToken("", UploadTokenHash(t1)) {
 		t.Fatal("empty token accepted")
+	}
+}
+
+// 契约 G5：upload_token = base64url(HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1"‖transfer_id))
+func TestUploadTokenMatchesContract(t *testing.T) {
+	const secret = "test-secret"
+	id := strings.Repeat("b", 32)
+	issuer, err := NewTokenIssuer([]byte(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := issuer.UploadToken(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("yanshu/upload-token/v1"))
+	mac.Write([]byte(id))
+	want := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	if got != want {
+		t.Fatalf("upload token = %q, want %q", got, want)
 	}
 }
 

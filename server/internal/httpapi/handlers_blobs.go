@@ -249,9 +249,9 @@ func (a *API) handleGetChunk(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set(spec.HeaderContentType, spec.ContentTypeBinary)
 	h.Set("X-Content-Type-Options", "nosniff")
-	if len(meta.SM3) > 0 {
-		h.Set("X-YS-Ciphertext-Sm3", auth.B64.EncodeToString(meta.SM3))
-	}
+	// 裁决 G9：不返回密文摘要头（v1 不纳入契约，客户端不得依赖）。
+	// 服务端内部仍保存 SM3 用于幂等比对，但不对外暴露。
+	_ = meta
 	if !a.serveRange(w, r, rc, size) {
 		return
 	}

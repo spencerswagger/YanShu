@@ -79,9 +79,6 @@ func TestNormalizeCode(t *testing.T) {
 		"awqw":   "AWQW",
 		" awqw ": "AWQW",
 		"AW-QW":  "AWQW",
-		"AWQW-X": "AWQW",
-		"AWQW-Z": "AWQW", // `CODE-CHECK` 形式，末位是校验字符
-		"AWQWM":  "AWQW", // 5 位：末位当校验字符丢弃
 		"o1l2":   "0112", // O→0、I→1、L→1、I 由 1 保持
 		"0O0O":   "0000",
 	}
@@ -96,10 +93,29 @@ func TestNormalizeCode(t *testing.T) {
 		}
 	}
 
-	bad := []string{"", "ABC", "ABCDE1", "AUQW", "AWQ!", "<script>"}
+	// 裁决 D3：禁止 5 位截断与猜测性纠错，所以 `AWQW-X` 这类必须被拒。
+	bad := []string{"", "ABC", "ABCDE1", "AUQW", "AWQ!", "<script>", "AWQW-X", "AWQWM"}
 	for _, in := range bad {
 		if got, err := NormalizeCode(in); err == nil {
 			t.Errorf("NormalizeCode(%q) = %q, want error", in, got)
+		}
+	}
+}
+
+// 归一化必须幂等（裁决 D3 ①）。
+func TestNormalizeCodeIdempotent(t *testing.T) {
+	inputs := []string{"AWQW", "awqw", " aw-qw ", "o1l2", "0O0O", "zzzz", "Zz-Zz"}
+	for _, in := range inputs {
+		once, err := NormalizeCode(in)
+		if err != nil {
+			t.Fatalf("NormalizeCode(%q): %v", in, err)
+		}
+		twice, err := NormalizeCode(once)
+		if err != nil {
+			t.Fatalf("NormalizeCode(%q) second pass: %v", once, err)
+		}
+		if once != twice {
+			t.Fatalf("not idempotent: %q -> %q -> %q", in, once, twice)
 		}
 	}
 }

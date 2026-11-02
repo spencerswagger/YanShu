@@ -66,10 +66,17 @@ func NewTokenIssuer(secret []byte) (*TokenIssuer, error) {
 	return &TokenIssuer{secret: append([]byte(nil), secret...)}, nil
 }
 
+// uploadTokenInfo 是契约固定的派生前缀（docs/contract-rulings.md G5）：
+//
+//	upload_token = base64url(HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖ transfer_id))
+//
+// 前缀与 transfer_id 之间**没有分隔符**，改动即等于改契约。
+const uploadTokenInfo = "yanshu/upload-token/v1"
+
 // UploadToken 为某个 transfer_id 派生 upload_token。
 func (t *TokenIssuer) UploadToken(transferID string) (string, error) {
 	mac := hmac.New(sha256.New, t.secret)
-	mac.Write([]byte("yan-shu/upload-token/v1|"))
+	mac.Write([]byte(uploadTokenInfo))
 	mac.Write([]byte(transferID))
 	return B64.EncodeToString(mac.Sum(nil)), nil
 }

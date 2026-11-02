@@ -747,16 +747,84 @@ func TestInbox(t *testing.T) {
 
 func TestLookupRateLimitAndLockout(t *testing.T) {
 	e := newEnv(t, "")
-	// 未知码：连续 5 次 → 423 CODE_LOCKED。
-	code := "AWQW"
-	// 第 5 次失败触发锁定，因此前面只允许 4 次 404。
+	// 裁决 D3：锁定按**归一化后**的码计数，大小写/分组符不影响。
+	// 前 4 次用带分隔符的小写形式，第 5 次用大写无分隔形式，必须命中同一个锁。
 	for i := 0; i < spec.DefaultLimits.CodeLockThreshold-1; i++ {
-		e.wantError(e.do(http.MethodGet, spec.CodePath(code), nil, nil), spec.ErrCodeNotFound)
+		e.wantError(e.do(http.MethodGet, spec.CodePath("aw-qw"), nil, nil), spec.ErrCodeNotFound)
 	}
-	resp := e.do(http.MethodGet, spec.CodePath(code), nil, nil)
+	resp := e.do(http.MethodGet, spec.CodePath("AWQW"), nil, nil)
 	e.wantError(resp, spec.ErrCodeLocked)
 	if resp.header.Get(spec.HeaderRetryAfter) == "" {
 		t.Fatal("CODE_LOCKED must carry Retry-After")
+	}
+}
+
+// 裁决 D3 ④：5 位 CODE-CHECK 形式不再截断，直接拒绝。
+func TestFiveCharCodeRejected(t *testing.T) {
+	e := newEnv(t, "")
+	e.wantError(e.do(http.MethodGet, spec.CodePath("AWQW-X"), nil, nil), spec.ErrCodeFormatInvalid)
+}
+
+// 裁决 D2：审计只记路由模板，能力凭证（transfer_id）不得进审计。
+func TestAuditPathIsRouteTemplate(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, nil)
+	e.uploadAll(tr, f)
+	if resp := e.do(http.MethodGet, spec.TransferPath(tr.TransferID), nil, nil); resp.status != http.StatusOK {
+		t.Fatalf("get transfer: %d", resp.status)
+	}
+
+	rows, err := e.st.Pool().Query(context.Background(), `SELECT path FROM audit_events`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	seenTemplate := false
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(path, tr.TransferID) {
+			t.Fatalf("audit path leaked transfer id: %q", path)
+		}
+		// Go 1.22+ 的 r.Pattern 带方法前缀（如 "GET /v1/transfers/{transferId}"）。
+		if strings.HasSuffix(path, " /v1/transfers/{transferId}") {
+			seenTemplate = true
+		}
+	}
+	if !seenTemplate {
+		t.Fatal("audit did not record the route template")
+	}
+}
+
+// 裁决 D1：WS 端点必须明确返回 503（不挂起），inbox 轮询可用且不被限速误伤。
+func TestWSUnavailableAndInboxPolling(t *testing.T) {
+	e := newEnv(t, "")
+	code, _ := e.register("poller")
+
+	start := time.Now()
+	resp := e.do(http.MethodGet, spec.PathWS, nil, nil)
+	if resp.status != http.StatusServiceUnavailable {
+		t.Fatalf("ws status = %d", resp.status)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("ws endpoint must fail fast, not hang")
+	}
+	var er spec.ErrorResponse
+	if err := json.Unmarshal(resp.body, &er); err != nil || er.Error.Code != string(spec.ErrServiceUnavailable) {
+		t.Fatalf("ws body = %s", resp.body)
+	}
+
+	// 30 秒轮询 ≈ 2 次/分钟；这里连拉 6 次，必须全部 200。
+	for i := 0; i < 6; i++ {
+		hdrs := e.authHeaders(spec.PurposeInboxList, code)
+		if r := e.do(http.MethodGet, spec.PathInbox, nil, hdrs); r.status != http.StatusOK {
+			t.Fatalf("inbox poll %d: %d %s", i, r.status, r.body)
+		}
 	}
 }
 

@@ -53,12 +53,12 @@ func encode20(v uint32) string {
 //   - 转大写；
 //   - 去掉分组符 `-` 与所有空白；
 //   - 易混字符纠正：O→0、I→1、L→1；
-//   - 长度必须为 4（若传了 5 位 `CODE-CHECK` 形式，去掉末位校验字符）；
+//   - 长度必须为 4；
 //   - 每个字符必须在字母表内（`U` 一律拒绝）。
 //
-// 说明：docs/CRYPTO-PACK.md §3.4 写的是「服务端 MUST 只接受归一化后的 4 字符」。
-// 这里默认做容错归一化（用户手输/粘贴场景），并保留 StrictCode 供严格模式使用；
-// 该分歧已记入 docs/DRAFT-FIELDS.md，待 API.md 定稿时二选一。
+// 契约裁决（docs/contract-rulings.md D3）：允许容错归一化，但 ① 幂等；② 先于一切
+// 判定执行；③ 限速与锁定按归一化后的码计数；④ **禁止 5 位截断、禁止猜测性纠错**。
+// 因此这里只保留 CRYPTO-PACK §3.4 明列的三步纠正，不做任何长度猜测。
 func NormalizeCode(raw string) (string, error) {
 	s := strings.ToUpper(strings.TrimSpace(raw))
 	if s == "" {
@@ -79,10 +79,6 @@ func NormalizeCode(raw string) (string, error) {
 		}
 	}
 	out := b.String()
-	if len(out) == CodeLen+1 {
-		// `CODE-CHECK` 形式：末位是校验字符，不属于码本体。
-		out = out[:CodeLen]
-	}
 	if len(out) != CodeLen {
 		return "", ErrInvalidCode
 	}

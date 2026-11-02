@@ -192,6 +192,13 @@ log_path=/var/log/yanshu/server.log
 - 终结：`POST .../ack`（唯一扣次数时机）、`POST .../revoke`
 - 运维：`GET /healthz`
 
+### 直传不可用时的降级（契约裁决 D1）
+
+`GET /v1/ws` **立即**返回 `503 SERVICE_UNAVAILABLE`（不挂起、不让客户端等待）。
+客户端据此判定直传不可用，静默走中转，并把收件通知改为轮询 `GET /v1/inbox`
+（间隔 **≥ 30 秒**，失败退避至 **5 分钟**）。服务端不额外限制 inbox；每次轮询仍需
+一次 `INBOX_LIST` 挑战签名（受 IP 20/min 约束，30 秒一次约 2/min，不会误伤）。
+
 ## 状态机与计数口径
 
 ```
@@ -247,6 +254,6 @@ Gate 要复跑「库里/盘上查不到文件名与明文」，按下面三步�
 ## 未做（本轮明确不做）
 
 - 真实 SM2 验签（接口与桩已就位，接入点 `internal/auth/verifier.go`）。
-- WebSocket 信令与在线表：`GET /v1/ws` 目前回 `503 SERVICE_UNAVAILABLE`。
+- WebSocket 信令与在线表：`GET /v1/ws` 目前回 `503 SERVICE_UNAVAILABLE`（降级语义见上）。
 - 举报下架（v1 无公开入口）、跨实例限速/配额。
 - 前端、WASM、密评相关。
