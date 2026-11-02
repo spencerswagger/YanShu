@@ -226,18 +226,46 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 
 判定顺序**写死为"先凭据后状态"**：先 401、再 410。这样"用旧 token 探测传输是否还存在"不可行。
 
-#### 1.7.5 重签发（上传侧）
+> **寿命上限口径**：6 小时（上传）/ 30 分钟（租约）是**上限**，实现可以更短。若某实现把上传 token 的寿命直接等同于传输 TTL（24 h），则 `AUTH_TOKEN_EXPIRED` 实际不会触发、吊销前的暴露窗口被放大到 24 h——这是**偏离**，须登记并修正；契约不因实现现状改口。
 
-`POST /v1/transfers/{id}/token`，鉴权为发送方签名（`UPLOAD_TOKEN_ISSUE`，§1.3），无请求体。
+#### 1.7.5 重签发（上传侧，v1 追加载荷）
+
+`POST /v1/transfers/{id}/token`，无请求体。这是**唯一**能让"吊销后不重传大文件"成立的窄端点，因此必须按下面五条写死。
+
+**① 鉴权：只认发送方签名，不认任何"持有即可换"的东西**
+
+- 必须带 `X-YS-Code`（发送方码）+ `X-YS-Challenge-Id` + `X-YS-Signature`，`PURPOSE = 0x08 UPLOAD_TOKEN_ISSUE`（`SIG_INPUT` 见 §1.3），验签通过才签发。
+- **MUST NOT** 接受以下任一方式换取新 token：仅凭 `transfer_id`、仅凭旧 `upload_token`、仅凭用户码、仅凭 `Idempotency-Key`。否则等同"token 永不过期"，吊销形同虚设。
+- 签名有效但不是该传输的发送方 → `403 NOT_TRANSFER_PARTY`。
+
+**② 幂等与限次**
+
+- **幂等**：签发结果由 `(transfer_id, 当前 EPOCH)` 确定性派生（§1.5），因此同一传输在同一 `EPOCH` 下重复调用**返回逐字节相同的 token 与相同的 `expires_at`**（`200`），不累加、不刷新有效期。
+- 只有 `EPOCH` 变化后才会得到不同的新 token。
+- 限速：按传输 10 次/分钟、按码 30 次/分钟（§11.1），超限 `429`；防止被用来刷。
+
+**③ 失效联动：旧 token 不得复活**
+
+- 新 token 一定携带**当前** `EPOCH`；旧 token 的 `EPOCH` 永久落后，**此后一直** `AUTH_TOKEN_STALE`。
+- 重签发**不是**"续期"：它不会延长旧 token 的有效期，也不会把旧 token 的哈希重新写活。**任何实现都 MUST NOT 通过重签发让旧 token 起死回生。**
+
+**④ 已传块不重传（这个端点的核心价值）**
+
+客户端拿到新 token 后，**从服务端已确认的块继续**：先 `GET /status`（新 token）取 `missing`，只补缺失块；已 `201/204` 的 `prelude` 与块**不重新上传**。重新上传已完成块属于实现缺陷（会浪费带宽并可能触发 `409 CHUNK_CONFLICT`）。
+
+**⑤ 响应与运维退路**
 
 | 响应 | 含义 |
 |---|---|
-| `200 { "upload_token": "...", "expires_at": "..." }` | 新 token 用当前 `EPOCH`，有效期 `min(6h, 传输 expires_at)`；**已上传的块不受影响**，续传按 §6.5 的 `missing` 补齐 |
-| `403 NOT_TRANSFER_PARTY` | 签名有效但调用方不是该传输的发送方 |
+| `200 { "upload_token": "...", "expires_at": "..." }` | 新 token 用当前 `EPOCH`，有效期 `min(6h, 传输 expires_at)` |
+| `403 NOT_TRANSFER_PARTY` | 签名有效但调用方不是发送方 |
 | `404 TRANSFER_NOT_FOUND` | 传输不存在 |
 | `410` + 对应终结码 | 传输已终态（不再签发） |
+| `501 FEATURE_DISABLED` | **部署方关闭了该端点**（见下） |
 
-不保证幂等：短时间内重复调用可能返回不同 token；客户端只用最新返回值，旧 token 在过期或版本更新前仍可用。
+- **标注**：本端点是 **v1 的追加载荷（不是 v1.1、不是未来版本）**，实现 v1 即 MUST 支持。
+- **运维退路**：部署方 MAY 通过配置关闭该端点（关闭后返回 `501 FEATURE_DISABLED`，`code` 由客户端显式识别）；代价是**吊销后只能重建传输并重传**。关闭不等于"可用旧 token"——旧 token 仍然 `AUTH_TOKEN_STALE`。
+- 客户端遇 `501 FEATURE_DISABLED`：不得循环重试，提示"该部署已关闭凭证重签发，请重新发送"，并允许一键重建传输。
 
 #### 1.7.6 可验证性（进验收集的固定用例）
 
@@ -308,7 +336,7 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 | 15 | GET | `/v1/transfers/{id}/chunks/{index}` | `transfer_id` + `download_id` | 下载一个块切片 |
 | 16 | POST | `/v1/transfers/{id}/ack` | 签名 `TRANSFER_ACK` | 取件完成确认 → 删密文 |
 | 17 | POST | `/v1/transfers/{id}/revoke` | 签名 `TRANSFER_REVOKE` | 发送方主动撤回 |
-| 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`（版本递增后恢复，§1.7.5） |
+| 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`。**v1 追加载荷**（不是 v1.1/未来），实现即 MUST 支持；部署方可配置关闭（关闭返回 `501 FEATURE_DISABLED`，代价是吊销后需重建传输）。细则见 §1.7.5 |
 | 19 | WS | `/v1/ws` | 首帧签名 `WS_HELLO` | 在线状态、收件通知、直传信令。**v1 未实现**：返回 `503 SERVICE_UNAVAILABLE`，客户端按 §9.6 降级（排期见 §15） |
 
 ---
@@ -890,6 +918,7 @@ v1 的信令与在线表**未实现**（排期见 §15），所以"WS 不可用"
 | `code` | HTTP | 含义 | 客户端处置 |
 |---|---:|---|---|
 | `INTERNAL` | 500 | 服务端内部错误 | 5s→20s→60s 退避重试，最多 3 次 |
+| `FEATURE_DISABLED` | 501 | 该部署关闭了某个可选端点（当前仅 `POST /transfers/{id}/token`，§1.7.5⑤） | 不要重试；提示"该部署已关闭凭证重签发，请重新发送"，允许重建传输 |
 | `SERVICE_UNAVAILABLE` | 503 | 维护/过载 | 同上，指数退避 |
 | `INSUFFICIENT_STORAGE` | 507 | 配额类：服务端整体存储不足，或该 IP 未取走密文总量超配额（见 §11.4） | 提示"稍后重试"；**不是**速率错误，不要按 `Retry-After` 循环重试 |
 
@@ -924,7 +953,7 @@ WS 层 `ERROR` 帧里的 `code` 复用 §10.1/§10.2 的同一套常量；WS 专
 | 按码 | `PATCH /codes/{code}` | 5 次/小时 | `429` |
 | 按传输 | `PUT /chunks/{i}` | 600 次/分钟 | `429`（`scope: "transfer"`） |
 | 按传输 | `GET /prelude` + `GET /chunks/{i}` | 600 次/分钟 | `429` |
-| 按传输 | `POST /transfers/{id}/token` | 10 次/分钟 | `429`（`scope: "transfer"`） |
+| 按传输 / 按码 | `POST /transfers/{id}/token` | 10 次/分钟 / 30 次/分钟 | `429`（`scope: "transfer"` / `"code"`，§1.7.5②） |
 | 按 IP | 新建 WS 连接 | 10 次/分钟 | 连接被拒（HTTP 429 或 close `4429`） |
 
 ### 11.2 `429` 响应语义

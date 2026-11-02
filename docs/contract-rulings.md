@@ -35,7 +35,32 @@
 | R6 | `NAME_LEN = 0`（空文件名）是否合法 | **采纳"允许空名"**：`NAME_LEN=0` 为合法值，`NAME` 占 0 字节、后续偏移照常；读方 MUST 接受、不得因空名拒绝；客户端显示"未命名"并保留扩展名降级展示；落盘名由接收端本地决定。安全上不构成混淆通道（名字不参与加密/寻址，`MANIFEST_PT_LEN` 受清单 AAD 覆盖，服务端本就看不到明文名）；禁止空名只会逼客户端编造假名 | CRYPTO-PACK §8.2、§8.5、§13 #15 | 否 |
 | R7 | "布局/版本可并存"的残留措辞与内核合规判定 | **清理并写死**：契约声明只有一种布局 `YSPK/1.0`，凡"历史布局/其他布局"只用于描述拒绝行为；新增 §2.3 给出内核合规判定的四条判据（`ys_version()==0x00010000`、`ys_header_len()==112`、§15 V1 样例解包成功、改版本字节后必须 `CRYPTO_VERSION_UNSUPPORTED`），并明确"不是桩 ≠ 合规"；`ys_version()` 不参与运行时版本判定，包内版本字段才是权威 | CRYPTO-PACK §2.1、§2.3 | 否 |
 
-| R8 | token 生命周期与应急吊销缺口（实测：换 `TOKEN_SECRET` 后旧 token 仍 201） | **补定义**：新增 API §1.7——三凭证定位与寿命（`transfer_id` / `upload_token` ≤6h / `download_id` 30min）；只存哈希导致"换 secret 不吊销"是数据模型必然结果；引入单调递增 `EPOCH`（`/v1/config` 暴露 `token_epoch`），递增即一键吊销；错误名分三个（`AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` / `AUTH_TOKEN_STALE`），判定顺序先凭据后状态；新增重签发端点 `POST /v1/transfers/{id}/token`（PURPOSE `0x08`）；`upload_token` 构造把 `EPOCH` 纳入派生输入，否则重签发得到同一字符串、吊销失效；给出四步可复跑验证用例 | API §1.5、§1.3、§1.7、§3、§4.1、§7.4、§10.1、§11.1、§14 | 否 |
+| R8 | token 生命周期与应急吊销缺口（实测：换 `TOKEN_SECRET` 后旧 token 仍 201） | **补定义**：新增 API §1.7——三凭证定位与寿命（`transfer_id` / `upload_token` ≤6h / `download_id` 30min）；只存哈希导致"换 secret 不吊销"是数据模型必然结果；引入单调递增 `EPOCH`（`/v1/config` 暴露 `token_epoch`），递增即一键吊销；错误名三分（`AUTH_TOKEN_INVALID`/`EXPIRED`/`STALE`），判定先凭据后状态；`upload_token` 构造把 `EPOCH` 纳入派生输入，否则重签发得到同一字符串、吊销失效；给出可复跑用例（见上节，6 步） | API §1.5、§1.3、§1.7、§3、§4.1、§7.4、§10.1、§11.1、§14 | 否 |
+| R9 | 重签发端点是否保留 | **保留并写严**（API §1.7.5 五条）：① 只认发件人 `PURPOSE 0x08` 签名，禁止凭 `transfer_id`/旧 token 换取；② 幂等（同 `(transfer_id, EPOCH)` 返回逐字节相同 token）+ 双向限速；③ 新 token 携当前 `EPOCH`，旧 token 永久 `STALE`、不得复活；④ 已传块不重传（先 `GET /status` 取 `missing`）；⑤ 标注为 **v1 追加载荷**，部署方可配置关闭（`501 FEATURE_DISABLED`，代价是吊销后重建传输） | API §1.7.5、§3、§10.1、§11.1 | 否 |
+
+## 凭证吊销 · 可复跑用例（验收集直接抄）
+
+前置：同一二进制 + 同一份冻结内核产物；`token_epoch` 可从不鉴权的 `GET /v1/config` 读到。
+
+| 步 | 动作 | 期望 |
+|---:|---|---|
+| 1 | 建传输，记 `tokenA`；`PUT /prelude`（带 `tokenA`） | `201` |
+| 2 | 运维递增 `EPOCH`（改 `YANSHU_TOKEN_KID` 后重启，或等价热载） | `/v1/config` 的 `token_epoch` 变化 |
+| 3 | 再用 `tokenA` 打 `PUT /prelude` | **`401 AUTH_TOKEN_STALE`** |
+| 4 | `POST /v1/transfers/{id}/token`（`PURPOSE 0x08` 签名）换 `tokenB` | `200`，且 `tokenB ≠ tokenA` |
+| 5 | 用 `tokenB` 打 `PUT /prelude` | `201` 或 `204`（已传块不重传） |
+| 6 | 同 `EPOCH` 下重复第 4 步 | `200`，返回**与 `tokenB` 逐字节相同**（幂等） |
+
+判据：第 3 步必须 401（不许 201/410），第 5 步不许要求重传已完成块，第 6 步必须逐字节相同；任一步不符即 FAIL。
+
+## 实现现状与偏离登记
+
+契约不因实现现状改口，但把"已知偏离"记在这里，避免被当成"契约允许"。
+
+| # | 现状 | 契约要求 | 状态 |
+|---:|---|---|---|
+| K1 | 服务端内嵌内核产物 `8b89dd7f…`（130,653 B）与冻结产物 `c1b87d0a…`（127,313 B）不同字节 | 内嵌内核 MUST 与冻结构建产物同 sha256；同一 commit 跨环境重建可能不同字节，因此**以冻结产物 sha256 为准**，不以 commit 号为准 | 待 Core 换产物后由验收集复跑 |
+| K2 | 上传 token 的过期目前由传输 TTL（≤24 h）承担，`AUTH_TOKEN_EXPIRED` 实际不会触发 | 上传 token 寿命上限 6 h（§1.7.4 脚注）；未实现即暴露窗口放大到 24 h | 偏离，待修 |
 
 ## 易错点（自查清单）
 
@@ -54,7 +79,7 @@
 
 ## 统计
 
-- **补定义**：19 项（D1、D2、D3、G1–G8、G10、R1–R3、R5–R8）
+- **补定义**：20 项（D1、D2、D3、G1–G8、G10、R1–R3、R5–R9）
 - **明确拒绝**：2 项（G9 密文摘要头不纳入 v1；R4 的"运行时布局切换"不得进入发布构建）
 - **排期下一轮**：1 项（D1 的 WS 实现；其降级语义已在 v1 补定义）
 - **需要抬版本号**：0 项（唯一候选见 `docs/adr/0001-aad-chunk-binding.md`，结论为 v1 不改）
