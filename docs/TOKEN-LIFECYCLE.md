@@ -71,6 +71,20 @@ UPDATE token_kid_state SET kid = kid + 1;
 
 `AUTH_TOKEN_STALE` = 版本被轮换，客户端应**重建传输**；`AUTH_TOKEN_INVALID` = token 值不对，
 客户端应检查是不是串了传输；`AUTH_SIGNATURE_INVALID` 只用于签名不被接受。
+
+### 客户端自愈（按错误名分支）
+
+| 错误名 | 含义 | 客户端动作 |
+|---|---|---|
+| `AUTH_TOKEN_STALE` | EPOCH 已递增，凭据作废 | 重新 `POST /v1/transfers` 建传输拿新 token；**不要**重算签名 |
+| `AUTH_TOKEN_INVALID` | token 值不对/串了传输 | 检查本地存的 token 与 transfer_id 是否配对；必要时重建传输 |
+| `AUTH_TOKEN_EXPIRED` | 超过 6 小时（或租约 30 分钟） | 重建传输 / 重新拿租约 |
+| `AUTH_SIGNATURE_INVALID` | 签名本身不被接受 | 检查 `SIG_INPUT` 与私钥；**与 token 无关** |
+
+> 注意：按 API §1.7，`TOKEN_SECRET` 只是派生盐——**轮换它不会吊销任何 token**；
+> 全局吊销的唯一开关是 EPOCH 递增（`UPDATE token_kid_state SET kid = kid + 1`）。
+> 若最终裁决改为"删掉 EPOCH、只靠换 secret 吊销"，则 `AUTH_TOKEN_STALE` 会改由 secret 轮换触发，
+> 届时只需替换 `requireUploadToken` 的 EPOCH 判定，错误名与客户端分支不变。
 **没有 `AUTH_TOKEN_EXPIRED`**：过期是传输级语义（`410 TRANSFER_EXPIRED`）。
 
 ### 自动化对照脚本（给验收）
