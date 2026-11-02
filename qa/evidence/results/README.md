@@ -50,7 +50,7 @@ results/
 | 证据文件 | 服务端 | 二进制 sha256 | 认证 | 可复跑命令 | 结论 |
 |---|---|---|---|---|---|
 | `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | `08d40e7` | `275fc463…6af55` | **真 sm2** | `YS_EV1_VERIFIER=sm2 YS_EV1_LOG_MODE=dir YS_DELIVER_BIN=core-deliver qa/evidence/run_evidence1_core.sh …` | **闭合**：存储/DB/日志三处零命中，对照 1/1/1/0 |
-| `contract-v1/2026-11-02-kid-and-kernel-sha.md` | `739293a` | `a9f3933e…6fc44` | stub-allow | `check_token_lifecycle.py --kid k1 …`；`check_server_kernel.py --server-dir <src>` | kid 轮换三态成立；**内嵌内核 sha 与冻结不一致（BLOCKED/FAIL）**；老库缺 `upload_token_kid` 列 |
+| `contract-v1/2026-11-02-kid-and-kernel-sha.md` | `ab4279a`/`9bce5bb`/`739293a` | 各自现编 | stub-allow | `check_token_lifecycle.py --kid k1 …`；`check_server_kernel.py --server-dir <src> --vectors-dir <vec>` | token 三态已验证（201→401→201，待统一错误名）；内嵌内核已换冻结产物、白名单+向量套件全 PASS；老库缺 `upload_token_kid` 列（唯一真 BLOCKED） |
 | `contract-v1/2026-11-02-host-binary-980fc44.md` | `08d40e7` | `275fc463…6af55` | 真 sm2 / stub | `python3 qa/evidence/check_token_lifecycle.py --binary <bin> …` | 二进制三件套；token 三态 201→401→201 |
 | `contract-v1/2026-11-02-evidence1-core-run4-logfile.md` | `28d75b0` | — | stub-allow | `YS_EV1_LOG_MODE=file … run_evidence1_core.sh` | 日志改 `YANSHU_LOG_FILE`/`LOG_DIR`；LEASED vs CONSUMED 残留对比 |
 | `contract-v1/2026-11-02-evidence1-core-run3-core-deliver.md` | `2bc7dae` | — | stub-allow | `YS_DELIVER_BIN=core-deliver …` | 投递改用 Core 官方 `deliver` |
