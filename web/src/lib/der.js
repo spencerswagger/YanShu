@@ -30,10 +30,15 @@ export function encodeSignature(raw) {
   return encodeSequence(Uint8Array.of(...encodeInteger(raw.slice(0, 32)), ...encodeInteger(raw.slice(32))))
 }
 
-/** 内核可能已经给 DER（70..72 字节）。只做长度/形状判断，不解析语义。 */
+/**
+ * 内核可能已经给 DER。契约 §10.4 写的是 70..72（假设 r、s 各自 32 字节、最高位为 1 时补 1 字节），
+ * 但 r/s 高位为 0 时严格 DER 会去掉前导零，长度可能到 68/69。这里按"形状"接受 68..72，
+ * 不解析语义；服务端按 DER 解析，不看长度。
+ */
 export function normalizeSignature(sig) {
+  if (!sig || sig.length === 0) throw new Error('empty signature')
   if (sig.length === 64) return encodeSignature(sig)
-  if (sig.length >= 70 && sig.length <= 72 && sig[0] === 0x30) return sig
+  if (sig.length >= 68 && sig.length <= 72 && sig[0] === 0x30) return sig
   throw new Error(`unexpected signature length: ${sig.length}`)
 }
 

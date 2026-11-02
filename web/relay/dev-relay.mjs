@@ -772,16 +772,30 @@ export function createRelay({ limits = {}, verifyDigests = true } = {}) {
             sendError(res, 409, 'DOWNLOAD_NOT_STARTED', 'no valid download id')
             return
           }
+          // 契约 §7.5：幂等键是 download_id —— 同一租约重复 ack 只计一次
+          t.acked = t.acked || new Set()
+          if (t.acked.has(downloadId)) {
+            const body = isTerminal(t)
+              ? { state: t.state, terminal_reason: t.terminalReason, terminal_at: iso(t.terminalAt || now()), download_count: t.downloadCount }
+              : { state: t.state, download_count: t.downloadCount, remaining_downloads: t.maxDownloads - t.downloadCount }
+            sendJson(res, 200, body)
+            return
+          }
           if (isTerminal(t) && t.state !== 'CONSUMED') {
             sendError(res, 409, 'TRANSFER_STATE_CONFLICT', 'terminal')
             return
           }
+          t.acked.add(downloadId)
           t.downloadCount += 1
           if (t.downloadCount < t.maxDownloads) {
             t.state = 'READY'
             t.downloadId = null
             t.leaseExpiresAt = null
-            sendJson(res, 200, { state: 'READY', remaining_downloads: t.maxDownloads - t.downloadCount })
+            sendJson(res, 200, {
+              state: 'READY',
+              download_count: t.downloadCount,
+              remaining_downloads: t.maxDownloads - t.downloadCount,
+            })
             return
           }
           t.state = 'CONSUMED'
@@ -789,7 +803,12 @@ export function createRelay({ limits = {}, verifyDigests = true } = {}) {
           t.terminalReason = 'CONSUMED'
           t.terminalAt = now()
           dropCiphertext(t)
-          sendJson(res, 200, { state: 'CONSUMED', terminal_reason: 'CONSUMED', terminal_at: iso(t.terminalAt) })
+          sendJson(res, 200, {
+            state: 'CONSUMED',
+            terminal_reason: 'CONSUMED',
+            terminal_at: iso(t.terminalAt),
+            download_count: t.downloadCount,
+          })
           return
         }
 
@@ -845,10 +864,10 @@ export function createRelay({ limits = {}, verifyDigests = true } = {}) {
         }
         const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit')) || 20))
         const cursor = Number(url.searchParams.get('cursor')) || 0
+        // 契约 §7.1：ready = READY + LEASED；all = 另含 UPLOADING；**永不返回终结态**
+        const visible = state === 'all' ? new Set(['READY', 'LEASED', 'UPLOADING']) : new Set(['READY', 'LEASED'])
         const items = [...transfers.values()]
-          .filter((t) => t.recipientCode === auth.code)
-          .filter((t) => (state === 'all' ? true : !isTerminal(t)))
-          .filter((t) => (state === 'all' ? true : t.state === 'READY' || t.state === 'LEASED'))
+          .filter((t) => t.recipientCode === auth.code && visible.has(t.state))
           .sort((a, b) => b.createdAt - a.createdAt)
         const slice = items.slice(cursor, cursor + limit)
         sendJson(res, 200, {

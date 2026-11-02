@@ -136,6 +136,9 @@ export class DevStubKernel {
     const raw = new Uint8Array(64)
     raw.set(fakeDigest(message), 0)
     raw.set(fakeDigest(privateKey), 32)
+    // 让 r、s 的最高位为 1，DER 长度稳定落在 71/72（贴近真 SM2 的常见形态）
+    raw[0] |= 0x80
+    raw[32] |= 0x80
     return encodeSignature(raw)
   }
 

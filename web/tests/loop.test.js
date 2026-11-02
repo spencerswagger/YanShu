@@ -23,7 +23,11 @@ let relay
 let client
 
 async function boot() {
-  relay = createRelay({ verifyDigests: false }) // 桩的 SM3 是假的
+  // 桩的 SM3 是假的；另外测试会连发很多挑战，把限速放宽（429 自己另有专项用例）
+  relay = createRelay({
+    verifyDigests: false,
+    limits: { challengePerMin: 5000, codeLookupPerMin: 5000, transferCreatePerHour: 5000 },
+  })
   await new Promise((resolve) => relay.server.listen(0, '127.0.0.1', resolve))
   const port = relay.server.address().port
   client = createClient({ baseUrl: `http://127.0.0.1:${port}/v1` })
@@ -274,4 +278,90 @@ test('同一块重复上传是幂等的（204），改了内容则 409 CHUNK_CON
     }),
     (err) => err.code === 'CHUNK_CONFLICT',
   )
+})
+
+test('计数口径：只在 ack 成功时 +1；同一 download_id 重复 ack 只计一次', async () => {
+  const alice = await makePeer()
+  const bob = await makePeer()
+  const { file } = makeFile(64)
+  const sent = await send(alice, bob, file)
+
+  const prelude = await bob.api.getPrelude(sent.transferId)
+  const first = await bob.api.ack({ transferId: sent.transferId, downloadId: prelude.downloadId })
+  assert.equal(first.state, 'CONSUMED')
+  assert.equal(first.download_count, 1)
+
+  const again = await bob.api.ack({ transferId: sent.transferId, downloadId: prelude.downloadId })
+  assert.equal(again.state, 'CONSUMED')
+  assert.equal(again.download_count, 1, '同一租约重复 ack 不得再计数')
+
+  const t = relay.state.transfers.get(sent.transferId)
+  assert.equal(t.downloadCount, 1)
+})
+
+test('max_downloads=2：第一次 ack 回 READY 且不删密文，第二次才 CONSUMED', async () => {
+  const alice = await makePeer()
+  const bob = await makePeer()
+  const { file } = makeFile(64)
+  const sent = await sendFile({
+    api: alice.api,
+    kernel: alice.kernel,
+    session: alice.session,
+    file,
+    recipient: { code: bob.session.code, nickname: bob.session.nickname, publicKey: bob.session.publicKey },
+    pendingStore: memoryBackend(),
+    maxDownloads: 2,
+  })
+
+  const lease1 = await bob.api.getPrelude(sent.transferId)
+  const ack1 = await bob.api.ack({ transferId: sent.transferId, downloadId: lease1.downloadId })
+  assert.equal(ack1.state, 'READY')
+  assert.equal(ack1.download_count, 1)
+  assert.equal(ack1.remaining_downloads, 1)
+  assert.ok(relay.state.transfers.get(sent.transferId).prelude, '未用尽不得删密文')
+
+  const lease2 = await bob.api.getPrelude(sent.transferId)
+  const ack2 = await bob.api.ack({ transferId: sent.transferId, downloadId: lease2.downloadId })
+  assert.equal(ack2.state, 'CONSUMED')
+  assert.equal(ack2.download_count, 2)
+  assert.equal(relay.state.transfers.get(sent.transferId).prelude, null, '用尽后必须删密文')
+})
+
+test('收件箱口径：ready 只给 READY/LEASED，all 加 UPLOADING，终结态永不出现', async () => {
+  const alice = await makePeer()
+  const bob = await makePeer()
+
+  // 一条还在上传的（有 prelude、没 complete）
+  const prelude = new Uint8Array(32).fill(1)
+  const uploading = await alice.api.createTransfer({
+    recipient_code: bob.session.code,
+    plaintext_size: 64,
+    chunk_size: 32,
+    chunk_count: 2,
+    prelude_len: prelude.length,
+    prelude_sm3: b64uEncode(alice.kernel.sm3(prelude)),
+    ttl_seconds: 3600,
+    max_downloads: 1,
+  })
+  await alice.api.putPrelude({ transferId: uploading.transfer_id, uploadToken: uploading.upload_token, prelude })
+
+  const ready = await bob.api.inbox({ state: 'ready' })
+  assert.equal(ready.items.length, 0, 'ready 不返回 UPLOADING')
+  const all = await bob.api.inbox({ state: 'all' })
+  assert.equal(all.items.length, 1)
+  assert.equal(all.items[0].state, 'UPLOADING')
+
+  // 再来一条完整的并取走，之后 all 里也不能出现终结态
+  const { file } = makeFile(64)
+  const sent = await send(alice, bob, file)
+  await receiveTransfer({
+    api: bob.api,
+    kernel: bob.kernel,
+    session: bob.session,
+    transferId: sent.transferId,
+    senderPublic: bob.senderPublic,
+    save: () => {},
+  })
+  const after = await bob.api.inbox({ state: 'all' })
+  assert.equal(after.items.some((i) => i.transfer_id === sent.transferId), false, '终结态不得出现在收件箱')
 })

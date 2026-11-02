@@ -83,3 +83,17 @@ test('业务错误不重试', async () => {
   )
   assert.equal(calls, 1)
 })
+
+test('507 配额错误不自动重试（API.md §10.2：不是速率错误）', async () => {
+  assert.equal(isRetryable(new ApiError({ code: 'INSUFFICIENT_STORAGE', status: 507 })), false)
+  let calls = 0
+  const err = new ApiError({ code: 'INSUFFICIENT_STORAGE', status: 507, message: 'quota' })
+  await assert.rejects(
+    withRetry(async () => {
+      calls += 1
+      throw err
+    }),
+    err,
+  )
+  assert.equal(calls, 1, '507 只尝试一次')
+})
