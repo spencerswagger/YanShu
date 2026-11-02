@@ -76,7 +76,9 @@
 1. 客户端 `POST /v1/challenges` 拿一个一次性挑战。
 2. 客户端按 §1.3 的公式拼 `SIG_INPUT`，用自己私钥 SM2 签名（SM3 + 默认 ZA，DER 编码）。
 3. 客户端把签名放进请求头，与业务请求一起提交。
-4. 服务端：验签 + 校验挑战未过期/未使用/用途一致 + 校验挑战绑定的 code 与 `X-YS-Code` 一致；成功后**立即作废**该挑战。
+4. 服务端：验签 + 校验挑战未过期/未使用/用途一致 + 校验 `X-YS-Code` 与 `SIG_INPUT` 里被签名的 `CODE(4)` 逐字节相同（不符 → `AUTH_CODE_MISMATCH`）；成功后**立即作废**该挑战。
+
+> **唯一口径（不要两套）**：挑战只绑 `purpose` + 时间窗；**码绑定在签名里**（`SIG_INPUT` 的 `CODE(4)` 字段），服务端验签后比对 `X-YS-Code`。不存在"挑战先绑码"这条路径。
 
 **挑战不变量**
 
@@ -85,6 +87,7 @@
 | 有效期 | 120 秒 |
 | 使用次数 | 1 次（成功即作废；失败也作废，防爆破） |
 | 用途绑定 | 签发时绑定 `purpose`，提交时用途不符 → `AUTH_CHALLENGE_INVALID` |
+| **不绑 code** | 挑战**不携带也不绑定**任何码：`REGISTER` 时该码尚未注册，没有"已存在的码"可绑。码与身份的绑定由 §1.3 的 `SIG_INPUT` 里被签名的 `CODE(4)` 完成 |
 | 未使用清理 | 10 分钟后自动失效 |
 | `nonce` | 32 字节 CSPRNG，base64url 下发给客户端 |
 
@@ -106,6 +109,8 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 | `0x05` | `INBOX_LIST` | `CODE(4 ASCII)` |
 | `0x06` | `WS_HELLO` | `CODE(4 ASCII)` |
 | `0x07` | `TRANSFER_ACK` | `RECEIVER_CODE(4) ‖ TRANSFER_ID(32 ASCII)` |
+
+**每个 PURPOSE 的字段串第一位都是 `CODE(4)`**（`REGISTER` 用待注册的码，`TRANSFER_ACK` 用接收方码），且它必须与请求头 `X-YS-Code` 逐字节相同。所以"你持有这个码对应的私钥"由**签名覆盖 code** 证明，不依赖挑战绑码。
 
 示例（`TRANSFER_CREATE`）：
 
@@ -217,7 +222,7 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 }
 ```
 
-**不返回**任何密钥、任何内部地址、任何 turn 配置（本项目**没有** TURN，见 §10.4）。
+**不返回**任何密钥、任何内部地址、任何 turn 配置（本项目**没有** TURN，见 §9.5）。
 
 ### 4.2 `POST /v1/challenges`
 
@@ -228,6 +233,8 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 ```
 
 `purpose` ∈ `REGISTER | NICKNAME_UPDATE | TRANSFER_CREATE | TRANSFER_REVOKE | INBOX_LIST | WS_HELLO | TRANSFER_ACK`。
+
+**请求体只有 `purpose`，没有 `code` 字段**（见 §1.2 的唯一口径）：码不在挑战里，而是在 `SIG_INPUT` 里被签名。`REGISTER` 因此天然可用——码还没注册也能签。
 
 **响应 200**
 
@@ -244,7 +251,7 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 
 ### 4.3 `POST /v1/codes` —— 注册（撞码语义在这里）
 
-**头**：`X-YS-Code`、`X-YS-Challenge-Id`、`X-YS-Signature`（`purpose = REGISTER`，签名覆盖 `code ‖ pubkey`）
+**头**：`X-YS-Code`、`X-YS-Challenge-Id`、`X-YS-Signature`（`purpose = REGISTER`；签名输入字段串 = `CODE(4 ASCII) ‖ PUBKEY(65)`，逐字节定义见 §1.3）
 
 **请求**
 
@@ -293,11 +300,11 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 
 **只返回这 4 个字段**。明确**不返回**：私钥存在性、在线状态（在线只走 WS presence）、传输数量、最近活跃、IP、设备、注册次数。未知码与"已注销"统一返回 `404 CODE_NOT_FOUND`，不区分原因。
 
-**失败**：`404 CODE_NOT_FOUND`、`429 RATE_LIMITED`、`423 CODE_LOCKED`（失败次数锁定，见 §12.3）。
+**失败**：`404 CODE_NOT_FOUND`、`429 RATE_LIMITED`、`423 CODE_LOCKED`（失败次数锁定，见 §11.3）。
 
 ### 4.5 `PATCH /v1/codes/{code}` —— 改昵称（签名挑战）
 
-**头**：`X-YS-*`（`purpose = NICKNAME_UPDATE`，签名覆盖 `code ‖ nickname`）
+**头**：`X-YS-*`（`purpose = NICKNAME_UPDATE`；签名输入字段串 = `CODE(4 ASCII) ‖ u16be(NICK_LEN) ‖ NICKNAME(UTF-8)`，长度前缀不可省，逐字节定义见 §1.3）
 
 **请求**：`{ "nickname": "阿雁·改" }` → **响应 200**：`{ "code": "AWQW", "nickname": "阿雁·改", "updated_at": "2026-11-02T15:00:00Z" }`
 
@@ -322,10 +329,12 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 
 任一非终结态 ──POST /revoke──► REVOKED（密文删除）
 任一非终结态 ──TTL 到期──────► EXPIRED（密文删除）
-max_downloads 用尽 ──────────► CONSUMED（密文删除）
+ack 后 download_count 达 max_downloads ──► CONSUMED（密文删除）
 ```
 
 `LEASED` 的租约默认 30 分钟。租约到期未 `ack`：回到 `READY`（不扣次数），已下载的密文不追回（客户端本地已有）。
+
+**下载计数口径（唯一，全文以此为准）**：`download_count` 只在 `POST /ack` **成功**时 +1；`LEASED` 期间不变，租约过期回 `READY` 也不变。只有当 `download_count == max_downloads` 时才转 `CONSUMED`（并删密文）。因此 `LEASED` 的合法组合恒为 `0 ≤ download_count < max_downloads`（`max_downloads = 1` 时即 `download_count = 0`）。
 
 ### 5.2 状态到 API 表现的映射（**写死**）
 
@@ -333,7 +342,7 @@ max_downloads 用尽 ──────────► CONSUMED（密文删除�
 |---|---|---|---|
 | `UPLOADING` | 200，`state: "UPLOADING"` | `409 TRANSFER_NOT_READY` | 发送方还在传 |
 | `READY` | 200 | 200 | 可下载 |
-| `LEASED` | 200，含 `lease_expires_at` | 200（需同一 `download_id`） | 下载中 |
+| `LEASED` | 200，含 `lease_expires_at`；`download_count` 不变 | 200（需同一 `download_id`） | 下载中（不扣次数） |
 | `REVOKED` | 200（tombstone） | **`410 TRANSFER_REVOKED`** | 主动撤回 |
 | `EXPIRED` | 200（tombstone） | **`410 TRANSFER_EXPIRED`** | TTL 到期 |
 | `CONSUMED` | 200（tombstone） | **`410 TRANSFER_CONSUMED`** | 取件完成/次数用尽 |
@@ -395,6 +404,8 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
   "chunk_size": 1048576,
   "chunk_count": 1,
   "prelude_len": 485,
+  "download_count": 0,
+  "max_downloads": 1,
   "created_at": "2026-11-02T14:00:00Z",
   "expires_at": "2026-11-03T14:00:00Z"
 }
@@ -491,7 +502,12 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
 
 ### 7.1 `GET /v1/inbox`
 
-**头**：`X-YS-Code`（接收方）、挑战签名（`INBOX_LIST`）。查询参数：`state=ready|all`（默认 `ready`）、`limit`（默认 20，最大 50）、`cursor`。
+**头**：`X-YS-Code`（接收方）、挑战签名（`INBOX_LIST`）。查询参数：`state`（默认 `ready`）、`limit`（默认 20，最大 50）、`cursor`。
+
+| `state` | 返回哪些状态 |
+|---|---|
+| `ready`（默认） | `READY` + `LEASED`（收件人现在就能取） |
+| `all` | 另含 `UPLOADING`（发送方还在传，仅供进度展示）；**永不返回** `REVOKED` / `EXPIRED` / `CONSUMED` |
 
 **响应 200**
 
@@ -538,7 +554,7 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
   "prelude_len": 485,
   "prelude_sm3": "hiXsWHdEyqe99H9lEg3Fzju0HZ3ccsH8CiEiShqBQXk",
   "total_ciphertext_bytes": 522,
-  "download_count": 1,
+  "download_count": 0,
   "max_downloads": 1,
   "created_at": "2026-11-02T14:00:00Z",
   "expires_at": "2026-11-03T14:00:00Z",
@@ -569,12 +585,13 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
 
 ### 7.5 `POST /v1/transfers/{id}/ack` —— 取件完成
 
-**头**：`X-YS-Code`（接收方）、挑战签名（`TRANSFER_ACK`，覆盖 `receiver_code ‖ transfer_id`）、`X-YS-Download-Id`。
+**头**：`X-YS-Code`（接收方）、挑战签名（`TRANSFER_ACK`；签名输入字段串 = `RECEIVER_CODE(4) ‖ TRANSFER_ID(32 ASCII)`，见 §1.3）、`X-YS-Download-Id`。
 
-**响应 200**：`{ "state": "CONSUMED", "terminal_reason": "CONSUMED", "terminal_at": "..." }`
+**响应 200**（本次 `ack` 后达到 `max_downloads`）：`{ "state": "CONSUMED", "terminal_reason": "CONSUMED", "terminal_at": "...", "download_count": 1 }`
 
-- 服务端在响应前完成密文删除；重复 `ack` 幂等返回 200。
-- `max_downloads > 1` 时：`ack` 一次扣 1 次；未用尽则回到 `READY`（响应 `state: "READY"`，`remaining_downloads` 递减），用尽才转 `CONSUMED`。
+- 计数口径见 §5.1：`ack` 是**唯一**扣数时机（`LEASED` 期间不扣）。
+- `ack` 成功 → `download_count += 1`。若 `download_count < max_downloads`：状态回 `READY`，响应 `{ "state": "READY", "download_count": N, "remaining_downloads": max_downloads - N }`，密文**不删**；达到 `max_downloads` 才转 `CONSUMED` 并在响应前完成物理删除。
+- 幂等键是 `X-YS-Download-Id`：**同一 `download_id` 的重复 `ack` 只计一次**并返回 200；只有拿到新租约（新 `download_id`）后再 `ack` 才会再 +1。
 
 ### 7.6 `HEAD /v1/transfers/{id}/chunks/{index}`
 
@@ -701,11 +718,11 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 | `LENGTH_MISMATCH` | 400 | `Content-Length` 与声明不符 | 重新计算切片长度后重试 |
 | `PRELUDE_DIGEST_MISMATCH` | 400 | `SM3(body) != prelude_sm3` | 重算 prelude 并重建传输（prelude 已被签名绑定，不能改） |
 | `RANGE_UNSUPPORTED` | 400 | 多区间或非法 Range | 改成单区间或整块重传 |
-| `SIZE_LIMIT_EXCEEDED` | 400 | 超过大小/块数上限 | 提示用户拆分文件 |
+| `SIZE_LIMIT_EXCEEDED` | 400 | **声明值**超上限：`plaintext_size > 4 GiB`、`chunk_count > 1048576`、`prelude_len > 4 MiB` | 提示用户拆分文件 |
 | `AUTH_MISSING` | 401 | 缺 `X-YS-*` 鉴权头 | 补签名后重试 |
 | `AUTH_SIGNATURE_INVALID` | 401 | 验签失败或签名与字段不匹配 | 用同一挑战重算签名；**不要**无限重试（挑战已作废，需重新申请） |
 | `AUTH_CHALLENGE_INVALID` | 401 | 挑战过期/已用/用途不符 | 重新 `POST /challenges` 后重试一次 |
-| `AUTH_CODE_MISMATCH` | 401 | 挑战绑定的码 ≠ `X-YS-Code` | 修 bug |
+| `AUTH_CODE_MISMATCH` | 401 | `X-YS-Code` 与 `SIG_INPUT` 里被签名的 `CODE(4)` 不一致 | 修 bug；用同一码重算签名 |
 | `SIGNAL_PEER_MISMATCH` | 403 | 信令双方与传输不匹配 | 停止该直传尝试，走中转 |
 | `CODE_NOT_FOUND` | 404 | 码未注册 | 提示"码不对或对方已换浏览器" |
 | `TRANSFER_NOT_FOUND` | 404 | 传输不存在/已物理删除 | 从本地列表移除 |
@@ -722,7 +739,7 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 | `TRANSFER_REVOKED` | 410 | 已撤回 | 清理本地，停止重试 |
 | `TRANSFER_EXPIRED` | 410 | 已过期 | 同上，提示重发 |
 | `TRANSFER_CONSUMED` | 410 | 已被取走/次数用尽 | 同上 |
-| `PAYLOAD_TOO_LARGE` | 413 | 单请求体过大 | 减小切片 |
+| `PAYLOAD_TOO_LARGE` | 413 | **单个请求体**超过服务端接收上限（如块切片大于声明长度、prelude 超 `prelude_len`） | 减小切片后重传该块 |
 | `CONTENT_TYPE_UNSUPPORTED` | 415 | 非 `application/octet-stream` | 改用二进制体（不要 multipart） |
 | `RANGE_NOT_SATISFIABLE` | 416 | Range 越界 | 从头重传该块 |
 | `CODE_LOCKED` | 423 | 查码失败次数过多被锁 | 等待锁定期（见 `Retry-After`），不要继续试 |
@@ -734,7 +751,7 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 |---|---:|---|---|
 | `INTERNAL` | 500 | 服务端内部错误 | 5s→20s→60s 退避重试，最多 3 次 |
 | `SERVICE_UNAVAILABLE` | 503 | 维护/过载 | 同上，指数退避 |
-| `INSUFFICIENT_STORAGE` | 507 | 存储满 | 提示"服务器暂不可用"，稍后重试 |
+| `INSUFFICIENT_STORAGE` | 507 | 配额类：服务端整体存储不足，或该 IP 未取走密文总量超配额（见 §11.4） | 提示"稍后重试"；**不是**速率错误，不要按 `Retry-After` 循环重试 |
 
 ### 10.3 与端侧错误码的分界
 
@@ -803,8 +820,8 @@ Content-Type: application/json
 ### 11.4 其它反滥用不变量
 
 - 单码并发未终结传输上限 20；超出 → `429`（`scope: "code"`）。
-- 单 IP 未取走密文总量上限（默认 8 GiB）→ `INSUFFICIENT_STORAGE` 或 `429`。
-- 举报下架：本契约不含举报接口（v1 不做），但服务端保留 `state: REVOKED` 的内部触发路径（运营手动撤回），语义与 `REVOKED` 一致。
+- 单 IP 未取走密文总量上限（默认 8 GiB）→ 统一 `507 INSUFFICIENT_STORAGE`（配额类，不是速率类；`429` 只用于 §11.1 的时间窗限速）。
+- 举报下架：**v1 不提供公开举报入口**，只保留内部 `REVOKED` 终结态（运营手动撤回），语义与用户撤回完全一致；公开举报入口排期 v2（职责见需求基线 §6）。
 
 ---
 
@@ -840,10 +857,12 @@ Content-Type: application/json
 1. API 报文里不存在文件名、MIME、明文、密钥、私钥字段；出现即 `400 FIELD_NOT_ALLOWED`。
 2. 任何二进制端点都只接受 `application/octet-stream`。
 3. 服务端不解析 prelude / 块内容，只算 `SM3` 与长度。
-4. 下载计数只在 `ack` 时扣减；`ack` 与 `revoke` 与 TTL 三条路径都物理删除密文。
+4. 下载计数只在 `ack` 成功时 +1（`LEASED` 期间与租约过期都不扣）；`ack` 达上限、`revoke`、TTL 三条路径都物理删除密文。
 5. 三种终结态在内容端点一律 `410`，且三个 `code` 互不混用。
 6. `transfer_id` 是能力凭证；`upload_token` 只存 `SM3`。
 7. 无 TURN：客户端 ICE 配置只有 STUN，`typ relay` 候选一律丢弃。
 8. 直传切换只能由用户点击触发；失败回落**静默**、只提示一句、不重传已完成块。
 9. 撞码只走"重新生成密钥对"这一条路，不自动加长码。
-10. 所有 `429` 都带 `Retry-After`，所有错误都带稳定 `code`。
+10. 所有 `429` 都带 `Retry-After`，所有错误都带稳定 `code`；存储/配额类错误用 `507`，不用 `429`。
+11. 挑战只绑 `purpose`，不绑 code；码身份由 `SIG_INPUT` 里的 `CODE(4)` + 验签绑定（`REGISTER` 也走这条）。
+12. v1 无公开举报入口，只有内部 `REVOKED` 终结态。
