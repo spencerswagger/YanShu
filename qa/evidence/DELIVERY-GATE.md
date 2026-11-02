@@ -34,7 +34,7 @@
 | 格式错/不存在 | `AUTH_TOKEN_INVALID` |
 | 签名本身不被接受 | `AUTH_SIGNATURE_INVALID` |
 
-`AUTH_TOKEN_REVOKED` 当前**不应出现**（只留给将来的"显式吊销列表"）；
+**终值 `STALE`**；`AUTH_TOKEN_REVOKED` 当前不出现（只留给将来"显式吊销列表"语义）；
 `AUTH_TOKEN_EXPIRED` 本期不实现（K2 登记），不算缺口。
 
 实现若仍返回 `AUTH_TOKEN_REVOKED` → **记 FAIL 并注明"待 Core 改名"**，不迁就实现。

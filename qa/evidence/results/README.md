@@ -51,9 +51,9 @@ results/
 |---|---|---|---|---|---|
 | `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | `08d40e7` | `275fc463…6af55` | **真 sm2** | `YS_EV1_VERIFIER=sm2 YS_EV1_LOG_MODE=dir YS_DELIVER_BIN=core-deliver qa/evidence/run_evidence1_core.sh …` | **闭合**：存储/DB/日志三处零命中，对照 1/1/1/0 |
 | `contract-v1/2026-11-02-delivery-8f4f24c.md` | —（交付判定） | `8f4f24c` | `2c4e8c69…4118ead` | — | native-api | 三条门槛各一条命令（见该文件末节） | **三条件全过 → 可交付**：内核 `c1b87d0a…`/127,313B、升级 10/10（`pre-kid`、连跑两次幂等）、向量与证据二全过；唯一待办是错误名字面 |
-| `contract-v1/2026-11-02-delivery-gate-status.md` | —（交付判定） | `d655e16` | `4c331e1f…f1ef9d` | stub-allow | native-api | 见 `qa/evidence/DELIVERY-GATE.md`（三条各一条命令） | **交付门槛 2/3 达标**：内核 PASS、迁移 PASS、向量 PASS；**唯一不达标 = 轮换错误名仍为 `AUTH_TOKEN_REVOKED`（待改 `AUTH_TOKEN_STALE`）** |
+| `contract-v1/2026-11-02-delivery-gate-status.md` | —（交付判定） | `d655e16` | `4c331e1f…f1ef9d` | stub-allow | native-api | 见 `qa/evidence/DELIVERY-GATE.md`（三条各一条命令） | 历史记录（`d655e16`，已被 `dfd3e82` 取代）：内核 PASS、迁移 PASS、向量 PASS；当时轮换错误名为 `AUTH_TOKEN_REVOKED`，**终值应为 `AUTH_TOKEN_STALE`** |
 | `contract-v1/2026-11-02-core-script-token-rotation-d655e16.md` | —（服务端证据） | `d655e16` | `4c331e1f…f1ef9d` | stub-allow | native-api | `sh server/scripts/token-rotation-check.sh --bin … --deliver … --yspk … --dsn … --blob …` | **Core 官方脚本 6/6 PASS**；原始 body：`AUTH_TOKEN_REVOKED`（轮换）/ `AUTH_TOKEN_INVALID`（值不对），`message` 明写"由密钥轮换导致" |
-| `contract-v1/2026-11-02-names-and-upgrade-d655e16.md` | —（服务端证据） | `d655e16` | `4c331e1f…f1ef9d` | stub-allow | native-api | `check_token_lifecycle.py …`；`check_upgrade_path.py [--column-expect absent]` | **错误名终值**：只换 secret → 401 `AUTH_TOKEN_REVOKED`（旧版误报签名类已修）；**删列迁移**升级路径 9/9 PASS |
+| `contract-v1/2026-11-02-names-and-upgrade-d655e16.md` | 历史（已被 `dfd3e82` 取代） | `d655e16` | `4c331e1f…f1ef9d` | stub-allow | native-api | `check_token_lifecycle.py …`；`check_upgrade_path.py [--column-expect absent]` | 当时只换 secret → 401 `AUTH_TOKEN_REVOKED`（**终值 `STALE`**）；删列迁移升级 9/9 PASS |
 | `contract-v1/2026-11-02-upgrade-path-check.md` | —（服务端证据） | 老 `08d40e7` → 新 `5605907` | — | — | native-api | `python3 qa/evidence/check_upgrade_path.py --old-binary <旧> --new-binary <新> --dsn "<DSN>"` | **升级路径常规项**：老库缺列 → 迁移补列 → 历史行完好（`pre-kid`）→ 服务起 + healthz 200 → 连跑两次幂等（10/10） |
 | `contract-v1/2026-11-02-token-naming-authority-5605907.md` | —（服务端证据） | `5605907` | `3c1e4b2b…35f98f` | stub-allow | native-api | `check_token_lifecycle.py ...`（`--kid` 即 epoch） | **命名权威表**：只改 secret → 204（不吊销）；只改 epoch → 401 `AUTH_TOKEN_STALE`；两者都改 → STALE 优先；新签发 201、旧 token 不复活；epoch 调小拒启动 |
 | `contract-v1/2026-11-02-host-binary-7239888.md` | —（服务端证据） | `7239888` | `bd64d23c…d7d6d7` | stub/sm2 | native-api | `check_token_lifecycle.py --kid 1 …`；`yanshu-server -migrate-only` 验升级路径 | **三件套 + 升级路径已修**：老库（`08d40e7`）升级后补上 `upload_token_kid` 并起得来；token 四步 201 → 401 `AUTH_TOKEN_INVALID`（secret）→ 401 `AUTH_TOKEN_STALE`（kid）→ 新 201，旧 token 不复活 |
@@ -83,7 +83,7 @@ results/
 
 **已闭合**：证据二（篡改必报错，生产路径）、用户码/校验位四形态一致性 + 反向用例、
 prelude-only 元数据语义、证据一（存储/DB/日志零命中 + 三组阳性对照，含真 `sm2` 那份）、
-token 轮换（kid → `AUTH_TOKEN_REVOKED`）。
+token 轮换（KID → **`AUTH_TOKEN_STALE`**，终值；`REVOKED` 当前不出现）。
 
 **交付门槛**（详见 `qa/evidence/DELIVERY-GATE.md`）：内核 sha / 迁移升级 / 向量套件三条。
 
@@ -99,7 +99,7 @@ token 轮换（kid → `AUTH_TOKEN_REVOKED`）。
 
 1. ~~schema 升级缺列~~ → **已闭合**（`0002` 补列 + `pre-kid` 回填）：`08d40e7 → b516cc6` 10/10 PASS。
 2. ~~token 错误名~~ → **已闭合**：`b516cc6` 上只有 `AUTH_TOKEN_INVALID` 与 `AUTH_TOKEN_STALE`，
-   `AUTH_TOKEN_REVOKED` 已不出现（`d655e16` 的那次是旧产物）。
+   错误名终值 **`STALE`**；当前 `ab4279a` 报签名类、`9bce5bb` 起报 `STALE`，以最新 head 为准（`dfd3e82` 实测 `STALE`）。
 3. **重签发端点未实现**（`POST /v1/transfers/{id}/token`，契约 §1.7.5 已定义）——
    **进度差，不是 BLOCKED**；`AUTH_TOKEN_EXPIRED` 属 K2 登记，本期不实现，也不算缺口。
 
