@@ -26,7 +26,7 @@
 | Q8 | 行式挑战消息 | **`SIG_INPUT = "YSAUTH1" ‖ PURPOSE(1) ‖ NONCE(32) ‖ 字段串`**（§1.3） | `auth/signinput.go` |
 | Q9 | `message` base64url | 服务端不再下发待签串；客户端按 §1.3 自拼 | 同上 |
 | Q10 | 注册带 `code` | **必需**，且 `code == SM3(pubkey)[0:20bit]` 派生值与签名里的 `CODE(4)` 三方一致（§4.3） | `handleRegisterCode` |
-| Q11 | 容错归一化码 | **裁决 D3：允许**，但须幂等、先于一切判定、限速/锁定按归一化后计数、禁止猜测性纠错 | `gm.NormalizeCode` |
+| Q11 | 容错归一化码 | **裁决 D3：允许**，但须幂等、先于一切判定、限速/锁定按归一化后计数、禁止猜测性纠错；规则与端侧 `ys_normalize_code` 逐字节一致（只丢 `-`/空格/TAB/CR/LF 五种分隔符，其余非法字符一律拒绝） | `gm.NormalizeCode`；向量 `internal/gm/testdata/normalize-vectors.json`（20 组） |
 | Q12 | 接受 5 位 `CODE-CHECK` | **拒绝**：5 位不截断，直接 `CODE_FORMAT_INVALID`（裁决 D3 ④） | `gm.NormalizeCode` |
 | Q13 | 区分「不存在 / 已过期」 | **不区分**：统一 `404 CODE_NOT_FOUND`（§4.4） | `handleLookupCode` |
 | Q14 | 码 30 天 TTL | **无过期**：只有 `registered_at` / `updated_at`（§2.1） | `codes` 表 |

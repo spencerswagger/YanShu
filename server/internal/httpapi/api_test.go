@@ -770,6 +770,31 @@ func TestLookupRateLimitAndLockout(t *testing.T) {
 	}
 }
 
+// 裁决 D3 ②③：归一化先于一切判定，同一码的不同写法算同一个主体。
+func TestRegisterNormalizesCode(t *testing.T) {
+	e := newEnv(t, "")
+	pub := randomPublicKey(t)
+	code := gm.DeriveCode(pub)
+	// body 用小写 + 连字符，header 用规范形式：应归一到同一个码。
+	bodyCode := strings.ToLower(code[:2]) + "-" + strings.ToLower(code[2:])
+
+	headers := e.authHeaders(spec.PurposeRegister, code)
+	resp := e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
+		Code: bodyCode, PublicKey: auth.B64.EncodeToString(pub), Nickname: "x",
+	}, headers)
+	if resp.status != http.StatusCreated {
+		t.Fatalf("register with variant spelling: %d %s", resp.status, resp.body)
+	}
+	var out spec.CodeResponse
+	e.decode(resp, &out)
+	if out.Code != code {
+		t.Fatalf("stored code = %q, want canonical %q", out.Code, code)
+	}
+	if r := e.do(http.MethodGet, spec.CodePath(code), nil, nil); r.status != http.StatusOK {
+		t.Fatalf("lookup canonical: %d", r.status)
+	}
+}
+
 // 裁决 D3 ④：5 位 CODE-CHECK 形式不再截断，直接拒绝。
 func TestFiveCharCodeRejected(t *testing.T) {
 	e := newEnv(t, "")

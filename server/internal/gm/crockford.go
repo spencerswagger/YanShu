@@ -18,7 +18,18 @@ const (
 )
 
 // ErrInvalidCode 表示码不合法（长度、字符集、非法 U 等）。
+//
+// 与端侧的对应关系（仅用于文档/日志对照，不参与 wire）：
+//
+//	gm.ErrInvalidCode        ↔ CRYPTO_CODE_INVALID（-21）
+//	HTTP 层对外               ↔ 400 CODE_FORMAT_INVALID
 var ErrInvalidCode = errors.New("gm: invalid user code")
+
+// 端侧错误名与数值（docs/CRYPTO-PACK §13.1），供日志/文档引用，不作为 wire 值。
+const (
+	ErrCodeInvalidName  = "CRYPTO_CODE_INVALID"
+	ErrCodeInvalidValue = -21
+)
 
 // DeriveCode 由未压缩 SM2 公钥（65 字节）派生 4 位用户码。
 //
@@ -50,8 +61,8 @@ func encode20(v uint32) string {
 
 // NormalizeCode 按 Crockford 规范归一化用户输入：
 //
-//   - 转大写；
-//   - 去掉分组符 `-` 与所有空白；
+//   - 转 ASCII 大写；
+//   - 只丢弃五种分隔符：`-`、空格、TAB、CR、LF（**不是**"所有空白"）；
 //   - 易混字符纠正：O→0、I→1、L→1；
 //   - 长度必须为 4；
 //   - 每个字符必须在字母表内（`U` 一律拒绝）。
@@ -60,7 +71,9 @@ func encode20(v uint32) string {
 // 判定执行；③ 限速与锁定按归一化后的码计数；④ **禁止 5 位截断、禁止猜测性纠错**。
 // 因此这里只保留 CRYPTO-PACK §3.4 明列的三步纠正，不做任何长度猜测。
 func NormalizeCode(raw string) (string, error) {
-	s := strings.ToUpper(strings.TrimSpace(raw))
+	// 注意：这里**不能**用 strings.TrimSpace —— 它会把 \v、\f、NBSP 等也算作空白静默丢掉，
+	// 而契约只允许丢弃 `-`、空格、TAB、CR、LF 五种。其余一律交给字母表判定（拒绝）。
+	s := strings.ToUpper(raw)
 	if s == "" {
 		return "", ErrInvalidCode
 	}
