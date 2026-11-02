@@ -150,6 +150,20 @@ Rust 侧 API 为 `pack::unpack(pack, recipient_sk, Option<&str>)`（第三个参
   截断 `TRUNCATED`·`LENGTH_INCONSISTENT` / 缺块 `CHUNK_MISSING`·`MISSING_BLOCK` /
   版本 `UNSUPPORTED_VERSION` / tag `TAG_MISMATCH`·`CHUNK_AUTH_FAILED`。
 
+## 9.5 评审要求的五类反例
+
+`crypto/sm/tests/review_counterexamples.rs` 按"评审给的五种攻击"各一条，断言到具体错误名：
+
+| 攻击 | 结果 |
+|---|---|
+| 改块头 1 字节（`PT_LEN`） | `CRYPTO_LENGTH_INCONSISTENT` |
+| 改数据区 1 字节（密文） | `CRYPTO_CHUNK_AUTH_FAILED` |
+| 删中间块（连同块头/tag） | `CRYPTO_LENGTH_INCONSISTENT`（包长先对不上） |
+| 删块但保留长度（只改块号） | `CRYPTO_CHUNK_ORDER`（重复块号） |
+| 换两块顺序 | `CRYPTO_CHUNK_MISSING`（首条块号 1、期望 0） |
+| **搬入别的包里的合法块** | `CRYPTO_CHUNK_AUTH_FAILED`（DK 不同 + AAD 绑块号/总块数/长度） |
+| 截断（尾部 / 头部中间 / 空） | `CRYPTO_LENGTH_INCONSISTENT` |
+
 ## 10. 两层篡改防线
 
 * **AEAD 层**：AAD 绑 `CHUNK_INDEX / LAST_FLAG / CHUNK_COUNT / CHUNK_SIZE / PLAINTEXT_SIZE / PT_LEN`，
