@@ -61,6 +61,7 @@ func newEnv(t *testing.T, mode string) *env {
 	e.cfg = config.Config{
 		Verifier:          config.VerifierMode(mode),
 		TokenSecret:       []byte("test-secret"),
+		TokenKID:          "k1",
 		STUNURLs:          []string{"stun:stun.example:3478"},
 		WSURL:             "wss://example/v1/ws",
 		StorageQuotaBytes: 64 << 20,
@@ -1103,36 +1104,61 @@ func newSM2Identity(t *testing.T) (priv, pub []byte, code string) {
 	return priv, pub, gm.DeriveCode(pub)
 }
 
-// token 语义：按 SM3 校验，**轮换 TOKEN_SECRET 不会让已签发的 upload_token 失效**；
-// 真正失效的是「幂等重放」——重放时无法重建旧 token，应让客户端重新建传输。
-func TestUploadTokenAcrossSecretRotation(t *testing.T) {
+// token 轮换语义（三步实测，见 TestUploadTokenRotationThreeSteps）：
+//
+//	① 同 kid 下签发的 token 能正常用；
+//	② 换 secret + kid 后，同一个 token 立刻 401 AUTH_TOKEN_STALE；
+//	③ 重新签发（新建传输）的 token 正常 200。
+func TestUploadTokenRotationThreeSteps(t *testing.T) {
 	e := newEnv(t, "")
 	sender, _ := e.register("sender")
 	recipient, _ := e.register("recipient")
 	f := newFixture()
 	tr := e.createTransfer(sender, recipient, f, nil)
 
-	otherTokens, err := auth.NewTokenIssuer([]byte("rotated-secret"))
+	// ① 旧实例（kid=k1）下可用。
+	if resp := e.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusCreated {
+		t.Fatalf("step1 put prelude: %d %s", resp.status, resp.body)
+	}
+	// 同 kid 下的错 token 仍是"签名/令牌不对"，不是"过期"。
+	wrong := e.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
+		spec.HeaderUploadToken: "not-a-real-token",
+	})
+	e.wantError(wrong, spec.ErrAuthSignatureInvalid)
+
+	// ② 轮换 secret + kid：同一 token 立刻失效，且错误名可区分。
+	rotatedTokens, err := auth.NewTokenIssuer([]byte("rotated-secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	cfg2 := e.cfg
+	cfg2.TokenSecret = []byte("rotated-secret")
+	cfg2.TokenKID = "k2"
 	e2 := *e
-	e2.api = New(e.cfg, e.st, e.blobs, e.api.verifier, otherTokens, ratelimit.NewMemory(), ratelimit.NewMemoryLockout(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	e2.cfg = cfg2
+	e2.api = New(e2.cfg, e.st, e.blobs, e.api.verifier, rotatedTokens,
+		ratelimit.NewMemory(), ratelimit.NewMemoryLockout(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	e2.api.now = func() time.Time { return e.now }
 	e2.srv = httptest.NewServer(e2.api.Handler())
 	defer e2.srv.Close()
 
-	// ① 裁决 G5：轮换 TOKEN_SECRET 后存量 token 失效 → 401（客户端据此重新建传输）。
-	if resp := e2.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusUnauthorized {
-		t.Fatalf("old token after rotation: %d %s", resp.status, resp.body)
-	}
-	// ② 错 token → 401。
-	wrong := e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
-		spec.HeaderUploadToken: "not-a-real-token",
+	e2.wantError(e2.putPrelude(tr.UploadToken, tr, f.Prelude), spec.ErrAuthTokenStale)
+	stale := e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
+		spec.HeaderUploadToken: tr.UploadToken,
 	})
-	e2.wantError(wrong, spec.ErrAuthSignatureInvalid)
+	e2.wantError(stale, spec.ErrAuthTokenStale)
 
-	// ③ 幂等重放在轮换后拿不回同一个 token → 409，提示重建传输。
+	// ③ 重新签发的新传输用新 token 正常。
+	f2 := newFixture()
+	tr2 := e2.createTransfer(sender, recipient, f2, nil)
+	if tr2.UploadToken == tr.UploadToken {
+		t.Fatal("new transfer reused the old token")
+	}
+	if resp := e2.putPrelude(tr2.UploadToken, tr2, f2.Prelude); resp.status != http.StatusCreated {
+		t.Fatalf("step3 put prelude with new token: %d %s", resp.status, resp.body)
+	}
+
+	// 幂等重放在轮换后拿不回同一个 token → 409，让客户端重建。
 	body := map[string]any{
 		"recipient_code": recipient, "plaintext_size": f.PlaintextSize, "chunk_size": f.ChunkSize,
 		"chunk_count": f.ChunkCount, "prelude_len": len(f.Prelude), "prelude_sm3": f.preludeSM3(),

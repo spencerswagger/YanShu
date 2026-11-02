@@ -26,6 +26,8 @@ const (
 	ErrAuthSignatureInvalid ErrorCode = "AUTH_SIGNATURE_INVALID"
 	ErrAuthChallengeInvalid ErrorCode = "AUTH_CHALLENGE_INVALID"
 	ErrAuthCodeMismatch     ErrorCode = "AUTH_CODE_MISMATCH"
+	// ErrAuthTokenStale：upload_token 的密钥版本（kid）已过期（轮换后旧 token）。
+	ErrAuthTokenStale ErrorCode = "AUTH_TOKEN_STALE"
 
 	// 403
 	ErrSignalPeerMismatch ErrorCode = "SIGNAL_PEER_MISMATCH"
@@ -86,6 +88,7 @@ var errStatus = map[ErrorCode]int{
 	ErrAuthSignatureInvalid: http.StatusUnauthorized,
 	ErrAuthChallengeInvalid: http.StatusUnauthorized,
 	ErrAuthCodeMismatch:     http.StatusUnauthorized,
+	ErrAuthTokenStale:       http.StatusUnauthorized,
 
 	ErrSignalPeerMismatch: http.StatusForbidden,
 	ErrNotTransferParty:   http.StatusForbidden,
@@ -137,6 +140,7 @@ var errMessage = map[ErrorCode]string{
 	ErrAuthSignatureInvalid: "signature verification failed",
 	ErrAuthChallengeInvalid: "challenge is expired, used or purpose mismatch",
 	ErrAuthCodeMismatch:     "X-YS-Code does not match the signed code",
+	ErrAuthTokenStale:       "upload token was issued under a retired key version; create a new transfer",
 
 	ErrSignalPeerMismatch: "signal peers do not match the transfer",
 	ErrNotTransferParty:   "authenticated credential is not a party of this transfer",

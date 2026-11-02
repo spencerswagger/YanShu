@@ -46,13 +46,14 @@ type Transfer struct {
 	UpdatedAt            time.Time
 	ExpiresAt            time.Time
 	UploadTokenSM3       []byte
+	UploadTokenKID       string
 	UploaderIP           string
 }
 
 const transferColumns = `transfer_id, sender_code, recipient_code, plaintext_size, chunk_size, chunk_count,
 	prelude_len, prelude_sm3, prelude_received, received_chunks, total_ciphertext_bytes,
 	download_count, max_downloads, state, terminal_reason, terminal_at,
-	created_at, updated_at, expires_at, upload_token_sm3, uploader_ip`
+	created_at, updated_at, expires_at, upload_token_sm3, upload_token_kid, uploader_ip`
 
 func scanTransfer(row interface{ Scan(...any) error }) (Transfer, error) {
 	var t Transfer
@@ -60,18 +61,18 @@ func scanTransfer(row interface{ Scan(...any) error }) (Transfer, error) {
 		&t.ChunkCount, &t.PreludeLen, &t.PreludeSM3, &t.PreludeReceived, &t.ReceivedChunks,
 		&t.TotalCiphertextBytes, &t.DownloadCount, &t.MaxDownloads, &t.State,
 		&t.TerminalReason, &t.TerminalAt, &t.CreatedAt, &t.UpdatedAt, &t.ExpiresAt,
-		&t.UploadTokenSM3, &t.UploaderIP)
+		&t.UploadTokenSM3, &t.UploadTokenKID, &t.UploaderIP)
 	return t, err
 }
 
 // CreateTransfer 建传输，初始状态 UPLOADING。
 func (s *Store) CreateTransfer(ctx context.Context, t Transfer) (Transfer, error) {
 	row := s.pool.QueryRow(ctx, `INSERT INTO transfers (`+transferColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false,0,$9,0,$10,'UPLOADING',NULL,NULL,$11,$11,$12,$13,$14)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false,0,$9,0,$10,'UPLOADING',NULL,NULL,$11,$11,$12,$13,$14,$15)
 		RETURNING `+transferColumns,
 		t.ID, t.SenderCode, t.RecipientCode, t.PlaintextSize, t.ChunkSize, t.ChunkCount,
 		t.PreludeLen, t.PreludeSM3, t.TotalCiphertextBytes, t.MaxDownloads,
-		t.CreatedAt, t.ExpiresAt, t.UploadTokenSM3, nullableString(t.UploaderIP))
+		t.CreatedAt, t.ExpiresAt, t.UploadTokenSM3, t.UploadTokenKID, nullableString(t.UploaderIP))
 	out, err := scanTransfer(row)
 	if err != nil {
 		return Transfer{}, fmt.Errorf("store: create transfer: %w", err)
@@ -640,7 +641,7 @@ func (s *Store) ListInbox(ctx context.Context, q InboxQuery) ([]InboxRow, error)
 			&r.ChunkCount, &r.PreludeLen, &r.PreludeSM3, &r.PreludeReceived, &r.ReceivedChunks,
 			&r.TotalCiphertextBytes, &r.DownloadCount, &r.MaxDownloads, &r.State,
 			&r.TerminalReason, &r.TerminalAt, &r.CreatedAt, &r.UpdatedAt, &r.ExpiresAt,
-			&r.UploadTokenSM3, &uploaderIP, &r.SenderNickname)
+			&r.UploadTokenSM3, &r.UploadTokenKID, &uploaderIP, &r.SenderNickname)
 		if err != nil {
 			return nil, err
 		}
@@ -661,7 +662,7 @@ func prefixedTransfers(alias string) string {
 		alias + `.download_count, ` + alias + `.max_downloads, ` + alias + `.state, ` +
 		alias + `.terminal_reason, ` + alias + `.terminal_at, ` +
 		alias + `.created_at, ` + alias + `.updated_at, ` + alias + `.expires_at, ` +
-		alias + `.upload_token_sm3, ` + alias + `.uploader_ip`
+		alias + `.upload_token_sm3, ` + alias + `.upload_token_kid, ` + alias + `.uploader_ip`
 }
 
 // IdempotencyRecord 是 POST /transfers 的幂等记录。

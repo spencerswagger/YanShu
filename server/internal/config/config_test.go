@@ -9,6 +9,7 @@ func TestValidateForServeRequiresTokenSecret(t *testing.T) {
 	t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
 	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
 	t.Setenv("YANSHU_TOKEN_SECRET", "")
+	t.Setenv("YANSHU_TOKEN_KID", "k1")
 
 	cfg, err := Load()
 	if err != nil {
@@ -59,6 +60,7 @@ func TestSM2RequiresKernelWhenServing(t *testing.T) {
 	t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
 	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
 	t.Setenv("YANSHU_TOKEN_SECRET", strings.Repeat("k", MinTokenSecretLen))
+	t.Setenv("YANSHU_TOKEN_KID", "k1")
 	t.Setenv("YANSHU_VERIFIER", "sm2")
 	t.Setenv("YANSHU_KERNEL_WASM", "")
 
@@ -72,6 +74,26 @@ func TestSM2RequiresKernelWhenServing(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "kernel") {
 		t.Fatalf("error should mention the kernel: %v", err)
+	}
+}
+
+// 没有密钥版本时必须拒绝启动（fail closed）：否则无法判断"旧 token"。
+func TestTokenKIDRequired(t *testing.T) {
+	t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
+	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
+	t.Setenv("YANSHU_TOKEN_SECRET", strings.Repeat("k", MinTokenSecretLen))
+	t.Setenv("YANSHU_TOKEN_KID", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	err = cfg.ValidateForServe()
+	if err == nil {
+		t.Fatal("missing TOKEN_KID must fail validation")
+	}
+	if !strings.Contains(err.Error(), "YANSHU_TOKEN_KID") {
+		t.Fatalf("error should name the variable: %v", err)
 	}
 }
 

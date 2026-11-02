@@ -13,8 +13,14 @@
 upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖ TRANSFER_ID_ASCII) )
 ```
 
-**存的是什么**：只存 `SM3(upload_token)`（`transfers.upload_token_sm3`，32 字节 bytea）。
-不存原文；也没有单独的 token 过期时间——它的生命周期绑在传输行上。
+**存的是什么**：只存 `SM3(upload_token)`（`transfers.upload_token_sm3`，32 字节 bytea）
+与签发时的**密钥版本** `kid`（`transfers.upload_token_kid`）。不存原文；没有单独的 token 过期时间
+——它的生命周期绑在传输行上。
+
+**kid 的作用**：服务端只认当前 `YANSHU_TOKEN_KID`。轮换时把 `YANSHU_TOKEN_SECRET` 与
+`YANSHU_TOKEN_KID` 一起换掉，所有旧行立刻失效，错误名为 **`401 AUTH_TOKEN_STALE`**
+（与"token 不对"的 `AUTH_SIGNATURE_INVALID` 区分，客户端据此走"重建传输"的自愈路径）。
+`TOKEN_KID` 缺失 → 启动报错（fail closed），不允许"没有版本信息就都放过"。
 
 **怎么校验**（`TokenIssuer.Validate`）：按**当前** `TOKEN_SECRET` 与路径里的 `transfer_id`
 重算一遍，要求「提交的 token == 重算值」**且**「SM3(重算值) == 库里存的哈希」，两者都成立才放行。
@@ -24,7 +30,8 @@ upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖
 
 | 事件 | 效果 | 说明 |
 |---|---|---|
-| **轮换 `TOKEN_SECRET`** | **全部 token 立即失效**（≥ 下次请求） | 重算值与旧 token 不同；客户端重建传输拿新 token |
+| **轮换 `TOKEN_SECRET` + `TOKEN_KID`** | **全部 token 立即失效**，返回 `401 AUTH_TOKEN_STALE` | kid 对不上直接拒；客户端重建传输拿新 token |
+| 只换 `TOKEN_SECRET` 不换 kid | 旧 token 也会失败（重算值不同），错误名是 `AUTH_SIGNATURE_INVALID` | 不建议；规范做法是两个一起换 |
 | 传输进入终结态（`CONSUMED`/`REVOKED`/`EXPIRED`） | 上传接口拒绝（`409 TRANSFER_STATE_CONFLICT`） | token 本身不再是有效上传凭据 |
 | TTL 到期 | 先转 `EXPIRED`，终结元数据保留 7 天后物理删除 | 行删除后 token 自然失效（404/410） |
 | 发送方撤回 | 立即终结 + 删密文 | 同上 |
@@ -56,6 +63,7 @@ upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖
    YANSHU_ADDR=127.0.0.1:8080
    YANSHU_LOG_DIR=/var/log/yanshu
    YANSHU_TOKEN_SECRET=<≥16B 的固定随机值，落 0600 文件>
+   YANSHU_TOKEN_KID=<密钥版本，1..32 可打印字符，如 k2026-11；与 secret 同时轮换>
    YANSHU_VERIFIER=sm2
    YANSHU_KERNEL_WASM=<repo>/server/kernel/yanshu_sm.wasm   # 留空则自动探测 ./kernel/ 与 exe 同级
    ```

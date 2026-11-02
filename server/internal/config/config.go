@@ -34,8 +34,10 @@ type Config struct {
 	// TrustProxyHeaders 为 true 时从 X-Forwarded-For 取客户端 IP。
 	TrustProxyHeaders bool
 
-	// TokenSecret 是 upload_token 的 HMAC 密钥；为空则进程内随机（重启后旧 token 失效）。
+	// TokenSecret 是 upload_token 的 HMAC 密钥。
 	TokenSecret []byte
+	// TokenKID 是 token 的密钥版本；轮换 secret 时一并换掉即可一次性吊销全部旧 token。
+	TokenKID string
 
 	// 对外配置（GET /v1/config）。
 	STUNURLs []string
@@ -90,6 +92,16 @@ func (c Config) ValidateForServe() error {
 		return fmt.Errorf("config: YANSHU_VERIFIER=sm2 requires the wasm kernel; " +
 			"set YANSHU_KERNEL_WASM=/path/to/yanshu_sm.wasm (repo ships it at server/kernel/yanshu_sm.wasm)")
 	}
+	if c.TokenKID == "" || len(c.TokenKID) > 32 {
+		// fail closed：没有密钥版本就无法判断"旧 token"，宁可拒绝启动也不放行。
+		return fmt.Errorf("config: YANSHU_TOKEN_KID is required when serving (1..32 printable chars); " +
+			"rotate it together with YANSHU_TOKEN_SECRET to revoke all upload tokens")
+	}
+	for i := 0; i < len(c.TokenKID); i++ {
+		if c.TokenKID[i] < 0x21 || c.TokenKID[i] > 0x7e {
+			return fmt.Errorf("config: YANSHU_TOKEN_KID must be printable ASCII without spaces")
+		}
+	}
 	if len(c.TokenSecret) < MinTokenSecretLen {
 		return fmt.Errorf("config: YANSHU_TOKEN_SECRET is required when serving (>=%d bytes); "+
 			"read it from an env var or a 0600 file, never hardcode it", MinTokenSecretLen)
@@ -118,6 +130,7 @@ func Load() (Config, error) {
 	if secret := os.Getenv("YANSHU_TOKEN_SECRET"); secret != "" {
 		c.TokenSecret = []byte(secret)
 	}
+	c.TokenKID = os.Getenv("YANSHU_TOKEN_KID")
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: YANSHU_DATABASE_URL is required")
 	}

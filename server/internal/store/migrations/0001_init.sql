@@ -3,7 +3,7 @@
 -- 红线（Gate 验收点）：本库**只**存白名单字段。
 --   §2.1 白名单之外，只允许下列「派生/内部」列，它们不含任何用户内容：
 --     · transfers.prelude_received / received_chunks / updated_at  —— 由上传行为派生的计数与时间
---     · transfers.upload_token_sm3                                  —— §1.5 明确要求只存 SM3
+--     · transfers.upload_token_sm3 / upload_token_kid               —— §1.5 只存 SM3；kid 用于轮换吊销
 --     · transfers.uploader_ip                                       —— §11.4 按 IP 的存储配额
 --     · transfer_downloads.*                                        —— 下载租约与 ack 幂等状态
 --     · idempotency_keys.*                                          —— §6.2 幂等窗口（600s）
@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS transfers (
     updated_at             timestamptz NOT NULL,
     expires_at             timestamptz NOT NULL,
     upload_token_sm3       bytea       NOT NULL CHECK (octet_length(upload_token_sm3) = 32),
+    -- 签发 token 时的密钥版本（kid）。服务端只认当前 kid；轮换后旧行的 token 一律 401。
+    upload_token_kid       text        NOT NULL CHECK (octet_length(upload_token_kid) BETWEEN 1 AND 32),
     uploader_ip            text
 );
 

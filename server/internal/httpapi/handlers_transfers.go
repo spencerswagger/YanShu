@@ -123,8 +123,9 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 			// 幂等重放要求返回同一个 token；如果期间 TOKEN_SECRET 轮换过，
 			// 重算出来的 token 与库里存的 SM3 不再匹配 —— 这时不能把不可用的
 			// token 发出去，让客户端重新建传输（新传输会拿到新 token）。
-			if !a.tokens.Validate(token, existing.ID, existing.UploadTokenSM3) {
-				a.log.Warn("idempotency replay after token secret rotation", "transferId", existing.ID)
+			if existing.UploadTokenKID != a.cfg.TokenKID ||
+				!a.tokens.Validate(token, existing.ID, existing.UploadTokenSM3) {
+				a.log.Warn("idempotency replay after token rotation", "transferId", existing.ID)
 				fail(w, r, spec.ErrTransferStateConflict)
 				return
 			}
@@ -184,6 +185,7 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(time.Duration(ttl) * time.Second),
 		UploadTokenSM3: auth.UploadTokenHash(token),
+		UploadTokenKID: a.cfg.TokenKID,
 		UploaderIP:     ip,
 	})
 	if err != nil {
@@ -542,6 +544,11 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 			return store.Transfer{}, false
 		}
 		a.internalError(w, r, "get transfer", err)
+		return store.Transfer{}, false
+	}
+	// 先看密钥版本：轮换 kid 后旧 token 一律 401 AUTH_TOKEN_STALE（可据此自愈重建传输）。
+	if t.UploadTokenKID != a.cfg.TokenKID {
+		writeError(w, r, apiError{code: spec.ErrAuthTokenStale})
 		return store.Transfer{}, false
 	}
 	if !a.tokens.Validate(token, t.ID, t.UploadTokenSM3) {
