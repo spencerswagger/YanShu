@@ -45,7 +45,7 @@ YANSHU_DATABASE_URL="${PG_DEV_DSN}&search_path=yanshu_core" ./bin/yanshu-server 
 YANSHU_DATABASE_URL="${PG_DEV_DSN}&search_path=yanshu_core" \
 YANSHU_BLOB_DIR=/var/lib/yanshu/blobs \
 YANSHU_ADDR=127.0.0.1:8080 \
-YANSHU_LOG_FILE=/var/log/yanshu/server.log \
+YANSHU_LOG_DIR=/var/log/yanshu \
 YANSHU_VERIFIER=stub-allow \
 YANSHU_TOKEN_SECRET="$(cat /var/lib/yanshu/token-secret)" \
 ./bin/yanshu-server
@@ -54,13 +54,17 @@ YANSHU_TOKEN_SECRET="$(cat /var/lib/yanshu/token-secret)" \
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
+日志位置可直接算出来，不依赖部署方怎么重定向：
+`$YANSHU_LOG_DIR/yanshu-server-$(date -u +%F).log`（UTC 日期，跨天自动切新文件，保留 7 天）。
+stdout 仍会打一份，容器里可另行重定向，但验收以 `YANSHU_LOG_DIR` 下的文件为准。
+
 | 项 | 值 / 说明 |
 |---|---|
 | 监听 | 默认 `:8080`（所有网卡）；常驻本机建议显式 `YANSHU_ADDR=127.0.0.1:8080`，与默认不冲突 |
 | 端口 | `8080`（`YANSHU_STUN_URLS`/`YANSHU_WS_URL` 与它无关，前者是客户端 ICE 配置） |
 | 迁移 | `./bin/yanshu-server -migrate-only`（幂等；启动时也会自动执行） |
 | 存储根 | `YANSHU_BLOB_DIR`，布局 `<root>/<transfer_id 前2位>/<transfer_id>/{prelude,chunks/<8位序号>}` |
-| 日志 | stdout + `YANSHU_LOG_FILE`（追加写，自动建目录，文件权限 0640） |
+| 日志 | 默认仅 stdout；`YANSHU_LOG_DIR=<dir>` 时**按日滚动**写 `<dir>/yanshu-server-YYYY-MM-DD.log`（UTC，0640，保留 `YANSHU_LOG_RETENTION_DAYS` 天，默认 7）；也可用 `YANSHU_LOG_FILE=<file>` 指定单文件（优先于 LOG_DIR） |
 | 令牌密钥 | `YANSHU_TOKEN_SECRET` 建议落一个 0600 文件；为空则进程内随机，重启后旧 upload_token 失效 |
 | 验签 | 验收/联调用 `stub-allow`；默认 `stub-deny`（fail closed）；接真实 SM2 用 `sm2` |
 
@@ -122,7 +126,7 @@ stdout 字段固定（Gate 按名字解析，`=== DELIVERY ===` 与 `===========
 | `storage_path` | 本次传输的目录（`<blob_dir>/<id 前2位>/<id>`） |
 | `db_url` | **脱敏** DSN（无口令，只留 user@host:port/db?params） |
 | `schema` | 实际生效的数据库 schema（连 `--dsn` 查出来的） |
-| `log_path` | 服务端日志路径（来自 `--log`） |
+| `log_path` | 服务端日志路径（来自 `--log`）；传目录时自动展开为当日文件 `yanshu-server-YYYY-MM-DD.log` |
 
 输出（示例）：
 
@@ -176,6 +180,9 @@ log_path=/var/log/yanshu/server.log
 | `YANSHU_STUN_URLS` | 公共 STUN | `/v1/config` 下发的 STUN 列表（**没有 TURN**） |
 | `YANSHU_WS_URL` | 空 | `/v1/config` 下发的 `ws_url` |
 | `YANSHU_STORAGE_QUOTA_BYTES` | `8GiB` | 单 IP 未取走密文总量上限（超出 → `507`） |
+| `YANSHU_LOG_DIR` | 空（仅 stdout） | 按日滚动日志目录：`yanshu-server-YYYY-MM-DD.log`（UTC） |
+| `YANSHU_LOG_RETENTION_DAYS` | `7` | 滚动日志保留天数，超期自动删除 |
+| `YANSHU_LOG_FILE` | 空 | 单文件日志（不滚动）；设置后优先于 `YANSHU_LOG_DIR` |
 | `YANSHU_SWEEP_INTERVAL` | `30s` | 清理任务周期 |
 | `YANSHU_SHUTDOWN_TIMEOUT` | `10s` | 优雅退出超时 |
 
@@ -198,6 +205,14 @@ log_path=/var/log/yanshu/server.log
 客户端据此判定直传不可用，静默走中转，并把收件通知改为轮询 `GET /v1/inbox`
 （间隔 **≥ 30 秒**，失败退避至 **5 分钟**）。服务端不额外限制 inbox；每次轮询仍需
 一次 `INBOX_LIST` 挑战签名（受 IP 20/min 约束，30 秒一次约 2/min，不会误伤）。
+
+## 库表（表结构变更必须在 PR 描述写一行）
+
+`codes`、`auth_challenges`、`transfers`、`transfer_chunks`、`transfer_downloads`、
+`idempotency_keys`、`audit_events`（+ `schema_migrations`）。
+
+白名单断言在 `internal/store/schema_test.go`：**多一列即失败**。改表结构时同步改断言，
+并在 PR 描述里写明新增/删除的表与列，否则白名单会静默失效（比漏检更危险）。
 
 ## 状态机与计数口径
 

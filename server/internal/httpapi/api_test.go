@@ -38,6 +38,7 @@ type env struct {
 	sweep  *cleanup.Sweeper
 	tokens *auth.TokenIssuer
 	cfg    config.Config
+	logBuf *bytes.Buffer
 }
 
 func newEnv(t *testing.T, mode string) *env {
@@ -74,8 +75,9 @@ func newEnv(t *testing.T, mode string) *env {
 		t.Fatal(err)
 	}
 	e.tokens = tokens
+	e.logBuf = &bytes.Buffer{}
 	e.api = New(e.cfg, st, blobs, v, tokens, ratelimit.NewMemory(), ratelimit.NewMemoryLockout(),
-		slog.New(slog.NewTextHandler(io.Discard, nil)))
+		slog.New(slog.NewTextHandler(e.logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	e.api.now = func() time.Time { return e.now }
 	e.sweep = cleanup.New(st, blobs, time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	e.sweep.Now = func() time.Time { return e.now }
@@ -958,6 +960,43 @@ func TestVerifierFailClosed(t *testing.T) {
 		spec.HeaderSignature:   auth.B64.EncodeToString(randomBytes(71)),
 	})
 	e.wantError(resp, spec.ErrServiceUnavailable)
+}
+
+// 验收要求：日志里绝不出现文件名、明文片段、token、DSN。
+func TestLogsDoNotLeakSensitiveValues(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, nil)
+	e.uploadAll(tr, f)
+	dl := e.openLease(tr.TransferID)
+	_ = e.do(http.MethodGet, spec.ChunkPath(tr.TransferID, 0), nil, map[string]string{spec.HeaderDownloadID: dl})
+
+	logs := e.logBuf.String()
+	forbidden := []string{
+		"secret-report.pdf", "quarterly-secret", // 文件名/明文探针
+		tr.UploadToken,                    // 上传能力凭证
+		dl,                                // 下载租约
+		"Authorization", "X-YS-Signature", // 鉴权头名（值更不能有）
+		"postgres://", "password", "PGPASSWORD",
+	}
+	for _, s := range forbidden {
+		if strings.Contains(logs, s) {
+			t.Fatalf("log leaked %q", s)
+		}
+	}
+	// 日志仍然要可用：至少记到路由模板与状态。
+	if !strings.Contains(logs, "/v1/transfers/{transferId}/chunks/{index}") {
+		t.Fatalf("log missing route template: %s", logs[:min(200, len(logs))])
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // TestNoFilenameOrPlaintextPersisted 是 Gate 那条的自动化版本。

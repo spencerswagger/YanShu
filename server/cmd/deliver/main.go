@@ -189,7 +189,7 @@ func run(argv []string) int {
 		State:           state,
 		Acked:           acked,
 		BlobDir:         opt.blobDir,
-		LogPath:         opt.logPath,
+		LogPath:         resolveLogPath(opt.logPath),
 	}
 	if opt.dsn != "" {
 		rep.DBURL = redactDSN(opt.dsn)
@@ -625,6 +625,18 @@ func sm3Hex(data []byte, cmdline string) (string, error) {
 	}
 	sum := gm.SM3(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// resolveLogPath：`--log` 给目录时展开成当日滚动文件名（服务端 YANSHU_LOG_DIR 的规则）。
+func resolveLogPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return path
+	}
+	return filepath.Join(path, "yanshu-server-"+time.Now().UTC().Format("2006-01-02")+".log")
 }
 
 // redactDSN 去掉口令，只保留 user@host:port/db?params（可安全写进日志/PR）。

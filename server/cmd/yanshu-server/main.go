@@ -23,6 +23,7 @@ import (
 	"github.com/spencerswagger/YanShu/server/internal/cleanup"
 	"github.com/spencerswagger/YanShu/server/internal/config"
 	"github.com/spencerswagger/YanShu/server/internal/httpapi"
+	"github.com/spencerswagger/YanShu/server/internal/logging"
 	"github.com/spencerswagger/YanShu/server/internal/ratelimit"
 	"github.com/spencerswagger/YanShu/server/internal/store"
 )
@@ -44,7 +45,10 @@ func run() error {
 	}
 
 	out := io.Writer(os.Stdout)
-	if cfg.LogFile != "" {
+	logPath := ""
+	switch {
+	case cfg.LogFile != "":
+		// 单文件模式（不滚动），适合容器里挂一个固定路径。
 		if err := os.MkdirAll(filepath.Dir(cfg.LogFile), 0o750); err != nil {
 			return fmt.Errorf("create log dir: %w", err)
 		}
@@ -54,6 +58,16 @@ func run() error {
 		}
 		defer f.Close()
 		out = io.MultiWriter(os.Stdout, f)
+		logPath = cfg.LogFile
+	case cfg.LogDir != "":
+		// 按日滚动：<dir>/yanshu-server-YYYY-MM-DD.log，保留 N 天。
+		rot, err := logging.New(cfg.LogDir, cfg.LogRetentionDays)
+		if err != nil {
+			return err
+		}
+		defer rot.Close()
+		out = io.MultiWriter(os.Stdout, rot)
+		logPath = rot.Path()
 	}
 	log := slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
@@ -69,11 +83,12 @@ func run() error {
 		if err := st.Migrate(ctx); err != nil {
 			return err
 		}
-		log.Info("migrations applied", "logFile", cfg.LogFile)
+		log.Info("migrations applied", "logPath", logPath)
 		return nil
 	}
 
-	log.Info("starting yanshu-server", "addr", cfg.Addr, "verifier", cfg.Verifier, "contract", "v1", "logFile", cfg.LogFile)
+	log.Info("starting yanshu-server", "addr", cfg.Addr, "verifier", cfg.Verifier,
+		"contract", "v1", "logPath", logPath, "logRetentionDays", cfg.LogRetentionDays)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

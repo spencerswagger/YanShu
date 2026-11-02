@@ -43,8 +43,13 @@ type Config struct {
 	// StorageQuotaBytes 是单 IP 未取走密文总量上限（API.md §11.4，默认 8 GiB）。
 	StorageQuotaBytes int64
 
-	// LogFile 非空时把日志同时追加写入该文件（常驻实例用；stdout 仍然保留）。
+	// LogFile 非空时把日志同时追加写入该文件（单文件，不滚动）。
 	LogFile string
+	// LogDir 非空时按 UTC 日期滚动写 <dir>/yanshu-server-YYYY-MM-DD.log（stdout 仍保留）。
+	// 与 LogFile 同时设置时以 LogFile 为准。
+	LogDir string
+	// LogRetentionDays 是滚动日志的保留天数（默认 7）。
+	LogRetentionDays int
 
 	SweepInterval   time.Duration
 	ShutdownTimeout time.Duration
@@ -62,6 +67,8 @@ func Load() (Config, error) {
 		WSURL:             env("YANSHU_WS_URL", ""),
 		StorageQuotaBytes: envInt64("YANSHU_STORAGE_QUOTA_BYTES", 8<<30),
 		LogFile:           os.Getenv("YANSHU_LOG_FILE"),
+		LogDir:            os.Getenv("YANSHU_LOG_DIR"),
+		LogRetentionDays:  int(envInt64("YANSHU_LOG_RETENTION_DAYS", 7)),
 		SweepInterval:     envDuration("YANSHU_SWEEP_INTERVAL", 30*time.Second),
 		ShutdownTimeout:   envDuration("YANSHU_SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
