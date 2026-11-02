@@ -99,7 +99,16 @@ function callSized(fn, capGuess) {
 
 const mode = rest[0];
 
-if (mode === "user-code") {
+if (mode === "normalize") {
+  // ys_normalize_code(input, len, out4)：非法输入返回负错误码（CRYPTO_CODE_INVALID）
+  const text = Buffer.from(rest[1] ?? "", "utf8");
+  const inp = alloc(text.length || 1);
+  write(inp, text);
+  const out = alloc(4);
+  const rc = e.ys_normalize_code(inp, text.length, out);
+  if (rc !== 0) { console.log(`ERR ${errName(rc)}`); process.exit(1); }
+  console.log(Buffer.from(read(out, 4)).toString("ascii"));
+} else if (mode === "user-code") {
   // 入参 64 字节 X‖Y（前端不用改）；内核内部补 0x04 后按 65 字节算 SM3
   const hexIn = (rest[1] || "").trim();
   const raw = Buffer.from(hexIn, "hex");
@@ -107,10 +116,21 @@ if (mode === "user-code") {
   const pk = alloc(65);
   if (raw.length === 65) write(pk, raw);
   else { u8()[pk] = 0x04; write(pk + 1, raw); }
-  // 头文件：ys_user_code(public_key /*64*/, out /*4 ASCII*/) —— 2 参，无 out_len
-  if (e.ys_user_code.length !== 2) die(`ys_user_code arity=${e.ys_user_code.length}，期望 2`);
+  // ys_user_code(pub64, out4) / ys_user_code_wire(pub65, out4)，都是 2 参
+  const wire = rest.includes("--wire");
+  const fnName = wire ? "ys_user_code_wire" : "ys_user_code";
+  const fn = e[fnName];
+  if (typeof fn !== "function") die(`内核没有导出 ${fnName}`);
+  if (fn.length !== 2) die(`${fnName} arity=${fn.length}，期望 2`);
+  if (wire && raw.length !== 65) die("--wire 需要 65 字节公钥 hex");
+  // 关键：**按入口的入参宽度准备缓冲区**。
+  // 64 字节入口必须拿到纯 X‖Y；把 0x04‖X‖Y 喂给 64 字节入口会整体错位一位，
+  // 算出一个不一样的码（X2EH 就是这么来的，不是内核算错）。
+  const buf = alloc(wire ? 65 : 64);
+  write(buf, wire ? (raw.length === 65 ? raw : Buffer.concat([Buffer.from([0x04]), raw]))
+                  : (raw.length === 65 ? raw.subarray(1) : raw));
   const out = alloc(4);
-  const rc = e.ys_user_code(pk, out);
+  const rc = fn(buf, out);
   if (rc !== 0) die(`ys_user_code: ${errName(rc)}`);
   console.log(Buffer.from(read(out, 4)).toString("ascii"));
 } else if (mode === "version") {

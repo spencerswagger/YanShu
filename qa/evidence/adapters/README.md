@@ -67,17 +67,15 @@ $PROBE unpack /tmp/a.yspk /tmp/out.bin --recipient-sk /tmp/bob.sk
 密钥文件是**裸字节**（sk 32B、pk 64B `x‖y`），不是 hex 或文本，避免被误当配置提交。
 驱动的 stdout 只报长度，不回显密钥。
 
-## 已知不一致（2026-11-02，待端侧确认）
+## 用户码一致性（2026-11-02 已结案：是**驱动**的调用约定 bug）
 
-`ys_user_code`（wasm，64 字节入参）与 `ys-tool user-code`（原生，65 字节入参）**算出的码不同**：
+曾出现过 wasm 与原生算码不同（`X2EH` vs `AWQW`）。根因在**驱动**：给 64 字节入参的
+`ys_user_code` 传了 65 字节缓冲区（含 `0x04`），内核读到 `0x04‖X[0..63]` 再补 `0x04`，
+哈希输入错位一位。修法：**按入口宽度准备缓冲区**——64 字节入口给纯 `X‖Y`，
+`ys_user_code_wire` 给 `0x04‖X‖Y`。
 
-| 输入 | wasm `ys_user_code` | `ys-tool user-code` | 契约 §15.1 |
-|---|---|---|---|
-| 契约样例 `PB_S` | `X2EH` | **`AWQW`** | **`AWQW`** |
-| 本次投递包内公钥 | `FXWD` | `M8NE`（= SM3(65B) 手算） | — |
-
-`ys-tool` 与手算、与契约样例一致；wasm 侧对不上。浏览器拿这个码去注册会被服务端按
-"码与公钥不匹配"拒掉。已报给实现方，驱动暂不依赖 `ys_user_code`。
+修后四个入口（wasm 64/65、原生 64/65）对 5 组公钥全部逐字符一致，`PB_S → AWQW`。
+可复跑检查：`qa/evidence/check_code_consistency.py`。
 
 ## 换别的实现怎么办
 
