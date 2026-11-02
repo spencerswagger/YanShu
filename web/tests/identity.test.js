@@ -28,6 +28,7 @@ test('持久化字段白名单：只有私钥/公钥/码/昵称/注册态/时间
   const stored = await backend.get('self')
   assert.deepEqual(Object.keys(stored).sort(), [
     'code',
+    'codeAlgo',
     'createdAt',
     'nickname',
     'privateKey',
@@ -99,4 +100,24 @@ test('空文件名：落盘显示“未命名”并保留扩展名（契约空�
   assert.equal(safeFileName('', ''), '未命名')
   assert.equal(safeFileName('../evil.txt', 'txt'), 'evil.txt')
   assert.equal(safeFileName('正常.txt'), '正常.txt')
+})
+
+test('旧码缓存：码与当前内核不一致时按内核重新派生并标记 rekeyed', async () => {
+  const { kernel, backend, manager } = setup()
+  await manager.loadOrCreate()
+  // 造一份"旧口径"的本地记录：码是错的、codeAlgo 也过期、registered=true
+  const stored = await backend.get('self')
+  await backend.put('self', { ...stored, code: 'ZZZZ', codeAlgo: 'legacy-sm3-pub64', registered: true })
+
+  const { kernel: k2 } = setup()
+  const manager2 = createIdentityManager({ kernel: k2, backend })
+  await manager2.loadOrCreate()
+
+  assert.equal(manager2.session.rekeyed, true, '必须标记已重算，让 UI 提醒重新告知对方')
+  assert.equal(manager2.session.code, k2.codeOf(manager2.session.publicKey), '码必须按当前内核重新派生')
+  assert.equal(manager2.session.registered, false, '旧注册态作废')
+  assert.equal(manager2.session.codeAlgo, 'crockford-sm3-pub65-v1')
+  const after = await backend.get('self')
+  assert.equal(after.code, manager2.session.code)
+  assert.equal(after.codeAlgo, 'crockford-sm3-pub65-v1')
 })

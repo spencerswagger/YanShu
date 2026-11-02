@@ -23,6 +23,12 @@
  *   没有 `_v1` 时退回 `ys_unpack`（调用方传发送方公钥，与包内 `SENDER_PUB` 比对）。
  */
 
+/**
+ * 码派生算法的版本标记。内核改过口径（是否补 0x04 再算 SM3）就会变；
+ * 本地存了旧码时用它判断"这码还能不能用"，不能只比字符串。
+ */
+export const CODE_ALGO = 'crockford-sm3-pub65-v1'
+
 /** ABI 版本：0x00010000（与 `ys_version()` 比对） */
 export const ABI_VERSION = 0x00010000
 

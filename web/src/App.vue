@@ -28,6 +28,7 @@ const tab = ref('send')
 const regBusy = ref(false)
 const regError = ref('')
 const regNotice = ref('')
+const rekeyNotice = ref('')
 const serverConfig = ref(null)
 const kernelBuild = ref(null)
 const kernelSelfTest = ref(null)
@@ -89,6 +90,9 @@ onMounted(async () => {
     })
     await identityManager.value.loadOrCreate()
     syncSession()
+    if (identityManager.value.session.rekeyed) {
+      rekeyNotice.value = '本机码已按当前内核重新派生（旧码作废），请重新告知对方新码。'
+    }
 
     // 内核构建溯源（由 `npm run wasm:rebuild` 写入 public/ys_kernel.build.json）
     try {
@@ -229,6 +233,7 @@ async function doReceive({ transferId, onProgress }) {
   </div>
 
   <div v-if="regNotice" class="banner info">{{ regNotice }}</div>
+  <div v-if="rekeyNotice" class="banner warn">{{ rekeyNotice }}</div>
   <div v-if="regError" class="banner warn">
     {{ regError }}
     <div class="row" style="margin-top: 8px">

@@ -207,7 +207,20 @@ try {
   v1VersionGate = false
 }
 
+// —— 7) 码派生：契约 §15.1 的 PB_S → AWQW（wasm 与原生必须逐字符一致）
+const PB_S_HEX =
+  '04bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d'
+const pbS64 = Uint8Array.from(Buffer.from(PB_S_HEX.slice(2), 'hex'))
+const codeOut = e.ys_alloc(4)
+const codeRc = e.ys_user_code(write(pbS64), codeOut)
+const codeString = codeRc === 0 ? Buffer.from(read(codeOut, 4)).toString('ascii') : ''
+// 反面：误传 65 字节（含 0x04）会得到另一个码 —— 这正是"wasm 算出别的码"的常见根因
+const code65Out = e.ys_alloc(4)
+const code65Rc = e.ys_user_code(write(Uint8Array.from(Buffer.from(PB_S_HEX, 'hex'))), code65Out)
+const code65String = code65Rc === 0 ? Buffer.from(read(code65Out, 4)).toString('ascii') : ''
+
 const signals = {
+  '码派生 PB_S → AWQW（64 字节入参）': codeString === 'AWQW',
   'V1 样例包解包成功（§2.3 第 3 条）': v1Sample,
   'V1 样例改版本字节必拒（§2.3 第 4 条）': v1VersionGate,
   'HEADER=112': facts.headerLen === 112,
@@ -222,7 +235,13 @@ const signals = {
 }
 
 console.log('产物：')
-console.log(JSON.stringify({ ...facts, packRc, packKeyForm, metaRc, unpackRc, signatureBytes: der?.length ?? null }, null, 2))
+console.log(
+  JSON.stringify(
+    { ...facts, packRc, packKeyForm, metaRc, unpackRc, signatureBytes: der?.length ?? null, codeString, code65String },
+    null,
+    2,
+  ),
+)
 console.log('\n判据：')
 console.log(JSON.stringify(signals, null, 2))
 

@@ -12,6 +12,7 @@
  * 自动重试一次（任务口径），之后由用户手动点；总次数受 §4.3 的 8 次上限保护。
  */
 import { config } from '../config.js'
+import { CODE_ALGO } from '../crypto/abi.js'
 import { encode as b64uEncode, decode as b64uDecode } from '../lib/base64url.js'
 import { info, warn } from '../lib/log.js'
 
@@ -30,12 +31,17 @@ export function createIdentityManager({ kernel, backend, onCreate }) {
     nickname: '',
     registered: false,
     createdAt: null,
+    // 本地码是按哪版算法派生的（内核口径变过，旧码可能永远注册不上）
+    codeAlgo: null,
+    // 本次加载是否重算过码（UI 用它提示"请重新告知对方"）
+    rekeyed: false,
   }
 
   function adopt(record) {
     session.privateKey = b64uDecode(record.privateKey)
     session.publicKey = b64uDecode(record.publicKey)
     session.code = record.code
+    session.codeAlgo = record.codeAlgo || null
     session.nickname = record.nickname || defaultNickname(record.code)
     session.registered = Boolean(record.registered)
     session.createdAt = record.createdAt || Date.now()
@@ -49,6 +55,7 @@ export function createIdentityManager({ kernel, backend, onCreate }) {
       nickname: session.nickname,
       registered: session.registered,
       createdAt: session.createdAt,
+      codeAlgo: session.codeAlgo,
     })
   }
 
@@ -61,6 +68,8 @@ export function createIdentityManager({ kernel, backend, onCreate }) {
     session.nickname = session.nickname || defaultNickname(code)
     session.registered = false
     session.createdAt = Date.now()
+    session.codeAlgo = CODE_ALGO
+    session.rekeyed = false
     await persist()
     info('已生成密钥对与本机码', { code })
     onCreate?.({ code, registered: false })
@@ -76,7 +85,20 @@ export function createIdentityManager({ kernel, backend, onCreate }) {
         warn('本地身份不完整，重新生成', { code: session.code })
         await generate()
       } else {
-        info('载入本机身份', { code: session.code })
+        // 码不是"存下来就永远有效"：内核口径变过（补 0x04 再算 SM3），旧码可能根本注册不上。
+        // 一律以当前内核算出来的为准；不一致就覆盖并标记 rekeyed，让 UI 提醒用户重新告知对方。
+        const derived = kernel.codeOf(session.publicKey)
+        const algoChanged = session.codeAlgo !== CODE_ALGO
+        if (derived !== session.code || algoChanged) {
+          warn('本机码按当前内核重新派生', { code: session.code })
+          session.code = derived
+          session.codeAlgo = CODE_ALGO
+          session.rekeyed = true
+          session.registered = false // 旧注册态作废，重新登记
+          await persist()
+        } else {
+          info('载入本机身份', { code: session.code })
+        }
       }
       return session
     }

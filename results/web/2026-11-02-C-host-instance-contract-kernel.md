@@ -3,7 +3,7 @@
 > **限定（写死在文件头）**
 > - 中转 = **宿主常驻实例** `http://127.0.0.1:18080`（`yanshu_dev`，`YANSHU_VERIFIER=stub-allow` 仅联调）。
 >   服务端**尚未接真实 SM2 验签**，所以本证据覆盖端侧密码学 + 传输链路，不覆盖服务端验签；验签落地后需再跑一份。
-> - 内核 = **契约布局** `YSPK/1.0`，构建自 `feat/endcrypto-wasm@0f33a15`（`ys_version()=0x00010000`、
+> - 内核 = **契约布局** `YSPK/1.0`，构建自 `feat/endcrypto-wasm@9445d80`（`ys_version()=0x00010000`、
 >   `ys_header_len()=112`、30 函数 + `memory`、0 import、`ys_unpack_v1`/`_meta_v1` 6 参自证）。
 
 | 项 | 值 |
@@ -12,7 +12,7 @@
 | 日期 | 2026-11-02 |
 | 前端 | `web/`（Vue 3 + Vite dev server，`/v1` 反代到宿主实例） |
 | 中转 | `127.0.0.1:18080`（契约 `v1` / `YSPK/1.0`，chunk 1 MiB，max_plaintext 4 GiB） |
-| 内核 | `0f33a15`，sha256 `9df8b8c328d9…`（溯源 `public/ys_kernel.build.json`） |
+| 内核 | `9445d80`，sha256 `f728ec7e6463…`（溯源 `public/ys_kernel.build.json`）；`PB_S → AWQW` 已断言 |
 | 样本 | `ys-e2e-input.bin`，2 506 889 字节，sha256 `4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f` |
 | 分块 | 服务端 `chunk_size=1048576` → **3 块**（2×1 MiB + 409 601 B） |
 | 客户端 | 两个独立 Chrome profile（两个身份） |

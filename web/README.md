@@ -110,6 +110,11 @@ npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局�
 4. 把 V1 样例的 `VERSION_MAJOR` 改成 `0x02`，必须被拒为 `CRYPTO_VERSION_UNSUPPORTED`。
 
 四条全过才显示「真实加密 · 契约布局内核（YSPK/1.0）」；否则「真实加密 · 非契约布局内核（待对齐）」并在红条列出未通过项。
+**本机码不缓存旧的**：本地记录带 `codeAlgo` 版本；每次启动都用当前内核重算 `ys_user_code`，
+与存的值不一致（或算法版本变了）就覆盖、作废旧注册态，并在界面提示"本机码已按当前内核重新派生，请重新告知对方"。
+测试里有一条硬断言：契约 §15.1 的 `PB_S` 必须算出 **`AWQW`**；`npm run wasm:check` 同时打印
+"传 64 字节（正确）= AWQW / 传 65 字节（错用）= 另一个码"，这正是"wasm 算出别的码"最常见的根因。
+
 空文件名按契约裁决处理：`NAME_LEN = 0` 合法，落盘显示「未命名」并保留扩展名（`未命名.txt`）；
 界面上不假设 `FLAGS.NAME_OBFUSCATED` 与 `NAME_MODE` 一致，名字语义只以 `ys_unpack_meta` 的 JSON 为准。
 另外 `tests/legacy-reject.test.js` 用旧布局产物（HEADER 40）产一个包喂给默认解包入口，断言必须被拒
