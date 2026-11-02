@@ -200,6 +200,27 @@ log_path=/var/log/yanshu/server.log
   - DB 不可用 → **503**，body `{"status":"degraded","api_version":"v1","contract":"v1"}`
   - 该端点不校验签名、不查业务表，只 `Ping` 数据库。
 
+### 切到真实 SM2 验签（`YANSHU_VERIFIER=sm2`）
+
+```sh
+YANSHU_VERIFIER=sm2 ...        # 真实验签（默认 userID "1234567812345678"，DER 签名）
+YANSHU_VERIFIER=stub-deny ...  # 默认值：一律拒绝（fail closed）
+YANSHU_VERIFIER=stub-allow ... # 仅测试态：放行占位签名，启动打 WARN
+```
+
+- 实现是服务端自研的 SM2 验签（`internal/gm/sm2.go`）：sm2p256v1 曲线 + ZA + `SM3(ZA‖SIG_INPUT)`
+  + 严格 DER 解析；**没有**引第三方密码库，也没有 wasm 运行时依赖（单二进制即可部署）。
+- 正确性用端侧实现的向量钉住：ZA、固定 k 签名逐字节一致，验签通过、篡改必拒
+  （`internal/gm/sm2_test.go`；端侧实现已与 GmSSL 交叉验证 84 项）。
+- 切换影响：
+  - 所有写操作必须带**真实签名**（`X-YS-Signature` = base64url(DER)，覆盖 `SIG_INPUT`）；
+    占位签名会得到 `401 AUTH_SIGNATURE_INVALID`。
+  - `X-YS-Code` 与签名覆盖的 `CODE(4)` 不一致 → `401 AUTH_CODE_MISMATCH`。
+  - **没有会话**：雁书没有 session/token 登录态，切换不涉及"旧会话失效"。
+  - `upload_token` 按 `SM3(token)` 校验，**轮换 `TOKEN_SECRET` 不会让已签发的 token 失效**；
+    但用同一个 `Idempotency-Key` 重放 `POST /transfers` 时无法重建旧 token（会返回 `409`），
+    此时重新建传输即可（新传输拿新 token）。
+
 ### migrations（命令与幂等性）
 
 ```sh

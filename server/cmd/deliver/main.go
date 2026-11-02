@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/spencerswagger/YanShu/server/internal/auth"
 	"github.com/spencerswagger/YanShu/server/internal/gm"
 	"github.com/spencerswagger/YanShu/server/internal/packet"
 	"github.com/spencerswagger/YanShu/server/internal/spec"
@@ -59,6 +61,8 @@ type options struct {
 	jsonOut      string
 	sm3Cmd       string
 	timeout      time.Duration
+	senderKey    string
+	recipientKey string
 }
 
 func main() {
@@ -82,6 +86,8 @@ func run(argv []string) int {
 	fs.StringVar(&opt.jsonOut, "json-out", "", "把结果写成 JSON 文件")
 	fs.StringVar(&opt.sm3Cmd, "sm3-cmd", "", "外部 SM3 命令：接受 hex、输出 hex（如 'ys-tool sm3'）；缺省用内置 SM3")
 	fs.DurationVar(&opt.timeout, "timeout", 60*time.Second, "单次 HTTP 超时")
+	fs.StringVar(&opt.senderKey, "sender-sk", "", "发送方 SM2 私钥（32 字节 hex 或裸文件）；给真签名时必填")
+	fs.StringVar(&opt.recipientKey, "recipient-sk", "", "接收方 SM2 私钥；给真签名时必填")
 	if err := fs.Parse(argv); err != nil {
 		return exitUsage
 	}
@@ -101,9 +107,36 @@ func run(argv []string) int {
 		return exitFailure
 	}
 
-	senderCode := gm.DeriveCode(env.SenderPublicKey)
+	senderPriv, err := loadPrivateKey(opt.senderKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "读取 --sender-sk 失败：%v\n", err)
+		return exitFailure
+	}
+	recipientPriv, err := loadPrivateKey(opt.recipientKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "读取 --recipient-sk 失败：%v\n", err)
+		return exitFailure
+	}
+
+	// 包内 SENDER_PUB 是"包是谁打的"；真签名模式下用 --sender-sk 的身份做鉴权。
+	// 两者不一致时只警告：传输层鉴权与包内来源署名是两件事，Gate 的存储证据不受影响。
+	packetSenderCode := gm.DeriveCode(env.SenderPublicKey)
+	senderCode := packetSenderCode
+	senderPub := env.SenderPublicKey
+	if senderPriv != nil {
+		senderPub, err = gm.PublicKeyFromPrivate(new(big.Int).SetBytes(senderPriv))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "由 --sender-sk 导出公钥失败：%v\n", err)
+			return exitFailure
+		}
+		senderCode = gm.DeriveCode(senderPub)
+		if senderCode != packetSenderCode {
+			fmt.Fprintf(os.Stderr, "注意：--sender-sk 的码是 %s，包内 SENDER_PUB 的码是 %s（传输层鉴权用前者）\n",
+				senderCode, packetSenderCode)
+		}
+	}
 	if opt.senderCode != "" && opt.senderCode != senderCode {
-		fmt.Fprintf(os.Stderr, "包内 SENDER_PUB 派生的码是 %s，与 --sender-code %s 不一致\n", senderCode, opt.senderCode)
+		fmt.Fprintf(os.Stderr, "发送方码是 %s，与 --sender-code %s 不一致\n", senderCode, opt.senderCode)
 		return exitFailure
 	}
 
@@ -113,16 +146,20 @@ func run(argv []string) int {
 		fmt.Fprintf(os.Stderr, "服务端不可达（%s）：%v\n", opt.baseURL, err)
 		return exitUnreachable
 	}
-	fmt.Fprintln(os.Stderr, "注意：本工具使用占位签名，服务端须以 YANSHU_VERIFIER=stub-allow 运行；"+
-		"接入真实 SM2 验签后本工具需改用真签名。")
+	if senderPriv == nil || recipientPriv == nil {
+		fmt.Fprintln(os.Stderr, "注意：未提供 --sender-sk/--recipient-sk，使用占位签名；"+
+			"服务端须以 YANSHU_VERIFIER=stub-allow 运行。")
+	} else {
+		fmt.Fprintln(os.Stderr, "使用真实 SM2 签名（默认 userID，DER 编码），可对 YANSHU_VERIFIER=sm2 的服务端。")
+	}
 
-	// 1) 注册/复用发送方（码由包内 SENDER_PUB 派生）。
-	if err := cli.register(senderCode, env.SenderPublicKey, opt.nickname+"-sender"); err != nil {
+	// 1) 注册/复用发送方。
+	if err := cli.register(senderCode, senderPub, opt.nickname+"-sender", senderPriv); err != nil {
 		return reportErr(err)
 	}
 
 	// 2) 解析接收方。
-	recipient, err := cli.ensureRecipient(opt)
+	recipient, ackPriv, err := cli.ensureRecipient(opt, recipientPriv)
 	if err != nil {
 		return reportErr(err)
 	}
@@ -133,7 +170,7 @@ func run(argv []string) int {
 		fmt.Fprintf(os.Stderr, "计算 prelude SM3 失败：%v\n", err)
 		return exitFailure
 	}
-	created, err := cli.createTransfer(senderCode, recipient, env, preludeSM3)
+	created, err := cli.createTransfer(senderCode, senderPriv, recipient, env, preludeSM3)
 	if err != nil {
 		return reportErr(err)
 	}
@@ -167,7 +204,7 @@ func run(argv []string) int {
 	state := "LEASED"
 	acked := false
 	if !opt.noAck {
-		state, err = cli.ack(recipient, created.TransferID, downloadID)
+		state, err = cli.ack(recipient, ackPriv, created.TransferID, downloadID)
 		if err != nil {
 			return reportErr(err)
 		}
@@ -371,50 +408,76 @@ func (c *client) health() error {
 	return nil
 }
 
-func (c *client) challenge(purpose string) (string, error) {
+func (c *client) challenge(purpose string) (spec.ChallengeResponse, error) {
 	body, _ := json.Marshal(spec.ChallengeRequest{Purpose: purpose})
 	res, err := c.call(http.MethodPost, spec.PathChallenges, body, map[string]string{spec.HeaderContentType: spec.ContentTypeJSON})
 	if err != nil {
-		return "", err
+		return spec.ChallengeResponse{}, err
 	}
 	if res.status != http.StatusOK {
-		return "", apiError(res)
+		return spec.ChallengeResponse{}, apiError(res)
 	}
 	var ch spec.ChallengeResponse
 	if err := json.Unmarshal(res.body, &ch); err != nil {
-		return "", err
+		return spec.ChallengeResponse{}, err
 	}
-	return ch.ChallengeID, nil
+	return ch, nil
 }
 
-// authHeaders 组 X-YS-*；签名是占位（stub-allow 只校验形状）。
-func (c *client) authHeaders(code, challengeID string) map[string]string {
-	sig := make([]byte, 71)
-	_, _ = rand.Read(sig)
-	return map[string]string{
+// authHeaders 组 X-YS-*。
+//
+// priv 为 nil 时用占位签名（只适用于 stub-allow）；非 nil 时按契约构造 SIG_INPUT
+// 并做真实 SM2 签名（SM3 + 默认 ZA + DER）。
+func (c *client) authHeaders(purpose, code string, priv []byte, build func(code string) ([]byte, error)) (map[string]string, error) {
+	ch, err := c.challenge(purpose)
+	if err != nil {
+		return nil, err
+	}
+	h := map[string]string{
 		spec.HeaderCode:        code,
-		spec.HeaderChallengeID: challengeID,
-		spec.HeaderSignature:   base64.RawURLEncoding.EncodeToString(sig),
+		spec.HeaderChallengeID: ch.ChallengeID,
 	}
+	if priv == nil {
+		sig := make([]byte, 71)
+		_, _ = rand.Read(sig)
+		h[spec.HeaderSignature] = base64.RawURLEncoding.EncodeToString(sig)
+		return h, nil
+	}
+	nonce, err := base64.RawURLEncoding.DecodeString(ch.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("挑战 nonce 解码失败：%w", err)
+	}
+	fields, err := build(code)
+	if err != nil {
+		return nil, err
+	}
+	input := auth.BuildSignInput(spec.PurposeCode(purpose), nonce, fields)
+	der, err := gm.SignSM2DER(priv, input, gm.DefaultSM2ID)
+	if err != nil {
+		return nil, fmt.Errorf("SM2 签名失败：%w", err)
+	}
+	h[spec.HeaderSignature] = base64.RawURLEncoding.EncodeToString(der)
+	return h, nil
 }
 
-func (c *client) register(code string, pub []byte, nickname string) error {
+func (c *client) register(code string, pub []byte, nickname string, priv []byte) error {
 	if len(pub) != 65 || pub[0] != 0x04 {
 		return fmt.Errorf("公钥不是 65 字节未压缩点")
 	}
 	if gm.DeriveCode(pub) != code {
 		return fmt.Errorf("码 %s 与公钥派生结果不一致", code)
 	}
-	ch, err := c.challenge(spec.PurposeRegister)
-	if err != nil {
-		return err
-	}
 	body, _ := json.Marshal(spec.RegisterCodeRequest{
 		Code:      code,
 		PublicKey: base64.RawURLEncoding.EncodeToString(pub),
 		Nickname:  nickname,
 	})
-	headers := c.authHeaders(code, ch)
+	headers, err := c.authHeaders(spec.PurposeRegister, code, priv, func(sc string) ([]byte, error) {
+		return auth.RegisterFields(sc, pub)
+	})
+	if err != nil {
+		return err
+	}
 	headers[spec.HeaderContentType] = spec.ContentTypeJSON
 	res, err := c.call(http.MethodPost, spec.PathCodes, body, headers)
 	if err != nil {
@@ -437,64 +500,82 @@ func (c *client) lookupCode(code string) error {
 	return nil
 }
 
-func (c *client) ensureRecipient(opt options) (string, error) {
-	if opt.recipient == "" {
-		// 临时接收方：只为跑通流程；解包需要真正的收件人私钥，本工具不参与。
-		pub := make([]byte, 65)
-		pub[0] = 0x04
-		if _, err := rand.Read(pub[1:]); err != nil {
-			return "", err
+// ensureRecipient 返回接收方码与用于 ack 签名的私钥（临时接收方会现场生成密钥对）。
+func (c *client) ensureRecipient(opt options, recipientPriv []byte) (string, []byte, error) {
+	// 1) 给了接收方私钥：直接用它（真签名模式下这是唯一可用的路径）。
+	if recipientPriv != nil {
+		pub, err := gm.PublicKeyFromPrivate(new(big.Int).SetBytes(recipientPriv))
+		if err != nil {
+			return "", nil, err
 		}
 		code := gm.DeriveCode(pub)
-		if err := c.register(code, pub, opt.nickname+"-recipient"); err != nil {
-			return "", err
+		if opt.recipient != "" && opt.recipient != code {
+			return "", nil, fmt.Errorf("--recipient-sk 的码是 %s，与 --recipient-code %s 不一致", code, opt.recipient)
 		}
-		return code, nil
+		if err := c.register(code, pub, opt.nickname+"-recipient", recipientPriv); err != nil {
+			return "", nil, err
+		}
+		return code, recipientPriv, nil
 	}
 
+	// 2) 没给收款人：现场生成一对 SM2 密钥（注册与 ack 都要真签名）。
+	if opt.recipient == "" {
+		priv, err := gm.GeneratePrivateKey()
+		if err != nil {
+			return "", nil, err
+		}
+		pub, err := gm.PublicKeyFromPrivate(new(big.Int).SetBytes(priv))
+		if err != nil {
+			return "", nil, err
+		}
+		code := gm.DeriveCode(pub)
+		if err := c.register(code, pub, opt.nickname+"-recipient", priv); err != nil {
+			return "", nil, err
+		}
+		return code, priv, nil
+	}
+
+	// 3) 指定了收件码：查一下。
 	code := opt.recipient
 	res, err := c.call(http.MethodGet, spec.CodePath(code), nil, nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	switch res.status {
 	case http.StatusOK:
 		if opt.recipientPub == "" {
-			return code, nil
+			return code, nil, nil
 		}
 		var info spec.CodeLookupResponse
 		if err := json.Unmarshal(res.body, &info); err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if info.PublicKey != opt.recipientPub {
-			return "", fmt.Errorf("--recipient-pubkey 与已注册的码 %s 公钥不一致", code)
+			return "", nil, fmt.Errorf("--recipient-pubkey 与已注册的码 %s 公钥不一致", code)
 		}
-		return code, nil
+		return code, nil, nil
 	case http.StatusNotFound:
 		if opt.recipientPub == "" {
-			return "", fmt.Errorf("接收方 %s 未注册；请同时给 --recipient-pubkey 或改用一个已注册的码", code)
+			return "", nil, fmt.Errorf("接收方 %s 未注册；请给 --recipient-sk 或 --recipient-pubkey", code)
 		}
 		pub, err := base64.RawURLEncoding.DecodeString(opt.recipientPub)
 		if err != nil {
-			return "", fmt.Errorf("--recipient-pubkey 不是合法 base64url：%w", err)
+			return "", nil, fmt.Errorf("--recipient-pubkey 不是合法 base64url：%w", err)
 		}
 		if gm.DeriveCode(pub) != code {
-			return "", fmt.Errorf("--recipient-pubkey 派生出的码不是 %s", code)
+			return "", nil, fmt.Errorf("--recipient-pubkey 派生出的码不是 %s", code)
 		}
-		if err := c.register(code, pub, opt.nickname+"-recipient"); err != nil {
-			return "", err
+		// 只有公钥没有私钥：只够在 stub-allow 下注册（ack 仍需真私钥）。
+		if err := c.register(code, pub, opt.nickname+"-recipient", nil); err != nil {
+			return "", nil, err
 		}
-		return code, nil
+		return code, nil, nil
 	default:
-		return "", apiError(res)
+		return "", nil, apiError(res)
 	}
 }
 
-func (c *client) createTransfer(sender, recipient string, env packet.Envelope, preludeSM3 string) (spec.CreateTransferResponse, error) {
-	ch, err := c.challenge(spec.PurposeTransferCreate)
-	if err != nil {
-		return spec.CreateTransferResponse{}, err
-	}
+func (c *client) createTransfer(sender string, senderPriv []byte, recipient string, env packet.Envelope, preludeSM3 string) (spec.CreateTransferResponse, error) {
 	// 契约里 prelude_sm3 是 base64url（不是 hex）；先用 hex 与 --sm3-cmd 对齐，再转码。
 	sm3Raw, err := hex.DecodeString(preludeSM3)
 	if err != nil || len(sm3Raw) != 32 {
@@ -508,7 +589,13 @@ func (c *client) createTransfer(sender, recipient string, env packet.Envelope, p
 		PreludeLen:    uint32(env.PreludeLen),
 		PreludeSM3:    base64.RawURLEncoding.EncodeToString(sm3Raw),
 	})
-	headers := c.authHeaders(sender, ch)
+	headers, err := c.authHeaders(spec.PurposeTransferCreate, sender, senderPriv, func(code string) ([]byte, error) {
+		return auth.TransferCreateFields(code, recipient, env.PlaintextSize,
+			env.ChunkSize, env.ChunkCount, uint32(env.PreludeLen), sm3Raw)
+	})
+	if err != nil {
+		return spec.CreateTransferResponse{}, err
+	}
 	headers[spec.HeaderContentType] = spec.ContentTypeJSON
 	res, err := c.call(http.MethodPost, spec.PathTransfers, body, headers)
 	if err != nil {
@@ -597,12 +684,13 @@ func (c *client) downloadAll(transferID string, env packet.Envelope) (string, er
 	return downloadID, nil
 }
 
-func (c *client) ack(recipient, transferID, downloadID string) (string, error) {
-	ch, err := c.challenge(spec.PurposeTransferAck)
+func (c *client) ack(recipient string, recipientPriv []byte, transferID, downloadID string) (string, error) {
+	headers, err := c.authHeaders(spec.PurposeTransferAck, recipient, recipientPriv, func(code string) ([]byte, error) {
+		return auth.TransferAckFields(code, transferID)
+	})
 	if err != nil {
 		return "", err
 	}
-	headers := c.authHeaders(recipient, ch)
 	headers[spec.HeaderDownloadID] = downloadID
 	res, err := c.call(http.MethodPost, spec.AckPath(transferID), nil, headers)
 	if err != nil {
@@ -653,6 +741,28 @@ func sm3Hex(data []byte, cmdline string) (string, error) {
 	}
 	sum := gm.SM3(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// loadPrivateKey 读 32 字节私钥：支持裸文件或 64 位 hex 文本；空字符串返回 nil。
+func loadPrivateKey(spec string) ([]byte, error) {
+	if spec == "" {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(spec)
+	if err != nil {
+		// 不是文件就按 hex 文本处理。
+		if b, herr := hex.DecodeString(strings.TrimSpace(spec)); herr == nil && len(b) == 32 {
+			return b, nil
+		}
+		return nil, fmt.Errorf("既不是可读文件也不是 64 位 hex：%s", spec)
+	}
+	if len(raw) == 32 {
+		return raw, nil
+	}
+	if b, herr := hex.DecodeString(strings.TrimSpace(string(raw))); herr == nil && len(b) == 32 {
+		return b, nil
+	}
+	return nil, fmt.Errorf("私钥文件既不是 32 字节裸数据也不是 64 位 hex")
 }
 
 // resolveLogPath：`--log` 给目录时展开成当日滚动文件名（服务端 YANSHU_LOG_DIR 的规则）。

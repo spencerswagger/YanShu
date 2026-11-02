@@ -120,6 +120,14 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 				a.internalError(w, r, "derive upload token", err)
 				return
 			}
+			// 幂等重放要求返回同一个 token；如果期间 TOKEN_SECRET 轮换过，
+			// 重算出来的 token 与库里存的 SM3 不再匹配 —— 这时不能把不可用的
+			// token 发出去，让客户端重新建传输（新传输会拿到新 token）。
+			if !auth.VerifyUploadToken(token, existing.UploadTokenSM3) {
+				a.log.Warn("idempotency replay after token secret rotation", "transferId", existing.ID)
+				fail(w, r, spec.ErrTransferStateConflict)
+				return
+			}
 			writeJSON(w, http.StatusOK, createTransferResponse(existing, token))
 			return
 		} else if !errors.Is(err, store.ErrNotFound) {

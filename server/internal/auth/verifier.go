@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+
+	"github.com/spencerswagger/YanShu/server/internal/gm"
 )
 
 // 验签错误。对外只暴露"签名不合法"或"验签不可用"，不区分内部原因（不给 oracle）。
@@ -72,14 +74,24 @@ func (allowVerifier) Verify(pubKey, message, signature []byte) error {
 	return nil
 }
 
-// sm2Verifier 是真实实现的挂载点。
+// sm2Verifier 是真实 SM2 验签（服务端自研实现，见 internal/gm/sm2.go）。
 //
-// TODO(core): 待接入 Rune 的 WASM/国密实现，或服务端自研 SM2 验签。
-// 接入时必须满足：
-//   - 曲线：sm2p256v1；用户标识 ZA 默认 "1234567812345678"；
-//   - 签名输入：SM3(ZA ‖ message)，message 为 BuildChallengeMessage 的原文；
-//   - 签名编码：严格 DER（拒绝非规范编码，防签名延展性）；
-//   - 失败一律返回 ErrSignature，不泄露具体原因。
+// 口径与 docs/CRYPTO-PACK.md §10 一致：
+//   - 曲线 sm2p256v1，用户标识默认 "1234567812345678"（ENTL = 0x0080）；
+//   - 待验摘要 e = SM3(ZA ‖ message)，message 就是 SIG_INPUT 原文；
+//   - 签名值严格 DER SEQUENCE{r,s}（70..72 字节），拒绝非规范编码；
+//   - 失败一律返回 ErrSignature，不区分"格式错"与"验签不过"（不给 oracle）。
 type sm2Verifier struct{}
 
-func (sm2Verifier) Verify(_, _, _ []byte) error { return ErrUnavailable }
+func (sm2Verifier) Verify(pubKey, message, signature []byte) error {
+	if len(pubKey) != 65 || pubKey[0] != 0x04 {
+		return ErrSignature
+	}
+	if len(message) == 0 || len(signature) == 0 {
+		return ErrSignature
+	}
+	if !gm.VerifySM2DER(pubKey, message, signature) {
+		return ErrSignature
+	}
+	return nil
+}

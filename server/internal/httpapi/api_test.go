@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -990,6 +991,204 @@ func TestLogsDoNotLeakSensitiveValues(t *testing.T) {
 	if !strings.Contains(logs, "/v1/transfers/{transferId}/chunks/{index}") {
 		t.Fatalf("log missing route template: %s", logs[:min(200, len(logs))])
 	}
+}
+
+// signed 用真实 SM2 私钥对 SIG_INPUT 签名（服务端 verifier=sm2 用）。
+func (e *env) signed(purpose, code string, priv []byte, build func(string) ([]byte, error)) map[string]string {
+	e.t.Helper()
+	ch := e.challenge(purpose)
+	nonce, err := auth.B64.DecodeString(ch.Nonce)
+	if err != nil {
+		e.t.Fatalf("nonce: %v", err)
+	}
+	fields, err := build(code)
+	if err != nil {
+		e.t.Fatalf("fields: %v", err)
+	}
+	input := auth.BuildSignInput(spec.PurposeCode(purpose), nonce, fields)
+	sig, err := gm.SignSM2DER(priv, input, gm.DefaultSM2ID)
+	if err != nil {
+		e.t.Fatalf("sign: %v", err)
+	}
+	return map[string]string{
+		spec.HeaderCode:        code,
+		spec.HeaderChallengeID: ch.ChallengeID,
+		spec.HeaderSignature:   auth.B64.EncodeToString(sig),
+	}
+}
+
+func newSM2Identity(t *testing.T) (priv, pub []byte, code string) {
+	t.Helper()
+	priv, err := gm.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, err = gm.PublicKeyFromPrivate(new(big.Int).SetBytes(priv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return priv, pub, gm.DeriveCode(pub)
+}
+
+// token 语义：按 SM3 校验，**轮换 TOKEN_SECRET 不会让已签发的 upload_token 失效**；
+// 真正失效的是「幂等重放」——重放时无法重建旧 token，应让客户端重新建传输。
+func TestUploadTokenAcrossSecretRotation(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, nil)
+
+	otherTokens, err := auth.NewTokenIssuer([]byte("rotated-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2 := *e
+	e2.api = New(e.cfg, e.st, e.blobs, e.api.verifier, otherTokens, ratelimit.NewMemory(), ratelimit.NewMemoryLockout(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	e2.api.now = func() time.Time { return e.now }
+	e2.srv = httptest.NewServer(e2.api.Handler())
+	defer e2.srv.Close()
+
+	// ① 已签发的 token 仍然可用（校验的是 SM3，不是重算）。
+	if resp := e2.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusCreated {
+		t.Fatalf("existing token rejected after rotation: %d %s", resp.status, resp.body)
+	}
+	// ② 错 token → 401。
+	wrong := e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
+		spec.HeaderUploadToken: "not-a-real-token",
+	})
+	e2.wantError(wrong, spec.ErrAuthSignatureInvalid)
+
+	// ③ 幂等重放在轮换后拿不回同一个 token → 409，提示重建传输。
+	body := map[string]any{
+		"recipient_code": recipient, "plaintext_size": f.PlaintextSize, "chunk_size": f.ChunkSize,
+		"chunk_count": f.ChunkCount, "prelude_len": len(f.Prelude), "prelude_sm3": f.preludeSM3(),
+	}
+	key := auth.B64.EncodeToString(randomBytes(24))
+	hdrs := e.authHeaders(spec.PurposeTransferCreate, sender)
+	hdrs[spec.HeaderIdempotencyKey] = key
+	if resp := e.do(http.MethodPost, spec.PathTransfers, body, hdrs); resp.status != http.StatusCreated {
+		t.Fatalf("create: %d %s", resp.status, resp.body)
+	}
+	hdrs2 := e2.authHeaders(spec.PurposeTransferCreate, sender)
+	hdrs2[spec.HeaderIdempotencyKey] = key
+	e2.wantError(e2.do(http.MethodPost, spec.PathTransfers, body, hdrs2), spec.ErrTransferStateConflict)
+}
+
+// 真认证链路：注册 → 建传输 → 分块 → complete → 取件 → ack，全部用真实 SM2 签名。
+func TestSM2RealAuthFullChain(t *testing.T) {
+	e := newEnv(t, "sm2")
+
+	senderPriv, senderPub, senderCode := newSM2Identity(t)
+	recipientPriv, recipientPub, recipientCode := newSM2Identity(t)
+
+	register := func(priv, pub []byte, code, nickname string) {
+		headers := e.signed(spec.PurposeRegister, code, priv, func(sc string) ([]byte, error) {
+			return auth.RegisterFields(sc, pub)
+		})
+		resp := e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
+			Code: code, PublicKey: auth.B64.EncodeToString(pub), Nickname: nickname,
+		}, headers)
+		if resp.status != http.StatusCreated {
+			t.Fatalf("register %s: %d %s", code, resp.status, resp.body)
+		}
+	}
+	register(senderPriv, senderPub, senderCode, "sender")
+	register(recipientPriv, recipientPub, recipientCode, "recipient")
+
+	f := newFixture()
+	headers := e.signed(spec.PurposeTransferCreate, senderCode, senderPriv, func(code string) ([]byte, error) {
+		return auth.TransferCreateFields(code, recipientCode, f.PlaintextSize, f.ChunkSize, f.ChunkCount, uint32(len(f.Prelude)), mustSM3(t, f.Prelude))
+	})
+	resp := e.do(http.MethodPost, spec.PathTransfers, spec.CreateTransferRequest{
+		RecipientCode: recipientCode,
+		PlaintextSize: f.PlaintextSize,
+		ChunkSize:     f.ChunkSize,
+		ChunkCount:    f.ChunkCount,
+		PreludeLen:    uint32(len(f.Prelude)),
+		PreludeSM3:    auth.B64.EncodeToString(mustSM3(t, f.Prelude)),
+	}, headers)
+	if resp.status != http.StatusCreated {
+		t.Fatalf("create: %d %s", resp.status, resp.body)
+	}
+	var tr spec.CreateTransferResponse
+	e.decode(resp, &tr)
+
+	e.uploadAll(tr, f)
+	dl := e.openLease(tr.TransferID)
+
+	ackHeaders := e.signed(spec.PurposeTransferAck, recipientCode, recipientPriv, func(code string) ([]byte, error) {
+		return auth.TransferAckFields(code, tr.TransferID)
+	})
+	ackHeaders[spec.HeaderDownloadID] = dl
+	resp = e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil, ackHeaders)
+	if resp.status != http.StatusOK {
+		t.Fatalf("ack: %d %s", resp.status, resp.body)
+	}
+	var ack spec.AckResponse
+	e.decode(resp, &ack)
+	if ack.State != spec.StateConsumed || ack.DownloadCount != 1 {
+		t.Fatalf("ack result: %+v", ack)
+	}
+	e.wantError(e.do(http.MethodGet, spec.PreludePath(tr.TransferID), nil, nil), spec.ErrTransferConsumed)
+}
+
+// 验签失败必须拒绝：伪造签名 / 篡改消息 / 码与签名不一致。
+func TestSM2RejectsForgery(t *testing.T) {
+	e := newEnv(t, "sm2")
+	priv, pub, code := newSM2Identity(t)
+
+	// 正确签名先注册成功。
+	headers := e.signed(spec.PurposeRegister, code, priv, func(sc string) ([]byte, error) {
+		return auth.RegisterFields(sc, pub)
+	})
+	body := spec.RegisterCodeRequest{Code: code, PublicKey: auth.B64.EncodeToString(pub), Nickname: "x"}
+	if resp := e.do(http.MethodPost, spec.PathCodes, body, headers); resp.status != http.StatusCreated {
+		t.Fatalf("register: %d %s", resp.status, resp.body)
+	}
+
+	// 同一请求换一个随机签名 → AUTH_SIGNATURE_INVALID。
+	bad := e.signed(spec.PurposeRegister, code, priv, func(sc string) ([]byte, error) {
+		return auth.RegisterFields(sc, pub)
+	})
+	rawSig, _ := auth.B64.DecodeString(bad[spec.HeaderSignature])
+	rawSig[len(rawSig)-1] ^= 0xff
+	bad[spec.HeaderSignature] = auth.B64.EncodeToString(rawSig)
+	e.wantError(e.do(http.MethodPost, spec.PathCodes, body, bad), spec.ErrAuthSignatureInvalid)
+
+	// 签名覆盖的码与 X-YS-Code 不一致 → AUTH_CODE_MISMATCH（body 用另一个码）。
+	otherPriv, otherPub, otherCode := newSM2Identity(t)
+	hdrs := e.signed(spec.PurposeRegister, code, priv, func(sc string) ([]byte, error) {
+		return auth.RegisterFields(sc, pub)
+	})
+	resp := e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
+		Code: otherCode, PublicKey: auth.B64.EncodeToString(otherPub), Nickname: "y",
+	}, hdrs)
+	e.wantError(resp, spec.ErrAuthCodeMismatch)
+	_ = otherPriv
+
+	// 篡改消息：用别的消息签，再提交原消息 → 拒绝。
+	ch := e.challenge(spec.PurposeRegister)
+	nonce, _ := auth.B64.DecodeString(ch.Nonce)
+	fields, _ := auth.RegisterFields(code, pub)
+	input := auth.BuildSignInput(spec.PurposeCode(spec.PurposeRegister), nonce, fields)
+	tampered := append([]byte(nil), input...)
+	tampered[len(tampered)-1] ^= 0x01
+	sig, err := gm.SignSM2DER(priv, tampered, gm.DefaultSM2ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.wantError(e.do(http.MethodPost, spec.PathCodes, body, map[string]string{
+		spec.HeaderCode:        code,
+		spec.HeaderChallengeID: ch.ChallengeID,
+		spec.HeaderSignature:   auth.B64.EncodeToString(sig),
+	}), spec.ErrAuthSignatureInvalid)
+}
+
+func mustSM3(t *testing.T, b []byte) []byte {
+	t.Helper()
+	sum := gm.SM3(b)
+	return sum[:]
 }
 
 func min(a, b int) int {
