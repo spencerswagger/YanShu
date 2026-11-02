@@ -169,13 +169,9 @@ func TestUploadTokenMatchesContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte("yanshu/upload-token/v2"))
-	var k [8]byte
-	for i := 0; i < 8; i++ {
-		k[7-i] = byte(uint64(3) >> (8 * i))
-	}
-	mac.Write(k[:])
+	mac.Write([]byte("yanshu/upload-token/v1"))
 	mac.Write([]byte(id))
+	mac.Write([]byte{0, 0, 0, 3}) // u32be(3)
 	want := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	if got != want {
 		t.Fatalf("upload token = %q, want %q", got, want)

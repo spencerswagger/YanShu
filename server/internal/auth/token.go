@@ -68,23 +68,25 @@ func NewTokenIssuer(secret []byte) (*TokenIssuer, error) {
 
 // uploadTokenInfo 是派生前缀（契约 §1.7，token v2 带 KID）：
 //
-//	upload_token = base64url(HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v2" ‖ u64be(KID) ‖ transfer_id))
+//	upload_token = base64url(HMAC-SHA256(TOKEN_SECRET,
+//	                 "yanshu/upload-token/v1" ‖ TRANSFER_ID ‖ u32be(KID)))
 //
-// KID 进派生串，但**校验不重算**：库里存 SM3(token) 与签发时的 KID；
-// 校验 = 「token 的 SM3 == 库内哈希」且「行内 KID == 当前 KID」。
-// 因此：只换 TOKEN_SECRET 不影响既有 token；**KID 递增才是吊销开关**。
-const uploadTokenInfo = "yanshu/upload-token/v2"
+// KID **参与派生**（与契约 §1.7 一致），所以递增 KID 后为同一 transfer_id 重新签发的 token
+// 与旧 token **逐字节不同** —— 旧凭据不可能"换个行就复活"。
+// 校验同时用两条：行内 KID == 当前 KID（版本闸）+ 当前密钥/KID 下重算 == 库内哈希（值闸）。
+const uploadTokenInfo = "yanshu/upload-token/v1"
 
 // UploadToken 为某个 transfer_id + 当前 KID 派生 upload_token。
 func (t *TokenIssuer) UploadToken(transferID string, kid int64) (string, error) {
 	mac := hmac.New(sha256.New, t.secret)
 	mac.Write([]byte(uploadTokenInfo))
-	var k [8]byte
-	for i := 0; i < 8; i++ {
-		k[7-i] = byte(uint64(kid) >> (8 * i))
-	}
-	mac.Write(k[:])
 	mac.Write([]byte(transferID))
+	var k [4]byte
+	k[0] = byte(uint32(kid) >> 24)
+	k[1] = byte(uint32(kid) >> 16)
+	k[2] = byte(uint32(kid) >> 8)
+	k[3] = byte(uint32(kid))
+	mac.Write(k[:])
 	return B64.EncodeToString(mac.Sum(nil)), nil
 }
 

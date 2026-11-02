@@ -7,11 +7,14 @@
 
 ```
 upload_token = base64url(HMAC-SHA256(TOKEN_SECRET,
-                "yanshu/upload-token/v2" ‖ u64be(KID) ‖ transfer_id))
+                "yanshu/upload-token/v1" ‖ transfer_id ‖ u32be(KID)))
 ```
 
+- **KID 参与派生**（`u32be`，契约 §1.7）：递增 KID 后为同一 `transfer_id` 重新签发的 token
+  与旧 token **逐字节不同**，旧凭据不可能"换个行就复活"（`TestStaleTokenCannotBeReincarnated`）。
 - 库里只存 `SM3(upload_token)`（`transfers.upload_token_sm3`）与**签发时的 KID**
-  （`transfers.upload_token_kid`）。
+  （`transfers.upload_token_kid`）；校验 = 行内 KID == 当前 KID（版本闸）+ 当前密钥/KID 重算
+  == 库内哈希（值闸）。
 - 校验顺序（**先凭据后状态**）：
   1. 行内 KID != 当前 KID → `401 AUTH_TOKEN_REVOKED`；
   2. token 不等于当前密钥下的派生值（伪造/串传输/**secret 被轮换**）→ `401 AUTH_TOKEN_INVALID`；
