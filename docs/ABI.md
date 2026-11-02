@@ -82,6 +82,19 @@ int32_t ys_unpack_meta_v1(const uint8_t *pack, size_t pack_len, const uint8_t *r
 > ⚠️ 用 `_v2` 时必须真的少传一个参数。wasm 调函数时多余实参会被**静默丢弃**并整体错位，
 > 不是编译错。
 
+## 3.5 版本判定（前端做标签用）
+
+`ys_version()` 返回的是 **`uint32_t` 编号 `0x00010000`，不是字符串**。
+
+```js
+const isContract = ys_version() === 0x00010000 && ys_header_len() === 112
+// true  → 契约布局内核（YSPK/1.0）
+// false → 未就绪/不是这个内核，不要当契约实现用
+```
+
+要"字符串形态"的版本号，从 `ys_unpack_meta` 的 JSON 里取 `version`（值为 `"YSPK/1.0"`），
+或直接用常量 `YSPK/1.0`——发布构建只有这一种格式。
+
 ## 4. 错误码（数值稳定）
 
 - `-4 … -23` 与首版**完全一致**（老映射表照旧命中）；`-24` 起是新增细粒度。

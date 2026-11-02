@@ -133,13 +133,18 @@ info=`YANSHU/v1/{chunk,manifest}-key`。不再有第二套格式，也不会混�
 
 选这个形状的原因：wasm 调函数时**多余的实参会被静默丢弃**——如果直接把 7 参改成 6 参，
 旧调用会整体错位一位（`out` 收到公钥指针、`out_len` 收到一个容量数字），是内存踩踏而不是
-编译错。保留 7 参原型 + 可选入参，旧调用点原样能跑；新代码用 `_v2`。
+编译错。保留 7 参原型 + 可选入参，旧调用点原样能跑；新代码用 6 参的 `ys_unpack_v1` /
+`ys_unpack_meta_v1`（`_v1` 只表示契约大版本 `YSPK/1.0`，与 `ys_pack_v1` 同族）。
 
-其余 23 个导出签名未变。新增 4 个导出：`ys_pack_v1`（清单 `ext`/`created_at`）、
+其余 23 个导出签名未变。相对首版共**新增 6 个**导出：`ys_pack_v1`（清单 `ext`/`created_at`）、
 `ys_sm2_sign_der`（契约 DER 签名）、`ys_check_symbol`（第 5 位校验字符，仅 UI 防误）、
-`ys_error_name_v1`（契约 `CRYPTO_*` 错误名）。已删除上一轮临时加的
-`ys_set_layout/ys_get_layout/ys_layout_of/ys_unpack_v1/ys_unpack_meta_v1/ys_default_chunk_size`
-（格式归一后冗余）。
+`ys_error_name_v1`（契约 `CRYPTO_*` 错误名）、`ys_unpack_v1` / `ys_unpack_meta_v1`（6 参解包）。
+当前 wasm 共 **31 个导出 = 30 个函数 + `memory`**，0 import。
+
+**版本判定**：`ys_version()` 返回 **u32 `0x00010000`**（不是字符串）；字符串 `YSPK/1.0`
+出现在 `ys_unpack_meta` 的 JSON `version` 字段，也等于常量
+`pack::v1::VERSION_STRING`。发布构建只有这一种格式，因此
+`ys_version()==0x00010000 && ys_header_len()==112` 即可判定"契约布局内核"。
 
 **P1 效果**：`ys_unpack` / `ys_unpack_meta` 只给收件人私钥即可——验签用包内
 `SENDER_PUB`，发送方 4 位码也由它派生（契约 §10.3）；换掉包内公钥任一字节即验签失败。
