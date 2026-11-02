@@ -64,9 +64,10 @@
 
 | # | 现状 | 契约要求 | 状态 |
 |---:|---|---|---|
-| K1 | 服务端内嵌内核曾为 `8b89dd7f…`（130,653 B），与冻结产物 `c1b87d0a…`（127,313 B）不同字节 | 内嵌内核 MUST 与冻结构建产物同 sha256；同一 commit 跨环境重建可能不同字节，因此**以冻结产物 sha256 为准**，不以 commit 号为准 | 已换为 `c1b87d0a…`，待验收集复跑确认 |
+| K1 | 服务端内嵌内核曾为 `8b89dd7f…`（130,653 B），与冻结产物 `c1b87d0a…`（127,313 B）不同字节 | **内嵌内核 MUST 与验收冻结产物逐字节相同**（`c1b87d0a…`，127,313 B）：同源重建得到的不同字节**不接受**，commit 号相同也不作为依据；判据只用 sha256 + 启动日志 `sm2 verifier loaded kernel=…` | 已换为 `c1b87d0a…`，待验收集复跑确认 |
 | K2 | 实现不返回任何 `*_EXPIRED` 凭据码（过期由传输 TTL 承担） | 已按实现收口：v1 **不设**凭据级过期码；上传凭据有效期 = 传输 `expires_at`，到期走 `410 TRANSFER_EXPIRED`；租约到期归 `AUTH_TOKEN_INVALID` | **已收口**（契约已删该码） |
-| K3 | 实现当前用 `AUTH_TOKEN_STALE`（KID 轮换）与 `AUTH_TOKEN_INVALID`（值不匹配） | 契约终值为 `AUTH_TOKEN_REVOKED` / `AUTH_TOKEN_INVALID` / `AUTH_SIGNATURE_INVALID`；实现只需把 STALE 字面改成 REVOKED（语义一致） | 待实现改字面 |
+| K3 | 实现的"版本失效"字面值待定（`AUTH_TOKEN_STALE` 与 `AUTH_TOKEN_REVOKED` 两种说法都出现过，由同一脚本 + 同一产物的原始响应体定案） | 契约字面写 `AUTH_TOKEN_REVOKED`，并注明"以实测为准"，语义与状态码不变；最终字一旦确定，全文一次替换 | 待实测定字 |
+| K4 | 实现新增了 `AUTH_TOKEN_EXPIRED`（上传 6 h / 租约 30 min） | 契约凭据类**不设** `*_EXPIRED`：上传凭据有效期 = 传输 `expires_at`，到期走 `410 TRANSFER_EXPIRED`；租约到期归 `AUTH_TOKEN_INVALID` | 待实现对齐（去掉该码） |
 
 ## 易错点（自查清单）
 
