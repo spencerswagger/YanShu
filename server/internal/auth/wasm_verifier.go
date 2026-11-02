@@ -16,6 +16,8 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -40,6 +42,8 @@ type WASMVerifier struct {
 
 	mu     sync.Mutex
 	closed atomic.Bool
+
+	wasm []byte
 }
 
 // NewWASMVerifier 加载并实例化内核。
@@ -59,7 +63,7 @@ func NewWASMVerifier(path string) (*WASMVerifier, error) {
 		_ = rt.Close(ctx)
 		return nil, fmt.Errorf("%w: instantiate: %v", ErrKernelUnavailable, err)
 	}
-	v := &WASMVerifier{rt: rt, mod: mod}
+	v := &WASMVerifier{rt: rt, mod: mod, wasm: data}
 	for name, dst := range map[string]*api.Function{
 		"ys_alloc": &v.alloc, "ys_free": &v.free, "ys_sm2_verify_der": &v.verify,
 	} {
@@ -79,6 +83,31 @@ func NewWASMVerifier(path string) (*WASMVerifier, error) {
 }
 
 // Version 返回内核版本（`ys_version()`，期望 0x00010000）。
+// InspectKernel 只加载内核并返回自检信息（不建实例池）。
+func InspectKernel(path string) (KernelInfo, error) {
+	v, err := NewWASMVerifier(path)
+	if err != nil {
+		return KernelInfo{}, err
+	}
+	defer v.Close()
+	return v.Info(), nil
+}
+
+// Info 返回内核的 sha256、ys_version 与导出数（34 函数 + memory）。
+func (v *WASMVerifier) Info() KernelInfo {
+	sum := sha256.Sum256(v.wasm)
+	ver, _ := v.Version()
+	exports := 0
+	for _, d := range v.mod.ExportedFunctionDefinitions() {
+		_ = d
+		exports++
+	}
+	if v.mod.Memory() != nil {
+		exports++
+	}
+	return KernelInfo{SHA256: hex.EncodeToString(sum[:]), Version: ver, Exports: exports}
+}
+
 func (v *WASMVerifier) Version() (uint32, error) {
 	fn := v.mod.ExportedFunction("ys_version")
 	if fn == nil {

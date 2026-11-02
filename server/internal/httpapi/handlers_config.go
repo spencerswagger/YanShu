@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 
+	"github.com/spencerswagger/YanShu/server/internal/auth"
 	"github.com/spencerswagger/YanShu/server/internal/spec"
 )
 
@@ -15,6 +17,14 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 	epoch, err := a.store.CurrentTokenEpoch(r.Context())
 	if err != nil {
 		epoch = a.cfg.TokenEpochNum
+	}
+	var kernelSHA, kernelVer string
+	kernelExports := 0
+	if ki, ok := a.verifier.(interface{ Info() auth.KernelInfo }); ok {
+		info := ki.Info()
+		kernelSHA = info.SHA256
+		kernelVer = fmt.Sprintf("0x%08x", info.Version)
+		kernelExports = info.Exports
 	}
 	var wsURL *string
 	if a.cfg.WSURL != "" {
@@ -30,6 +40,11 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 		STUNURLs:          a.cfg.STUNURLs,
 		WSURL:             wsURL,
 		TokenEpoch:        epoch,
+		Verifier:          string(a.cfg.Verifier),
+		Env:               a.cfg.Env,
+		KernelSHA256:      kernelSHA,
+		KernelVersion:     kernelVer,
+		KernelExports:     kernelExports,
 		Limits: spec.ConfigLimits{
 			CodeLookupPerMin:      spec.DefaultLimits.CodeLookupPerIP.Max,
 			ChallengePerMin:       spec.DefaultLimits.ChallengePerIP.Max,

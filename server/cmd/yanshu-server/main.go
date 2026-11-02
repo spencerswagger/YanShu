@@ -36,8 +36,30 @@ func main() {
 }
 
 func run() error {
-	migrateOnly := flag.Bool("migrate-only", false, "只跑数据库迁移然后退出（spencer 起常驻实例前自检用）")
+	migrateOnly := flag.Bool("migrate-only", false, "只跑数据库迁移然后退出（常驻实例启动前自检用）")
+	verifyKernel := flag.Bool("verify-kernel", false,
+		"只校验内核 sha256/version/导出数后退出（CI/部署自检用）")
 	flag.Parse()
+
+	// 自检不需要数据库/密钥：只加载内核并核对白名单。
+	if *verifyKernel {
+		path := os.Getenv("YANSHU_KERNEL_WASM")
+		if path == "" {
+			path = "./kernel/yanshu_sm.wasm"
+		}
+		ki, err := auth.InspectKernel(path)
+		if err != nil {
+			return err
+		}
+		ok := auth.FrozenKernelSHA256[ki.SHA256]
+		fmt.Printf("kernel_sha256=%s\nys_version=0x%08x\nexports=%d\nallowlisted=%t\n",
+			ki.SHA256, ki.Version, ki.Exports, ok)
+		if !ok {
+			return fmt.Errorf("kernel sha256 %s is not in the frozen allowlist (expected %s)",
+				ki.SHA256, auth.FrozenKernelSHA256List())
+		}
+		return nil
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -127,6 +149,15 @@ func run() error {
 	verifier, err := auth.NewVerifier(string(cfg.Verifier), cfg.ResolveKernelWASM(), log)
 	if err != nil {
 		return err
+	}
+	// 内核锚定：实际 sha256 必须在内建白名单里，否则拒绝启动。
+	if info, ok := verifier.(interface{ Info() auth.KernelInfo }); ok {
+		ki := info.Info()
+		if !auth.FrozenKernelSHA256[ki.SHA256] {
+			return fmt.Errorf("kernel sha256 %s is not in the frozen allowlist (expected %s); refusing to start",
+				ki.SHA256, auth.FrozenKernelSHA256List())
+		}
+		log.Info("kernel verified", "sha256", ki.SHA256, "version", fmt.Sprintf("0x%08x", ki.Version), "exports", ki.Exports)
 	}
 	if closer, ok := verifier.(interface{ Close() }); ok {
 		defer closer.Close()

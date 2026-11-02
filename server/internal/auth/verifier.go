@@ -29,6 +29,27 @@ type Verifier interface {
 	Verify(pubKey, message, signature []byte) error
 }
 
+// FrozenKernelSHA256 是允许加载的内核白名单（冻结产物）。
+// 新增内核时必须显式登记，避免"同源不同字节"的产物被静默采用。
+var FrozenKernelSHA256 = map[string]bool{
+	"c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f": true,
+}
+
+// FrozenKernelSHA256List 返回白名单的展示串。
+func FrozenKernelSHA256List() string {
+	for k := range FrozenKernelSHA256 {
+		return k
+	}
+	return ""
+}
+
+// KernelInfo 由验签器实现，供 /v1/config 与启动自检使用。
+type KernelInfo struct {
+	SHA256  string
+	Version uint32
+	Exports int
+}
+
 // MaxSIGInputLen 是 SIG_INPUT 的**防御性上限**（DoS 门），不是业务校验：
 // 七种 PURPOSE 的合法输入最长 109 字节（7+1+32+69），越界到 512 才按 SIG_INPUT_TOO_LONG 拒。
 // 109 以内的字段问题必须由**字段级**校验报（NICKNAME_INVALID / CODE_FORMAT_INVALID …），

@@ -71,7 +71,13 @@ stdout 仍会打一份，容器里可另行重定向，但验收以 `YANSHU_LOG_
 已验证：PostgreSQL 17 @ `127.0.0.1:5432`，库 `yanshu_dev` + 独立 schema，起服务、`-migrate-only`、
 投递命令全程跑通（详见 PR #3 描述里的实测摘要）。
 
-## 一条命令投递（验收/Gate 用）
+## 部署限制（v1）
+
+- **限速额度是进程内内存实现**：多副本部署会让有效额度变成 N 倍，且各副本间不同步。
+  **v1 只支持单实例**；需要横向扩展时应先把限速改为共享存储（排期项，不在本版）。
+- `stub-allow` 只允许在 `YANSHU_ENV=local|test` **且**监听 loopback 时启动，其余组合直接报错退出。
+
+## 一条命令投递（自测用）
 
 `cmd/deliver` 是投递驱动：它只搬运**已加密的 `.yspk` 包**，不做加解密、不解析清单、不碰私钥。
 按 `docs/CRYPTO-PACK.md` 切出 prelude 与块切片，按 `docs/API.md` 走完

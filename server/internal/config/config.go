@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,7 +31,9 @@ type Config struct {
 	Addr        string
 	DatabaseURL string
 	BlobDir     string
-	Verifier    VerifierMode
+	// Env 是部署环境标识（local/test/…）；stub-allow 只在 local|test 下允许。
+	Env      string
+	Verifier VerifierMode
 	// TrustProxyHeaders 为 true 时从 X-Forwarded-For 取客户端 IP。
 	TrustProxyHeaders bool
 
@@ -93,6 +96,15 @@ func (c Config) ValidateForServe() error {
 		return fmt.Errorf("config: YANSHU_VERIFIER=sm2 requires the wasm kernel; " +
 			"set YANSHU_KERNEL_WASM=/path/to/yanshu_sm.wasm (repo ships it at server/kernel/yanshu_sm.wasm)")
 	}
+	if c.Verifier == VerifierStubAllow {
+		if c.Env != "local" && c.Env != "test" {
+			return fmt.Errorf("config: YANSHU_VERIFIER=stub-allow requires YANSHU_ENV=local|test (got %q)", c.Env)
+		}
+		host, _, err := net.SplitHostPort(c.Addr)
+		if err != nil || !isLoopbackHost(host) {
+			return fmt.Errorf("config: YANSHU_VERIFIER=stub-allow requires a loopback listen address (got %q)", c.Addr)
+		}
+	}
 	if c.TokenEpochNum <= 0 {
 		// fail closed：没有 KID 就无法判断"旧凭据"，宁可拒绝启动。
 		return fmt.Errorf("config: YANSHU_TOKEN_EPOCH is required when serving (positive decimal integer)")
@@ -104,10 +116,23 @@ func (c Config) ValidateForServe() error {
 	return nil
 }
 
+// isLoopbackHost 判断监听地址是否只绑本机（空 host 表示所有网卡，不算 loopback）。
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // Load 从环境变量构造配置。
 func Load() (Config, error) {
 	c := Config{
 		Addr:              env("YANSHU_ADDR", ":8080"),
+		Env:               os.Getenv("YANSHU_ENV"),
 		DatabaseURL:       os.Getenv("YANSHU_DATABASE_URL"),
 		BlobDir:           env("YANSHU_BLOB_DIR", "./data/blobs"),
 		Verifier:          VerifierMode(env("YANSHU_VERIFIER", string(VerifierStubDeny))),

@@ -6,3 +6,6 @@ target/
 .env
 .DS_Store
 tmp/
+outbound/
+# 构建产物不入库（内核例外见 server/.gitignore）
+*.exe

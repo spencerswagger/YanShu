@@ -97,6 +97,45 @@ func TestTokenEpochDefaultsToOne(t *testing.T) {
 	}
 }
 
+// stub-allow 只允许在 local|test + loopback 下启动。
+func TestStubAllowRequiresLocalEnvAndLoopback(t *testing.T) {
+	base := func() {
+		t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
+		t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
+		t.Setenv("YANSHU_TOKEN_SECRET", strings.Repeat("k", MinTokenSecretLen))
+		t.Setenv("YANSHU_TOKEN_EPOCH", "1")
+		t.Setenv("YANSHU_VERIFIER", "stub-allow")
+	}
+	cases := []struct {
+		name    string
+		env     string
+		addr    string
+		wantErr bool
+	}{
+		{"local+loopback", "local", "127.0.0.1:18080", false},
+		{"test+loopback", "test", "localhost:18080", false},
+		{"non-local env", "prod", "127.0.0.1:18080", true},
+		{"empty env", "", "127.0.0.1:18080", true},
+		{"all interfaces", "local", ":18080", true},
+		{"public addr", "local", "0.0.0.0:18080", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			base()
+			t.Setenv("YANSHU_ENV", c.env)
+			t.Setenv("YANSHU_ADDR", c.addr)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			err = cfg.ValidateForServe()
+			if (err != nil) != c.wantErr {
+				t.Fatalf("wantErr=%v got %v", c.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestDatabaseURLIsRequired(t *testing.T) {
 	t.Setenv("YANSHU_DATABASE_URL", "")
 	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())

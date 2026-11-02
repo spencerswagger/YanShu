@@ -40,6 +40,12 @@ type ConfigResponse struct {
 	Limits            ConfigLimits `json:"limits"`
 	// TokenEpoch 是当前只读的密钥版本（递增即吊销全部旧 upload_token）。
 	TokenEpoch int64 `json:"token_epoch"`
+	// 以下为运行时自检信息（只读，便于部署核对）。
+	Verifier      string `json:"verifier"`
+	Env           string `json:"env"`
+	KernelSHA256  string `json:"kernel_sha256,omitempty"`
+	KernelVersion string `json:"kernel_version,omitempty"`
+	KernelExports int    `json:"kernel_exports,omitempty"`
 }
 
 // ConfigLimits 是 /v1/config 里暴露的限速额度（API.md §4.1）。
