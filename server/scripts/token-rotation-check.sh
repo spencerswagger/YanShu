@@ -106,21 +106,21 @@ PKG1=$1; TOK1=$2
 check "baseline status" 200 "" "$(status_of "$PKG1" "$TOK1")"
 stop_server
 
-echo "== 2) 只改 secret（kid 仍 k1） =="
+echo "== 2) 只改 secret（EPOCH 仍 1）→ 旧 token 必须仍可用 =="
 start_server "rotation-secret-0002" "1"
-check "only-secret: 旧 token" 401 "AUTH_TOKEN_INVALID" "$(status_of "$PKG1" "$TOK1")"
+check "only-secret: 旧 token" 200 "" "$(status_of "$PKG1" "$TOK1")"
 set -- $(new_transfer); PKG2=$1; TOK2=$2
 check "only-secret: 新 token" 200 "" "$(status_of "$PKG2" "$TOK2")"
 stop_server
 
-echo "== 3) 只改 kid（secret 不变） =="
+echo "== 3) EPOCH +1（secret 不变）→ 旧 token 立刻 STALE =="
 start_server "rotation-secret-0002" "2"
-check "only-kid: 旧 token" 401 "AUTH_TOKEN_STALE" "$(status_of "$PKG2" "$TOK2")"
+check "epoch+1: 旧 token" 401 "AUTH_TOKEN_STALE" "$(status_of "$PKG2" "$TOK2")"
 set -- $(new_transfer); PKG3=$1; TOK3=$2
-check "only-kid: 新 token" 200 "" "$(status_of "$PKG3" "$TOK3")"
+check "epoch+1: 新 token" 200 "" "$(status_of "$PKG3" "$TOK3")"
 stop_server
 
-echo "== 4) 两个都换 =="
+echo "== 4) secret 与 EPOCH 都换 → 仍 STALE =="
 start_server "rotation-secret-0003" "3"
 check "both: 旧 token" 401 "AUTH_TOKEN_STALE" "$(status_of "$PKG3" "$TOK3")"
 set -- $(new_transfer); PKG4=$1; TOK4=$2

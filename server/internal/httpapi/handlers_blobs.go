@@ -360,9 +360,14 @@ func (a *API) checkLease(w http.ResponseWriter, r *http.Request, t store.Transfe
 		return errors.New("missing download id")
 	}
 	d, err := a.store.GetDownload(r.Context(), dl)
-	if err != nil || d.TransferID != t.ID || d.AckedAt != nil || !d.LeaseExpiresAt.After(a.now()) || t.State != spec.StateLeased {
+	if err != nil || d.TransferID != t.ID || d.AckedAt != nil || t.State != spec.StateLeased {
 		fail(w, r, spec.ErrDownloadNotStarted)
 		return errors.New("invalid lease")
+	}
+	// 租约 30 分钟：过期是"凭据过期"（401 AUTH_TOKEN_EXPIRED），不是"没开始"（409）。
+	if !d.LeaseExpiresAt.After(a.now()) {
+		writeError(w, r, apiError{code: spec.ErrAuthTokenExpired})
+		return errors.New("lease expired")
 	}
 	return nil
 }

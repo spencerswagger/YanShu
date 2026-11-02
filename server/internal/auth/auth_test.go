@@ -128,34 +128,31 @@ func TestUploadTokenIsDeterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := strings.Repeat("b", 32)
-	t1, err := issuer.UploadToken(id)
+	t1, err := issuer.UploadToken(id, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t2, _ := issuer.UploadToken(id)
+	t2, _ := issuer.UploadToken(id, 1)
 	if t1 != t2 {
 		t.Fatal("upload token is not deterministic; idempotent replay cannot return the same token")
 	}
-	other, _ := issuer.UploadToken(strings.Repeat("c", 32))
+	other, _ := issuer.UploadToken(strings.Repeat("c", 32), 1)
 	if other == t1 {
 		t.Fatal("upload token does not depend on transfer id")
 	}
-	if !issuer.Validate(t1, id, UploadTokenHash(t1)) {
-		t.Fatal("validate failed for its own token")
+	if !ValidateHash(t1, UploadTokenHash(t1)) {
+		t.Fatal("hash check failed for its own token")
 	}
-	if issuer.Validate(t1, strings.Repeat("c", 32), UploadTokenHash(t1)) {
-		t.Fatal("validate accepted a token for another transfer")
+	if ValidateHash(other, UploadTokenHash(t1)) {
+		t.Fatal("hash check accepted a different token")
 	}
-	if issuer.Validate(other, id, UploadTokenHash(t1)) {
-		t.Fatal("validate accepted a different token")
-	}
-	if issuer.Validate("", id, UploadTokenHash(t1)) {
+	if ValidateHash("", UploadTokenHash(t1)) {
 		t.Fatal("empty token accepted")
 	}
-	// 轮换密钥后，旧 token 必须失效（裁决 G5）。
-	rotated, _ := NewTokenIssuer([]byte("rotated-secret"))
-	if rotated.Validate(t1, id, UploadTokenHash(t1)) {
-		t.Fatal("token still valid after secret rotation")
+	// 同一 transfer 不同 EPOCH 派生出的 token 不同（EPOCH 是吊销开关）。
+	e2, _ := issuer.UploadToken(id, 2)
+	if e2 == t1 {
+		t.Fatal("epoch does not participate in derivation")
 	}
 }
 
@@ -167,12 +164,17 @@ func TestUploadTokenMatchesContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := issuer.UploadToken(id)
+	got, err := issuer.UploadToken(id, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte("yanshu/upload-token/v1"))
+	mac.Write([]byte("yanshu/upload-token/v2"))
+	var epoch [8]byte
+	for i := 0; i < 8; i++ {
+		epoch[7-i] = byte(uint64(7) >> (8 * i))
+	}
+	mac.Write(epoch[:])
 	mac.Write([]byte(id))
 	want := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	if got != want {

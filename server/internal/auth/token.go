@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/spencerswagger/YanShu/server/internal/gm"
@@ -66,36 +67,35 @@ func NewTokenIssuer(secret []byte) (*TokenIssuer, error) {
 	return &TokenIssuer{secret: append([]byte(nil), secret...)}, nil
 }
 
-// uploadTokenInfo 是契约固定的派生前缀（docs/contract-rulings.md G5）：
+// uploadTokenInfo 是派生前缀（API §1.7，token v2 带 EPOCH）：
 //
-//	upload_token = base64url(HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖ transfer_id))
+//	upload_token = base64url(HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v2" ‖ u64be(EPOCH) ‖ transfer_id))
 //
-// 前缀与 transfer_id 之间**没有分隔符**，改动即等于改契约。
-const uploadTokenInfo = "yanshu/upload-token/v1"
+// EPOCH 进了派生串，但**校验不靠重算**：库里存 SM3(token)，另存签发时的 EPOCH；
+// 校验 = 「token 的 SM3 == 库里哈希」且「行内 EPOCH == 当前 EPOCH」。
+// 因此：只换 TOKEN_SECRET 不影响既有 token（哈希没变）；只有 EPOCH 递增才会吊销。
+const uploadTokenInfo = "yanshu/upload-token/v2"
 
-// UploadToken 为某个 transfer_id 派生 upload_token。
-func (t *TokenIssuer) UploadToken(transferID string) (string, error) {
+// UploadToken 为某个 transfer_id + 当前 EPOCH 派生 upload_token。
+func (t *TokenIssuer) UploadToken(transferID string, epoch int64) (string, error) {
 	mac := hmac.New(sha256.New, t.secret)
 	mac.Write([]byte(uploadTokenInfo))
+	var e [8]byte
+	binary.BigEndian.PutUint64(e[:], uint64(epoch))
+	mac.Write(e[:])
 	mac.Write([]byte(transferID))
 	return B64.EncodeToString(mac.Sum(nil)), nil
 }
 
-// Validate 校验 token：既要求它是当前密钥对 transfer_id 的正确派生值，
-// 也要求它与库里存的 SM3 一致。
+// ValidateHash 只比对 token 的 SM3 与库里存的哈希。
 //
-// 裁决 G5：轮换 TOKEN_SECRET 会让存量 token 失效（≤ TTL 24h）——这条只有在
-// "按当前密钥重算" 时才成立；只比对哈希无法让轮换生效。
-func (t *TokenIssuer) Validate(token, transferID string, storedHash []byte) bool {
-	if token == "" {
+// **不重算**：EPOCH 才是吊销开关（见 UploadToken 的注释与 API §1.7）。
+// 行内 EPOCH 与当前 EPOCH 的比较由调用方完成。
+func ValidateHash(token string, storedHash []byte) bool {
+	if token == "" || len(storedHash) != 32 {
 		return false
 	}
-	expected, err := t.UploadToken(transferID)
-	if err != nil {
-		return false
-	}
-	return subtle.ConstantTimeCompare(UploadTokenHash(token), UploadTokenHash(expected)) == 1 &&
-		subtle.ConstantTimeCompare(UploadTokenHash(expected), storedHash) == 1
+	return subtle.ConstantTimeCompare(UploadTokenHash(token), storedHash) == 1
 }
 
 // EqualBytes 是常数时间比较。

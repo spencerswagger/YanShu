@@ -46,7 +46,7 @@ type Transfer struct {
 	UpdatedAt            time.Time
 	ExpiresAt            time.Time
 	UploadTokenSM3       []byte
-	UploadTokenKID       string
+	UploadTokenEpoch     string
 	UploaderIP           string
 }
 
@@ -61,7 +61,7 @@ func scanTransfer(row interface{ Scan(...any) error }) (Transfer, error) {
 		&t.ChunkCount, &t.PreludeLen, &t.PreludeSM3, &t.PreludeReceived, &t.ReceivedChunks,
 		&t.TotalCiphertextBytes, &t.DownloadCount, &t.MaxDownloads, &t.State,
 		&t.TerminalReason, &t.TerminalAt, &t.CreatedAt, &t.UpdatedAt, &t.ExpiresAt,
-		&t.UploadTokenSM3, &t.UploadTokenKID, &t.UploaderIP)
+		&t.UploadTokenSM3, &t.UploadTokenEpoch, &t.UploaderIP)
 	return t, err
 }
 
@@ -72,7 +72,7 @@ func (s *Store) CreateTransfer(ctx context.Context, t Transfer) (Transfer, error
 		RETURNING `+transferColumns,
 		t.ID, t.SenderCode, t.RecipientCode, t.PlaintextSize, t.ChunkSize, t.ChunkCount,
 		t.PreludeLen, t.PreludeSM3, t.TotalCiphertextBytes, t.MaxDownloads,
-		t.CreatedAt, t.ExpiresAt, t.UploadTokenSM3, t.UploadTokenKID, nullableString(t.UploaderIP))
+		t.CreatedAt, t.ExpiresAt, t.UploadTokenSM3, t.UploadTokenEpoch, nullableString(t.UploaderIP))
 	out, err := scanTransfer(row)
 	if err != nil {
 		return Transfer{}, fmt.Errorf("store: create transfer: %w", err)
@@ -641,7 +641,7 @@ func (s *Store) ListInbox(ctx context.Context, q InboxQuery) ([]InboxRow, error)
 			&r.ChunkCount, &r.PreludeLen, &r.PreludeSM3, &r.PreludeReceived, &r.ReceivedChunks,
 			&r.TotalCiphertextBytes, &r.DownloadCount, &r.MaxDownloads, &r.State,
 			&r.TerminalReason, &r.TerminalAt, &r.CreatedAt, &r.UpdatedAt, &r.ExpiresAt,
-			&r.UploadTokenSM3, &r.UploadTokenKID, &uploaderIP, &r.SenderNickname)
+			&r.UploadTokenSM3, &r.UploadTokenEpoch, &uploaderIP, &r.SenderNickname)
 		if err != nil {
 			return nil, err
 		}

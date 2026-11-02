@@ -193,6 +193,8 @@ const (
 	ChallengeRetention = 10 * time.Minute
 	// TombstoneTTL 是终结元数据保留时长（API.md §5.2：7 天）。
 	TombstoneTTL = 7 * 24 * time.Hour
+	// UploadTokenTTL 是 upload_token 的有效期（API §1.7：6 小时）。
+	UploadTokenTTL = 6 * time.Hour
 	// IdempotencyWindow 是 POST /transfers 的幂等窗口（API.md §6.2：600 秒）。
 	IdempotencyWindow = 600 * time.Second
 )

@@ -9,7 +9,7 @@ func TestValidateForServeRequiresTokenSecret(t *testing.T) {
 	t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
 	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
 	t.Setenv("YANSHU_TOKEN_SECRET", "")
-	t.Setenv("YANSHU_TOKEN_KID", "1")
+	t.Setenv("YANSHU_TOKEN_EPOCH", "1")
 
 	cfg, err := Load()
 	if err != nil {
@@ -60,7 +60,7 @@ func TestSM2RequiresKernelWhenServing(t *testing.T) {
 	t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
 	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
 	t.Setenv("YANSHU_TOKEN_SECRET", strings.Repeat("k", MinTokenSecretLen))
-	t.Setenv("YANSHU_TOKEN_KID", "1")
+	t.Setenv("YANSHU_TOKEN_EPOCH", "1")
 	t.Setenv("YANSHU_VERIFIER", "sm2")
 	t.Setenv("YANSHU_KERNEL_WASM", "")
 
@@ -77,23 +77,22 @@ func TestSM2RequiresKernelWhenServing(t *testing.T) {
 	}
 }
 
-// 没有密钥版本时必须拒绝启动（fail closed）：否则无法判断"旧 token"。
-func TestTokenKIDRequired(t *testing.T) {
+// EPOCH 缺省为 1（bootstrap）；非法值必须拒绝。
+func TestTokenEpochDefaultsToOne(t *testing.T) {
 	t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
 	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
 	t.Setenv("YANSHU_TOKEN_SECRET", strings.Repeat("k", MinTokenSecretLen))
-	t.Setenv("YANSHU_TOKEN_KID", "")
+	t.Setenv("YANSHU_TOKEN_EPOCH", "")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	err = cfg.ValidateForServe()
-	if err == nil {
-		t.Fatal("missing TOKEN_KID must fail validation")
+	if cfg.TokenEpoch != 1 {
+		t.Fatalf("default epoch = %d, want 1", cfg.TokenEpoch)
 	}
-	if !strings.Contains(err.Error(), "YANSHU_TOKEN_KID") {
-		t.Fatalf("error should name the variable: %v", err)
+	if err := cfg.ValidateForServe(); err != nil {
+		t.Fatalf("default epoch rejected: %v", err)
 	}
 }
 
@@ -103,7 +102,7 @@ func TestTokenKIDMustBePositiveInteger(t *testing.T) {
 		t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
 		t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
 		t.Setenv("YANSHU_TOKEN_SECRET", strings.Repeat("k", MinTokenSecretLen))
-		t.Setenv("YANSHU_TOKEN_KID", bad)
+		t.Setenv("YANSHU_TOKEN_EPOCH", bad)
 		if _, err := Load(); err == nil {
 			t.Fatalf("kid %q accepted, want rejection", bad)
 		}
@@ -111,13 +110,13 @@ func TestTokenKIDMustBePositiveInteger(t *testing.T) {
 	t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
 	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
 	t.Setenv("YANSHU_TOKEN_SECRET", strings.Repeat("k", MinTokenSecretLen))
-	t.Setenv("YANSHU_TOKEN_KID", "42")
+	t.Setenv("YANSHU_TOKEN_EPOCH", "42")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("valid kid rejected: %v", err)
 	}
-	if cfg.TokenKIDNum != 42 {
-		t.Fatalf("TokenKIDNum = %d", cfg.TokenKIDNum)
+	if cfg.TokenEpoch != 42 {
+		t.Fatalf("TokenEpoch = %d", cfg.TokenEpoch)
 	}
 }
 

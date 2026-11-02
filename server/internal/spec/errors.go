@@ -30,6 +30,8 @@ const (
 	ErrAuthTokenStale ErrorCode = "AUTH_TOKEN_STALE"
 	// ErrAuthTokenInvalid：token 值不对（伪造/不属于该传输），与"签名不被接受"分开。
 	ErrAuthTokenInvalid ErrorCode = "AUTH_TOKEN_INVALID"
+	// ErrAuthTokenExpired：凭据过期（上传 token 6h、下载租约 30min）。
+	ErrAuthTokenExpired ErrorCode = "AUTH_TOKEN_EXPIRED"
 
 	// 403
 	ErrSignalPeerMismatch ErrorCode = "SIGNAL_PEER_MISMATCH"
@@ -92,6 +94,7 @@ var errStatus = map[ErrorCode]int{
 	ErrAuthCodeMismatch:     http.StatusUnauthorized,
 	ErrAuthTokenStale:       http.StatusUnauthorized,
 	ErrAuthTokenInvalid:     http.StatusUnauthorized,
+	ErrAuthTokenExpired:     http.StatusUnauthorized,
 
 	ErrSignalPeerMismatch: http.StatusForbidden,
 	ErrNotTransferParty:   http.StatusForbidden,
@@ -145,6 +148,7 @@ var errMessage = map[ErrorCode]string{
 	ErrAuthCodeMismatch:     "X-YS-Code does not match the signed code",
 	ErrAuthTokenStale:       "upload token is stale: its key version is no longer accepted; create a new transfer",
 	ErrAuthTokenInvalid:     "upload token is invalid for this transfer",
+	ErrAuthTokenExpired:     "token has expired; obtain a new one",
 
 	ErrSignalPeerMismatch: "signal peers do not match the transfer",
 	ErrNotTransferParty:   "authenticated credential is not a party of this transfer",

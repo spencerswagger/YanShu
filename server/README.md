@@ -219,10 +219,11 @@ YANSHU_KERNEL_WASM=./kernel/yanshu_sm.wasm \
   签名：DER `SEQUENCE{r,s}`；userID 固定 `1234567812345678`，`e = SM3(ZA‖SIG_INPUT)`。
 - 默认值：`YANSHU_VERIFIER` 缺省 `stub-deny`（一律拒绝，fail closed）；`stub-allow` 只能显式开启
   并打 WARN。三者都非法值 → 启动报错。
-- **轮换操作**：同时改 `YANSHU_TOKEN_SECRET`（≥16B）与 `YANSHU_TOKEN_KID`（新版本号，单调递增）
-  并重启；旧 token 立刻 `401 AUTH_TOKEN_STALE`，新传输的新 token 立即可用。
-  只改 secret 也会失效（`401 AUTH_TOKEN_INVALID`，因为校验按新密钥重算）；详见
-  `docs/TOKEN-LIFECYCLE.md` §3.5 的轮换矩阵与 `TestTokenRotationMatrix`。
+- **吊销操作（API §1.7 的 EPOCH）**：`UPDATE token_kid_state SET kid = kid + 1;` 即可一次性吊销
+  全部旧 token（`401 AUTH_TOKEN_STALE`，**不需要重启**）。`YANSHU_TOKEN_EPOCH` 只是启动 bootstrap，
+  正整数且不允许调小；`/v1/config` 暴露只读 `token_epoch`。
+  **只换 `TOKEN_SECRET` 不会吊销**（它只是派生盐）；6 小时过期走 `401 AUTH_TOKEN_EXPIRED`；
+  详见 `docs/TOKEN-LIFECYCLE.md` 与 `TestTokenRotationMatrix`。
 - **切换清单与 token 失效机制**见 `docs/TOKEN-LIFECYCLE.md`：`upload_token` 由
   `HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1"‖transfer_id)` 派生、库里只存 `SM3` 与
   签发时的 `kid`；**同时轮换 `TOKEN_SECRET` 与 `TOKEN_KID` 会让全部旧 token 立刻

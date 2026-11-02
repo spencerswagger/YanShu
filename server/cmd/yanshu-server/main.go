@@ -113,15 +113,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// kid 只增不减：调小会让旧版本 token 复活，直接拒绝启动。
-	if stored, err := st.EnsureTokenKID(ctx, cfg.TokenKIDNum, time.Now().UTC()); err != nil {
-		if errors.Is(err, store.ErrTokenKIDLower) {
-			return fmt.Errorf("YANSHU_TOKEN_KID=%d is lower than the recorded maximum %d: "+
-				"kid must strictly increase (choose a larger number)", cfg.TokenKIDNum, stored)
+	// EPOCH 只增不减：调小会让旧版本 token 复活，直接拒绝启动。
+	// 运行期吊销 = 运维执行 `UPDATE token_kid_state SET kid = kid + 1`（无需重启）。
+	if stored, err := st.EnsureTokenEpoch(ctx, cfg.TokenEpoch, time.Now().UTC()); err != nil {
+		if errors.Is(err, store.ErrTokenEpochLower) {
+			return fmt.Errorf("YANSHU_TOKEN_EPOCH=%d is lower than the recorded epoch %d: "+
+				"epoch must strictly increase", cfg.TokenEpoch, stored)
 		}
-		return fmt.Errorf("check token kid: %w", err)
+		return fmt.Errorf("check token epoch: %w", err)
 	} else {
-		log.Info("token kid", "current", cfg.TokenKIDNum, "maxRecorded", stored)
+		log.Info("token epoch", "bootstrap", cfg.TokenEpoch, "current", stored)
 	}
 
 	verifier, err := auth.NewVerifier(string(cfg.Verifier), cfg.ResolveKernelWASM(), log)

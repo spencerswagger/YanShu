@@ -36,11 +36,9 @@ type Config struct {
 
 	// TokenSecret 是 upload_token 的 HMAC 密钥。
 	TokenSecret []byte
-	// TokenKID 是 token 的密钥版本（十进制序号，严格单调递增）。
-	// 轮换 secret 时一并换掉即可一次性吊销全部旧 token；服务端拒绝把 kid 调小。
-	TokenKID string
-	// TokenKIDNum 是 TokenKID 的数值形式（启动时校验单调性用）。
-	TokenKIDNum int64
+	// TokenEpoch 是启动时的 token 密钥版本（API §1.7 的 EPOCH，正整数）。
+	// 运行期的"以哪个 EPOCH 为准"存在库里：启动只是 bootstrap + 防回退。
+	TokenEpoch int64
 
 	// 对外配置（GET /v1/config）。
 	STUNURLs []string
@@ -95,10 +93,8 @@ func (c Config) ValidateForServe() error {
 		return fmt.Errorf("config: YANSHU_VERIFIER=sm2 requires the wasm kernel; " +
 			"set YANSHU_KERNEL_WASM=/path/to/yanshu_sm.wasm (repo ships it at server/kernel/yanshu_sm.wasm)")
 	}
-	if c.TokenKID == "" {
-		// fail closed：没有密钥版本就无法判断"旧 token"，宁可拒绝启动也不放行。
-		return fmt.Errorf("config: YANSHU_TOKEN_KID is required when serving (positive decimal integer); " +
-			"rotate it together with YANSHU_TOKEN_SECRET to revoke all upload tokens")
+	if c.TokenEpoch <= 0 {
+		return fmt.Errorf("config: YANSHU_TOKEN_EPOCH must be positive")
 	}
 	if len(c.TokenSecret) < MinTokenSecretLen {
 		return fmt.Errorf("config: YANSHU_TOKEN_SECRET is required when serving (>=%d bytes); "+
@@ -128,14 +124,19 @@ func Load() (Config, error) {
 	if secret := os.Getenv("YANSHU_TOKEN_SECRET"); secret != "" {
 		c.TokenSecret = []byte(secret)
 	}
-	c.TokenKID = os.Getenv("YANSHU_TOKEN_KID")
-	if c.TokenKID != "" {
-		n, err := strconv.ParseInt(c.TokenKID, 10, 64)
-		if err != nil || n <= 0 {
-			return Config{}, fmt.Errorf("config: YANSHU_TOKEN_KID must be a positive decimal integer (got %q)", c.TokenKID)
-		}
-		c.TokenKIDNum = n
+	// 兼容旧变量名 YANSHU_TOKEN_KID（等价于 EPOCH），新部署用 YANSHU_TOKEN_EPOCH。
+	epochRaw := os.Getenv("YANSHU_TOKEN_EPOCH")
+	if epochRaw == "" {
+		epochRaw = os.Getenv("YANSHU_TOKEN_KID")
 	}
+	if epochRaw == "" {
+		epochRaw = "1"
+	}
+	n, err := strconv.ParseInt(epochRaw, 10, 64)
+	if err != nil || n <= 0 {
+		return Config{}, fmt.Errorf("config: YANSHU_TOKEN_EPOCH must be a positive decimal integer (got %q)", epochRaw)
+	}
+	c.TokenEpoch = n
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: YANSHU_DATABASE_URL is required")
 	}

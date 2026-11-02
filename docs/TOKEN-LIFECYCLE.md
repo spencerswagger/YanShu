@@ -1,62 +1,45 @@
-# upload_token 的生命周期与失效方式
+# upload_token 的生命周期与失效方式（EPOCH 版，API §1.7）
 
-> 契约依据：`docs/API.md` §1.5、`docs/contract-rulings.md` G5。实现：`server/internal/auth/token.go`。
+> 实现：`server/internal/auth/token.go`、`server/internal/store/token_epoch.go`。
 
-## 1. 它是什么
-
-`upload_token` 是**发送方上传侧的能力凭证**（`POST /v1/transfers` 下发），用于 `PUT prelude`、
-`PUT chunks/{i}`、`GET status`、`POST complete`。它只写不读：拿到它也读不到别人的密文。
-
-**生成**（契约写死的构造，无分隔符）：
+## 1. 生成、存储、校验
 
 ```
-upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖ TRANSFER_ID_ASCII) )
+upload_token = base64url(HMAC-SHA256(TOKEN_SECRET,
+                "yanshu/upload-token/v2" ‖ u64be(EPOCH) ‖ transfer_id))
 ```
 
-**存的是什么**：只存 `SM3(upload_token)`（`transfers.upload_token_sm3`，32 字节 bytea）
-与签发时的**密钥版本** `kid`（`transfers.upload_token_kid`）。不存原文；没有单独的 token 过期时间
-——它的生命周期绑在传输行上。
+- 库里只存 `SM3(upload_token)`（`transfers.upload_token_sm3`）与**签发时的 EPOCH**
+  （`transfers.upload_token_kid`，列名沿用旧命名，值就是 EPOCH 的十进制串）。
+- 校验（`requireUploadToken`，顺序固定）：
+  1. **EPOCH**：行内 EPOCH == 当前 EPOCH，否则 `401 AUTH_TOKEN_STALE`；
+  2. **哈希**：`SM3(token)` == 库内值，否则 `401 AUTH_TOKEN_INVALID`；
+  3. **过期**：签发超过 **6 小时** → `401 AUTH_TOKEN_EXPIRED`；
+  4. 之后才看传输状态（**先凭据后状态**：401 优先于 410）。
+- `TOKEN_SECRET` 只是派生盐：**轮换它不会让已签发 token 失效**（哈希没变）。
 
-**kid 的作用**：`YANSHU_TOKEN_KID` 是**正整数且严格单调递增**（如 1 → 2 → 3）。
-服务端把用过的最大值记在 `token_kid_state`，启动时比较：**调小直接拒绝启动**
-（否则调小会让旧版本 token 复活）。服务端只认当前 kid。轮换时把 `YANSHU_TOKEN_SECRET` 与
-`YANSHU_TOKEN_KID` 一起换掉，所有旧行立刻失效，错误名为 **`401 AUTH_TOKEN_STALE`**
-（与"token 不对"的 `AUTH_SIGNATURE_INVALID` 区分，客户端据此走"重建传输"的自愈路径）。
-`TOKEN_KID` 缺失或非正整数 → 启动报错（fail closed）；调小 → 启动报错并打印已记录的最大值。
+## 2. EPOCH：一键吊销
 
-错误名只有两个：**`AUTH_TOKEN_STALE`**（kid 轮换导致的作废，401）与
-**`AUTH_SIGNATURE_INVALID`**（token 值本身不对，401）。前者让客户端"重建传输"，后者说明
-头部/令牌传错了。**没有** `AUTH_TOKEN_EXPIRED`：过期是传输级语义（`410 TRANSFER_EXPIRED`）。
+当前 EPOCH 存在 `token_kid_state`（单行 `id=true, kid=<epoch>`），运行期每次校验都读它。
 
-**怎么校验**（`TokenIssuer.Validate`）：按**当前** `TOKEN_SECRET` 与路径里的 `transfer_id`
-重算一遍，要求「提交的 token == 重算值」**且**「SM3(重算值) == 库里存的哈希」，两者都成立才放行。
-所以 `TOKEN_SECRET` 参与的是**校验时的重算**，不是"只比对哈希"。
+```sql
+-- 一键吊销全部 upload_token：不需要删库、不需要重启
+UPDATE token_kid_state SET kid = kid + 1;
+```
 
-## 2. 什么时候失效
+- 启动时 `YANSHU_TOKEN_EPOCH`（正整数，默认 1）作为 bootstrap：库里没有就写入；比库里大就更新；
+  **比库里小直接拒绝启动**（防止调小让旧 token 复活）。
+- `/v1/config` 暴露只读 `token_epoch`，客户端可据此判断自己是否落后。
 
-| 事件 | 效果 | 说明 |
-|---|---|---|
-| **轮换 `TOKEN_SECRET` + `TOKEN_KID`** | **全部 token 立即失效**，返回 `401 AUTH_TOKEN_STALE` | kid 对不上直接拒；客户端重建传输拿新 token |
-| 只换 `TOKEN_SECRET` 不换 kid | 旧 token 也会失败（重算值不同），错误名是 `AUTH_SIGNATURE_INVALID` | 不建议；规范做法是两个一起换 |
-| TTL 到期 | 传输转 `EXPIRED`，内容端点 `410 TRANSFER_EXPIRED` | 这是**传输**生命周期，不是 token 错误；没有 `AUTH_TOKEN_EXPIRED` 这个码 |
-| 传输进入终结态（`CONSUMED`/`REVOKED`/`EXPIRED`） | 上传接口拒绝（`409 TRANSFER_STATE_CONFLICT`） | token 本身不再是有效上传凭据 |
-| TTL 到期 | 先转 `EXPIRED`，终结元数据保留 7 天后物理删除 | 行删除后 token 自然失效（404/410） |
-| 发送方撤回 | 立即终结 + 删密文 | 同上 |
-| 删除用户码 | 不影响 token（token 不绑定码） | 但发送方已无法再签发新传输 |
-| 改昵称 | 不影响 | 与上传凭证无关 |
+## 3. 失效矩阵
 
-> 结论：**轮换 `TOKEN_SECRET` 就是一次性吊销全部 `upload_token` 的手段**。
-> 用它做应急：换掉 secret 并重启服务 → 所有在途上传令牌失效，攻击者手里的旧 token 立刻报废；
-> 已取走的密文不受影响（那是另一条信任链）。
-
-## 3. 与幂等重放的关系
-
-`POST /v1/transfers` 带 `Idempotency-Key` 时，600 秒内重放要返回**同一个** `transfer_id` 与 `upload_token`。
-服务端只存 `SM3(token)`，无法回放原文，因此 token 是按上面的公式**重新算**出来的——这也意味着：
-
-- secret 没变 → 重算值 = 原值，重放 `200`；
-- secret 轮换过 → 重算值 ≠ 原值，服务端不会把一个不可用的 token 发出去，返回 `409 TRANSFER_STATE_CONFLICT`，
-  客户端重建传输即可（新传输拿新 token）。
+| 事件 | 结果 |
+|---|---|
+| 只换 `TOKEN_SECRET` | **旧 token 仍然有效**（EPOCH 未变、哈希未变） |
+| `EPOCH` 递增 | 全部旧 token 立刻 `401 AUTH_TOKEN_STALE` |
+| 超过 6 小时 | `401 AUTH_TOKEN_EXPIRED` |
+| token 值不对/串了传输 | `401 AUTH_TOKEN_INVALID` |
+| 传输终结（撤回/过期/取完） | 上传接口 409/410（状态层） |
 
 ## 3.4 为什么旧版本看到的是 201（commit 时间线）
 
