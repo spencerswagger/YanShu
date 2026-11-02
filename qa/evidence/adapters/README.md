@@ -49,8 +49,9 @@ $PROBE unpack /tmp/a.yspk /tmp/out.bin --recipient-sk /tmp/bob.sk
 - **公钥入参一律 64 字节 `X‖Y`，不带 `0x04`**（0x04‖X‖Y 只出现在包内 `SENDER_PUB`）。
   传 65 字节给 `ys_pack_v1` 会得到 `CRYPTO_CURVE_INVALID`——本驱动踩过，现按 64 传、
   收到 65 字节时自动去掉前缀。
-- **解包符号**：优先 6 参 `ys_unpack_v2` / `ys_unpack_v1`（名字随版本变），
-  没有则回退 **7 参** `ys_unpack(pack,len,priv,sender_pub_or_0,out,cap,out_len)` 并把第 4 参传 `0`。
+- **解包符号**：现行 6 参名是 **`ys_unpack_v1`**（`_v2` 曾短暂用过，保留兼容）；
+  没有 6 参导出则回退 **7 参** `ys_unpack(pack,len,priv,sender_pub_or_0,out,cap,out_len)`，
+  第 4 参传 `0`（7 参是同一实现的兼容别名，只做"是不是同一个人"的比对）。
 - **绝不能拿 6 个实参去调 7 参的那个导出**：wasm 会静默丢掉多余实参、整体错位一位
   （`out` 收到公钥指针、`out_len` 收到容量数字）→ 内存踩踏。驱动因此在调用前**断言
   `fn.length`**（wasm 导出函数的 `.length` 就是形参个数），对不上直接退出 2。

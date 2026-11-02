@@ -525,6 +525,18 @@ def t_splice_donor_chunk(env: Envelope, donor: Envelope | None) -> Tamper:
                   f"块[{rec.seq}] 整条替换为 donor 的块[{rec.seq}]（{rec.rec_len}B，合法块）", data)
 
 
+def t_legacy_format(env: Envelope, _donor: Envelope | None) -> Tamper:
+    """版本闸门：把**旧 rune-v1 格式**（40B 头）的包喂给契约实现，必须被拒。
+
+    这不是"篡改"，是防"静默兼容旧格式"的回归用例：旧格式与 YSPK/1.0 同魔数、同版本号，
+    只靠字段长度区分，最容易在重构里被悄悄接受。
+    """
+    legacy = build_synthetic_rune_envelope([len(env.raw) and 64, 64], 64)
+    return Tamper("reject-legacy-format",
+                  f"旧 rune-v1 格式包（40B 头，{len(legacy)}B）→ 必须被拒（版本/布局闸门，非篡改）",
+                  legacy)
+
+
 def t_truncate_tail(env: Envelope, _donor: Envelope | None) -> Tamper:
     if len(env.chunks) < 2:
         return Tamper("truncate-tail", "截断尾块", skip="包只有 1 块")
@@ -543,6 +555,7 @@ REQUIRED_CASES: list[tuple[str, Callable[[Envelope, Envelope | None], Tamper]]] 
 ]
 
 EXTRA_CASES: list[tuple[str, Callable[[Envelope, Envelope | None], Tamper]]] = [
+    ("reject-legacy-format", t_legacy_format),
     ("flip-chunk-tag", t_flip_chunk_tag),
     ("drop-chunk-slice", t_drop_chunk_slice),
     ("truncate-tail", t_truncate_tail),

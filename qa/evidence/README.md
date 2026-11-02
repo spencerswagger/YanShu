@@ -175,6 +175,7 @@ PostgreSQL 走 `row_to_json`：`TEXT` 列明文原样、`BYTEA` 列以 `\x<hex>`
 | `flip-chunk-tag`（`--extra-cases`） | 翻转 GCM tag 1 字节 | §7.1 |
 | `drop-chunk-slice`（`--extra-cases`） | 只删"密文+tag"、留块头 | §6.2 |
 | `truncate-tail`（`--extra-cases`） | 截掉尾块 | §6.4 / §13#22 |
+| `reject-legacy-format`（`--extra-cases`） | 把旧 `rune-v1` 格式包（40B 头）喂给契约实现，必须被拒（**版本闸门，不是篡改**） | §2 版本策略 |
 
 判定：**解密失败（清单层 / AEAD 层 / 结构层任一道拒绝）= PASS**；
 **解密成功或返回部分明文 = FAIL**。错误名只作诊断打印，**不参与通过判定**——

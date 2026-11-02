@@ -1,11 +1,11 @@
 # 证据二实测结果：密文篡改必报错（**生产导出路径**：wasm32 raw C ABI）
 
 - 日期：2026-11-02
-- 对象：`crypto/sm`，分支 `feat/endcrypto-wasm` @ **`a33c2de`**（Rune 已删除 rune-v1 旧布局，
+- 对象：`crypto/sm`，分支 `feat/endcrypto-wasm` @ **`0f33a15`**（Rune 已删除 rune-v1 旧布局，
   仓库只剩 `YSPK/1.0`；解密调用走 6 参 `ys_unpack_v1`，没有则回退 7 参 `ys_unpack` 传 NULL）
 - **入口类型：`wasm-production`**（`--entry-kind production`）
 - `ys_version()`：`0x00010000` → **0.1.0**；wasm 文件 sha256
-  `（以本次构建为准，124,161 字节；sha256 见复跑输出）`
+  `9df8b8c328d9c8a856adeb5e1cc6626d33216639e22722545c230d6053be9d91`（125,839 字节）
 - 包布局：`contract-v1`（默认）
 - 解密入口：**`yanshu_sm.wasm` 的 `ys_unpack`**（`--entry-kind production`）——
   就是 Web 将来要调的同一批导出，不是 Rust 原生 API、也不是测试替身
@@ -70,7 +70,11 @@ qa/evidence/run_evidence2_wasm.sh /tmp/rune/crypto/sm /tmp/ys-ev2-wasm
 
 **未报错 0 种**。
 
-（本次 head `a33c2de` 复跑：单块 5/5、多块 10/10、补充变体 18/18，与上一版结论一致。
+**新增版本闸门用例**：把旧的 `rune-v1` 格式包（40B 头、与 `YSPK/1.0` 同魔数同版本号）
+喂给契约实现，必须被拒 —— 实测 `CRYPTO_VERSION_UNSUPPORTED`。
+它不算"篡改"，作用是不让"静默兼容旧格式"这种回归溜过去；本用例只在 `--extra-cases` 时跑。
+
+（本次 head `0f33a15` 复跑：单块 6/6、多块 **11/11**（含新增版本闸门用例）、补充变体 18/18。
 公钥入参口径已改为 **64 字节 `X‖Y`**，驱动按 64 传；解包走 6 参 `ys_unpack_v1`（arity 断言）。）
 
 ## 与 native-api 那份（`2026-11-02-evidence2-contract-v1.md`）的差别

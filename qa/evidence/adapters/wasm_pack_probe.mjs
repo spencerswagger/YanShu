@@ -186,11 +186,12 @@ if (mode === "user-code") {
       return fn;
     };
     let unpackFn;
-    if (typeof e.ys_unpack_v2 === "function") {
-      const f = sixAri(e.ys_unpack_v2, "ys_unpack_v2");
-      unpackFn = (out, cap, outLen) => f(pp, pack.length, skp, out, cap, outLen);
-    } else if (typeof e.ys_unpack_v1 === "function") {
+    // 现行 6 参名是 ys_unpack_v1（曾短暂叫 _v2，保留这一层兼容）
+    if (typeof e.ys_unpack_v1 === "function") {
       const f = sixAri(e.ys_unpack_v1, "ys_unpack_v1");
+      unpackFn = (out, cap, outLen) => f(pp, pack.length, skp, out, cap, outLen);
+    } else if (typeof e.ys_unpack_v2 === "function") {
+      const f = sixAri(e.ys_unpack_v2, "ys_unpack_v2");
       unpackFn = (out, cap, outLen) => f(pp, pack.length, skp, out, cap, outLen);
     } else {
       const f = sevenAri(e.ys_unpack, "ys_unpack");
