@@ -75,15 +75,16 @@ grep -q listening /srv/yanshu/logs/server.log
 ! grep -q 'address already in use' /srv/yanshu/logs/server.log
 ```
 
-## 5. 日志（两套写法，二选一）
+## 5. 日志（三种写法，推荐第一种）
 
 | 方式 | 写法 | 说明 |
 |---|---|---|
-| **stdout 重定向**（本轮证据用的） | 见上面第 3 步的 `>>/srv/yanshu/logs/server.log 2>&1` | 扫日志就扫这个文件；跨天不会换名 |
-| 服务端内建滚动（`2bc7dae` 起支持） | 加 `YANSHU_LOG_DIR=/srv/yanshu/logs`（可选 `YANSHU_LOG_RETENTION_DAYS=7`） | 按 UTC 日期写 `yanshu-server-YYYY-MM-DD.log`，0640，跨天换文件；同时仍写 stdout |
+| **`YANSHU_LOG_FILE`（推荐，Core 交付清单里的正式方式）** | `YANSHU_LOG_FILE=/srv/yanshu/logs/server-file.log` | 单文件、不换名，取证最省事；仍是 stdout 之外的第二份 |
+| stdout 重定向 | `… >>/srv/yanshu/logs/server.log 2>&1` | 部署方接管，跨天不换名 |
+| `YANSHU_LOG_DIR` 按日滚动 | `YANSHU_LOG_DIR=/srv/yanshu/logs` | 写 `yanshu-server-YYYY-MM-DD.log`、0640、保留 7 天；**跨天换文件名**，取证要按投递时间戳选文件，别硬编码 |
 
-> 扫日志时的坑：**跨天滚动会换文件名**，取证要按投递时间戳选当日文件（
-> `yanshu-server-$(date -u +%F).log`），不要硬编码某一天的文件名——否则会扫到空文件还判 PASS。
+> `YANSHU_LOG_DIR` 与 `YANSHU_LOG_FILE` 同时给时，Core 的实现以 `YANSHU_LOG_FILE` 优先。
+> 扫日志一律扫**实际落盘的那个文件**；扫不到就 BLOCKED，不许当 PASS。
 
 ## 6. 投递一条命令（Core 的 `deliver`）
 
@@ -96,12 +97,18 @@ cd <YANSHU_SRC>/server && go build -o /srv/yanshu/bin/deliver ./cmd/deliver
   --yspk /path/to/<包>.yspk \
   --no-ack \
   --blob-dir /srv/yanshu/blobs \
+  --dsn "${PG_TEST_DSN}&search_path=gate_ev1" \
   --json-out /srv/yanshu/deliver.json
 ```
 
+> `--dsn` 只用于打印 database/schema（Core 的实现用 pgx 解析）。
+> 若 DSN 里带 `search_path` 连不上，就把 `--dsn` 去掉，schema 用服务端启动时那份。
+> stdout 固定字段：`code` / `package_id` / `chunks` / `blob_dir` / `db_url`（脱敏）/ `log_path`，
+> 另含 `schema` 与 `storage_path`；退出码 0 即成功。
+
 - **`--no-ack` 必须带**：ack 会按策略删密文，删完再"扫不到明文"就是空语料，不构成证据。
-- `--blob-dir` 只是打印/校验用；`--dsn` 可选（用 pgx 解析，**不要带 `search_path` 参数**，
-  否则连不上、schema 打印为空）。
+- `--blob-dir` 只是打印/校验用；`--dsn` 可选（仅用于打印 database/schema）。
+  若它带 `search_path` 参数而 pgx 拒绝，去掉 `--dsn` 即可——扫描脚本自己用 `--pg-schema` 指定 schema。
 - 输出里 `storage_path` / `schema` / `transfer_id` 就是要交给扫描脚本的标识；
   `--json-out` 写成文件后可直接喂给 `scan_plaintext.py --deliver-json`。
 - 服务端必须是 `YANSHU_VERIFIER=stub-allow`，否则 `deliver` 退出码 4（fail-closed）。

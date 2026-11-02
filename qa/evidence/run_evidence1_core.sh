@@ -76,8 +76,16 @@ echo "tool:   $BIN/ys-tool"
 
 echo "== 2/6 建 schema 并起服务 =="
 psql -X -q "$base_dsn" -c "create schema if not exists $schema" >/dev/null
-log_mode="${YS_EV1_LOG_MODE:-stdout}"    # stdout = 重定向；dir = 服务端内建按日滚动
-if [ "$log_mode" = "dir" ]; then
+log_mode="${YS_EV1_LOG_MODE:-stdout}"    # stdout = 重定向；dir = 按日滚动目录；file = YANSHU_LOG_FILE
+if [ "$log_mode" = "file" ]; then
+    LOG_FILE="$work/logs/server-file.log"
+    YANSHU_LOG_FILE="$LOG_FILE" \
+    YANSHU_DATABASE_URL="$dsn" YANSHU_BLOB_DIR="$work/blobs" YANSHU_ADDR="127.0.0.1:$port" \
+    YANSHU_VERIFIER=stub-allow \
+    YANSHU_TOKEN_SECRET="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
+    "$work/bin/yanshu-server" >"$work/stdout.log" 2>&1 &
+    LOG_SCAN="$LOG_FILE"
+elif [ "$log_mode" = "dir" ]; then
     YANSHU_LOG_DIR="$work/logs" \
     YANSHU_DATABASE_URL="$dsn" YANSHU_BLOB_DIR="$work/blobs" YANSHU_ADDR="127.0.0.1:$port" \
     YANSHU_VERIFIER=stub-allow \
@@ -223,12 +231,12 @@ if [ -z "$(find "$SCAN_BLOB" -type f 2>/dev/null | head -1)" ]; then
 fi
 echo "  存储里已有 $(find "$SCAN_BLOB" -type f | wc -l) 个文件，可以扫了"
 
-if [ "$log_mode" = "dir" ]; then
+if [ "$log_mode" = "dir" ] || [ "$log_mode" = "file" ]; then
     if [ ! -s "$LOG_SCAN" ]; then
-        echo "[BLOCKED] 内建日志当日文件不存在或为空：$LOG_SCAN（跨天会换名，按投递时间选文件）" >&2
+        echo "[BLOCKED] 日志文件不存在或为空：$LOG_SCAN" >&2
         exit 2
     fi
-    echo "  内建日志：$LOG_SCAN（$(wc -c <"$LOG_SCAN") 字节）"
+    echo "  服务端日志（$log_mode）：$LOG_SCAN（$(wc -c <"$LOG_SCAN") 字节）"
 fi
 
 echo "== 5/6 三处检索 =="
@@ -278,10 +286,46 @@ if [ "${YS_EV1_CONTROLS:-1}" = "1" ]; then
     echo "  阳性对照全部成立"
 fi
 
+if [ "${YS_EV1_ACK_COMPARE:-1}" = "1" ] && [ -n "${DELIVER_BIN:-}" ]; then
+    echo "== 5c/6 终态残留对比（LEASED vs CONSUMED）=="
+    LEASED_FILES=$(find "$SCAN_BLOB" -type f 2>/dev/null | wc -l)
+    LEASED_BYTES=$(find "$SCAN_BLOB" -type f -exec cat {} + 2>/dev/null | wc -c)
+    echo "  LEASED（--no-ack）：$LEASED_FILES 个文件 / $LEASED_BYTES 字节（本次证据就是扫这个状态）"
+
+    # 再来一次投递，这次走完整 ack → 服务端按策略删密文
+    dargs2=$(printf '%s' "$dargs" | sed 's/--no-ack//')
+    set +e
+    # shellcheck disable=SC2086
+    ACK_OUT=$("$DELIVER_BIN" $dargs2 2>&1)
+    rc_ack=$?
+    set -e
+    printf '%s\n' "$ACK_OUT" | grep -E "^(state|acked|storage_path|package_id)=" | sed 's/^/  /' || true
+    TID2=$(printf '%s' "$ACK_OUT" | sed -n 's/^package_id=//p' | head -1)
+    sleep 1.5   # 给删密文留一点时间
+    CONSUMED_FILES=$(find "$SCAN_BLOB" -type f 2>/dev/null | wc -l)
+    CONSUMED_BYTES=$(find "$SCAN_BLOB" -type f -exec cat {} + 2>/dev/null | wc -c)
+    if [ -n "$TID2" ]; then
+        TDIR="$SCAN_BLOB/$(printf '%s' "$TID2" | cut -c1-2)/$TID2"
+        if [ -d "$TDIR" ]; then DIR_STATE="目录仍在：$TDIR"; else DIR_STATE="该 transfer 目录已删除"; fi
+    else
+        DIR_STATE="（没解析到第二次的 package_id）"
+    fi
+    if [ -n "$TID2" ] && [ -d "$TDIR" ]; then
+        TDIR_FILES=$(find "$TDIR" -type f 2>/dev/null | wc -l)
+    else
+        TDIR_FILES=0
+    fi
+    echo "  CONSUMED（走 ack）：该笔目录内 $TDIR_FILES 个文件；$DIR_STATE（deliver 退出码 $rc_ack）"
+    echo "  全局剩余：$LEASED_FILES → $CONSUMED_FILES 个文件（差额来自第一笔 LEASED，本轮故意没 ack，用于对照）"
+    if [ "$TDIR_FILES" -ne 0 ]; then
+        echo "  [warn] ack 之后该笔密文仍在（$TDIR_FILES 个文件）：删密文可能没生效，需人工确认"
+    fi
+fi
+
 echo "== 6/6 收工 =="
 kill "$SRV" 2>/dev/null || true
 wait "$SRV" 2>/dev/null || true
 trap - EXIT INT TERM
-echo "服务端日志：$work/logs/server.log"
+echo "服务端日志：${LOG_SCAN:-$work/logs/server.log}"
 echo "扫描明细：$work/scan.json"
 exit "$SCAN_RC"
