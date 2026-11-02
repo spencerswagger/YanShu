@@ -232,3 +232,24 @@ token 矩阵（INVALID/STALE 两码 + 四码覆盖）、服务端内嵌内核同
 > 这条正好证明常驻核对有用：散文里写了、表里没有，一样会被判出来。
 
 （另：`SIG_INPUT_MAX` / `SIG_INPUT_HARD_LIMIT` / `SIG_INPUT_LEN` 是上限常量与公式名，已列入 `NON_CODE` 不算错误码。）
+
+### 反例八：管道吞退出码导致的假绿（`cmd | tail` 之后 `$?` 是 `tail` 的）
+
+**现象**：`check_all.sh` 里每步都写成 `python3 check_xxx.py | tail -6`，随后 `rc=$?`——拿到的是 `tail` 的状态（恒 0）。
+于是**单步真 FAIL 被当成 PASS**，三态聚合只对"跳过"有效，整个门禁失效。
+
+**最小复现**（sh/bash 都一样）：
+```sh
+sh -c 'set -e; python3 -c "import sys; sys.exit(7)" | tail -1; echo $?'   # → 0（应为 7）
+```
+
+**三种修法**（我们选了第 1 种，理由：`/bin/sh` 也能用，不依赖 bash 扩展，日志还能留档）：
+1. **落文件再 tail**：`cmd >"$log" 2>&1; rc=$?; tail -n N "$log"` ✅ 采用（`check_all.sh` 的 `run_step`）
+2. **bash + `set -o pipefail`**：shebang 必须改 `#!/usr/bin/env bash`，且调用处用 `bash` 而非 `sh`
+3. **`${PIPESTATUS[0]}`**：同样要求 bash
+
+**附带教训**：自测行写成 `python3 check_all.sh --selftest | tail -1` 时，既调错了解释器（应 `sh`/`bash`），
+又把 `SyntaxError` 一并吞掉——自测等于没跑。现在自测走 `run_step`（**不接管道**，stderr 一起落文件），并对三条自测各自取 rc。
+
+**回归钉子**：`sh qa/evidence/check_all.sh --selftest` 有一条「`run_step` 取命令自身 rc=7（不被 tail 吞）」，
+外加「单步 FAIL → 聚合 exit 1」；真实跑批三态（`0` 全过 / `1` 某步 FAIL / `2` 某步未跑）已在交付说明里贴出。

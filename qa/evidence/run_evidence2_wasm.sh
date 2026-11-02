@@ -62,19 +62,26 @@ node "$driver" --wasm "$WASM" pack "$work/plain-donor.bin" "$work/c.yspk" \
 
 decrypt="node \"$driver\" --wasm \"$WASM\" unpack {in} {out} --recipient-sk \"$work/bob.sk\""
 
-echo "== 4a/4 单块包 =="
+echo "== 4a/4 单块包（只覆盖翻字节类，删块/换序/搬块/截断必然 SKIP → 单块跑批本身 INCONCLUSIVE 属预期）=="
+set +e
 python3 "$here/tamper_probe.py" --envelope "$work/a.yspk" \
     --backend cmd --entry-kind production --expect-plaintext "$work/plain-small.bin" \
     --extra-cases --error-regex 'ERR [A-Z_]+' \
     --decrypt-cmd "$decrypt" --json-out "$work/result-single.json"
 rc_single=$?
+set -e
 
-echo "== 4b/4 多块包（3 等长块，含 donor）=="
+echo "== 4b/4 多块包（3 等长块，含 donor；这一份才是判定依据）=="
+set +e
 python3 "$here/tamper_probe.py" --envelope "$work/b.yspk" --donor "$work/c.yspk" \
     --backend cmd --entry-kind production --expect-plaintext "$work/plain-multi.bin" \
     --extra-cases --error-regex 'ERR [A-Z_]+' \
     --decrypt-cmd "$decrypt" --json-out "$work/result-multi.json"
 rc_multi=$?
+set -e
 
-echo "== 结果：单块 exit=$rc_single / 多块 exit=$rc_multi（0 = 全部篡改都被明确拒绝）=="
-[ "$rc_single" -eq 0 ] && [ "$rc_multi" -eq 0 ]
+echo "== 结果：单块 exit=$rc_single（2=INCONCLUSIVE 属预期）/ 多块 exit=$rc_multi（0 = 五类篡改全被明确拒绝）=="
+# 判定：多块是权威；单块若 FAIL(1) 也必须算 FAIL（结构性缺陷），单块 INCONCLUSIVE(2) 不降级
+if [ "$rc_multi" -eq 0 ] && [ "$rc_single" -ne 1 ]; then exit 0; fi
+if [ "$rc_single" -eq 1 ] || [ "$rc_multi" -eq 1 ]; then exit 1; fi
+exit 2

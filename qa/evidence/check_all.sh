@@ -27,6 +27,17 @@ EXIT_PENDING=4
 ci_mode=0
 if [ -n "${CI:-}" ]; then ci_mode=1; fi
 
+# 每步的输出先落文件、再 tail 展示；rc 取**命令本身**的。
+# 反面教材：`python3 x.py | tail -5` 之后 $? 是 tail 的（恒 0）——真 FAIL 会被吞成 PASS。
+# 这里选"落文件再 tail"（不依赖 bash 的 pipefail/PIPESTATUS，/bin/sh 也能用）。
+run_step() {          # run_step <行数> <日志文件> <命令...>
+    rs_lines=$1; rs_log=$2; shift 2
+    "$@" >"$rs_log" 2>&1
+    rs_rc=$?
+    tail -n "$rs_lines" "$rs_log" 2>/dev/null || true
+    return $rs_rc
+}
+
 not_run=""           # 空格分隔的"未跑步骤名"，汇总时点名
 
 mark_not_run() {     # mark_not_run <名称>
@@ -101,6 +112,27 @@ if [ "${1:-}" = "--selftest" ]; then
         *) echo "  FAIL 未跑应 exit 2，实得 $verdict"; rc_all=1 ;;
     esac
 
+    # 管道不吞退出码：run_step 必须拿到命令自身的 rc（而不是 tail 的 0）
+    set +e
+    run_step 1 /tmp/ca-5.log sh -c 'echo pipeline-demo; exit 7' >/dev/null 2>&1
+    rc_demo=$?
+    set -e
+    if [ "$rc_demo" -ne 7 ]; then
+        echo "  FAIL run_step 应取到 rc=7，实得 $rc_demo（管道吞退出码的回归又回来了）"; rc_all=1
+    else
+        echo "  PASS run_step 取命令自身 rc=7（不被 tail 吞）"
+    fi
+
+    # 某步真 FAIL → 聚合 1（只有这一条 FAIL，其余全过）
+    not_run=""; verdict=-1
+    aggregate "selftest-scan:0" "selftest-tamper:0" "selftest-all:0" \
+              "code:1" "parity:0" "kernel:0" "upgrade:0" "prelude:0" "ev2:0" >/tmp/ca-6.txt 2>&1
+    if [ "$verdict" -ne 1 ]; then
+        echo "  FAIL 单步 FAIL 应聚合为 exit 1，实得 $verdict"; rc_all=1
+    else
+        echo "  PASS 单步 FAIL → exit 1：$(grep '结论：FAIL' /tmp/ca-6.txt)"
+    fi
+
     echo "自测：$([ "$rc_all" -eq 0 ] && echo PASS || echo FAIL)"
     exit "$rc_all"
 fi
@@ -129,29 +161,37 @@ VER=$(node "$here/adapters/wasm_pack_probe.mjs" --wasm "$WASM" version)
 echo "wasm: $BYTES 字节  sha256=$SHA"
 echo "ys_version: $VER"
 
-echo "== 1/5 自测（脚本自身）=="
-python3 "$here/scan_plaintext.py" --selftest | tail -1
-python3 "$here/tamper_probe.py" --selftest | tail -1
-python3 "$here/check_all.sh" --selftest | tail -1
+echo "== 1/5 自测（脚本自身；解释器与调用方式都要对，否则自测等于没跑）=="
+set +e
+run_step 1 "$work/selftest-scan.log" python3 "$here/scan_plaintext.py" --selftest
+rc_st1=$?
+run_step 1 "$work/selftest-tamper.log" python3 "$here/tamper_probe.py" --selftest
+rc_st2=$?
+# 本脚本是 POSIX sh：自测必须用 sh 调（用 python3 调只会 SyntaxError，且被管道吞掉看不见）
+run_step 6 "$work/selftest-all.log" sh "$here/check_all.sh" --selftest
+rc_st3=$?
+set -e
+echo "  自测退出码：scan=$rc_st1 tamper=$rc_st2 check_all=$rc_st3"
 
 echo "== 2/5 用户码一致性（4 入口 + 归一化）=="
 set +e
-python3 "$here/check_code_consistency.py" --wasm "$WASM" --ys-tool "$TOOL" \
-    ${base_url:+--base-url "$base_url"} --json-out "$work/code-consistency.json"
+run_step 8 "$work/code-consistency.log" python3 "$here/check_code_consistency.py" \
+    --wasm "$WASM" --ys-tool "$TOOL" ${base_url:+--base-url "$base_url"} \
+    --json-out "$work/code-consistency.json"
 rc_code=$?
 set -e
 
 echo "== 3/5 契约字面 vs 实现（双向一致性）=="
 set +e
-python3 "$here/check_contract_impl_parity.py" ${YS_PARITY_ARGS:-} | tail -6
+run_step 6 "$work/parity.log" python3 "$here/check_contract_impl_parity.py" ${YS_PARITY_ARGS:-}
 rc_parity=$?
 set -e
 
 if [ -n "${YS_OLD_BINARY:-}" ] && [ -n "${YS_NEW_BINARY:-}" ] && [ -n "${YS_BASE_DSN:-}" ]; then
     echo "== 4b/5 升级路径（老库 → 新库）=="
     set +e
-    python3 "$here/check_upgrade_path.py" --old-binary "$YS_OLD_BINARY" --new-binary "$YS_NEW_BINARY" \
-        --dsn "$YS_BASE_DSN" | tail -4
+    run_step 6 "$work/upgrade.log" python3 "$here/check_upgrade_path.py" \
+        --old-binary "$YS_OLD_BINARY" --new-binary "$YS_NEW_BINARY" --dsn "$YS_BASE_DSN"
     rc_upgrade=$?
     set -e
 else
@@ -162,9 +202,9 @@ fi
 if [ -n "${YS_SERVER_DIR:-}" ]; then
     echo "== 4a/5 服务端内嵌内核 sha256 =="
     set +e
-    python3 "$here/check_server_kernel.py" --server-dir "$YS_SERVER_DIR" \
+    run_step 8 "$work/kernel.log" python3 "$here/check_server_kernel.py" --server-dir "$YS_SERVER_DIR" \
         ${YS_REPO_DIR:+--repo "$YS_REPO_DIR"} ${YS_GIT_REF:+--git-ref "$YS_GIT_REF"} \
-        ${YS_VECTORS_DIR:+--vectors-dir "$YS_VECTORS_DIR"} | tail -6
+        ${YS_VECTORS_DIR:+--vectors-dir "$YS_VECTORS_DIR"}
     rc_kernel=$?
     set -e
 else
@@ -174,18 +214,20 @@ fi
 
 echo "== 5/5 prelude-only 元数据语义 =="
 set +e
-python3 "$here/check_prelude_meta.py" --wasm "$WASM" --json-out "$work/prelude-meta.json" | tail -4
+run_step 4 "$work/prelude.log" python3 "$here/check_prelude_meta.py" --wasm "$WASM" \
+    --json-out "$work/prelude-meta.json"
 rc_prelude=$?
 set -e
 
 echo "== 5b/5 证据二（生产路径，单块 + 多块 + 变体）=="
 set +e
-"$here/run_evidence2_wasm.sh" "$crate" "$work/ev2" | tail -6
+run_step 6 "$work/ev2.log" "$here/run_evidence2_wasm.sh" "$crate" "$work/ev2"
 rc_ev2=$?
 set -e
 
 echo "== 汇总 =="
 echo "  head 产物：$BYTES 字节  sha256=$SHA  ys_version=$VER"
+echo "  脚本自测：scan=$rc_st1 tamper=$rc_st2 check_all=$rc_st3"
 echo "  用户码一致性：exit=$rc_code"
 echo "  契约/实现一致性：exit=$rc_parity"
 echo "  服务端内嵌内核 sha：exit=$rc_kernel${YS_SERVER_DIR:+（$YS_SERVER_DIR）}"
@@ -195,6 +237,7 @@ echo "  证据二：exit=$rc_ev2"
 if [ "$ci_mode" -eq 1 ]; then echo "  （CI 模式：任何未跑/未判定都非 0）"; fi
 
 verdict=$EXIT_PASS
-aggregate "code:$rc_code" "parity:$rc_parity" "kernel:$rc_kernel" \
+aggregate "selftest-scan:$rc_st1" "selftest-tamper:$rc_st2" "selftest-all:$rc_st3" \
+          "code:$rc_code" "parity:$rc_parity" "kernel:$rc_kernel" \
           "upgrade:$rc_upgrade" "prelude:$rc_prelude" "ev2:$rc_ev2"
 exit "$verdict"
