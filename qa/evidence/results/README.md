@@ -50,6 +50,7 @@ results/
 | 证据文件 | 服务端 | 二进制 sha256 | 认证 | 可复跑命令 | 结论 |
 |---|---|---|---|---|---|
 | `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | `08d40e7` | `275fc463…6af55` | **真 sm2** | `YS_EV1_VERIFIER=sm2 YS_EV1_LOG_MODE=dir YS_DELIVER_BIN=core-deliver qa/evidence/run_evidence1_core.sh …` | **闭合**：存储/DB/日志三处零命中，对照 1/1/1/0 |
+| `contract-v1/2026-11-02-delivery-gate-status.md` | —（交付判定） | `d655e16` | `4c331e1f…f1ef9d` | stub-allow | native-api | 见 `qa/evidence/DELIVERY-GATE.md`（三条各一条命令） | **交付门槛 2/3 达标**：内核 PASS、迁移 PASS、向量 PASS；**唯一不达标 = 轮换错误名仍为 `AUTH_TOKEN_REVOKED`（待改 `AUTH_TOKEN_STALE`）** |
 | `contract-v1/2026-11-02-core-script-token-rotation-d655e16.md` | —（服务端证据） | `d655e16` | `4c331e1f…f1ef9d` | stub-allow | native-api | `sh server/scripts/token-rotation-check.sh --bin … --deliver … --yspk … --dsn … --blob …` | **Core 官方脚本 6/6 PASS**；原始 body：`AUTH_TOKEN_REVOKED`（轮换）/ `AUTH_TOKEN_INVALID`（值不对），`message` 明写"由密钥轮换导致" |
 | `contract-v1/2026-11-02-names-and-upgrade-d655e16.md` | —（服务端证据） | `d655e16` | `4c331e1f…f1ef9d` | stub-allow | native-api | `check_token_lifecycle.py …`；`check_upgrade_path.py [--column-expect absent]` | **错误名终值**：只换 secret → 401 `AUTH_TOKEN_REVOKED`（旧版误报签名类已修）；**删列迁移**升级路径 9/9 PASS |
 | `contract-v1/2026-11-02-upgrade-path-check.md` | —（服务端证据） | 老 `08d40e7` → 新 `5605907` | — | — | native-api | `python3 qa/evidence/check_upgrade_path.py --old-binary <旧> --new-binary <新> --dsn "<DSN>"` | **升级路径常规项**：老库缺列 → 迁移补列 → 历史行完好（`pre-kid`）→ 服务起 + healthz 200 → 连跑两次幂等（10/10） |
@@ -76,6 +77,10 @@ results/
 **已闭合**：证据二（篡改必报错，生产路径）、用户码/校验位四形态一致性 + 反向用例、
 prelude-only 元数据语义、证据一（存储/DB/日志零命中 + 三组阳性对照，含真 `sm2` 那份）、
 token 轮换（kid → `AUTH_TOKEN_REVOKED`）。
+
+**交付门槛**（详见 `qa/evidence/DELIVERY-GATE.md`）：内核 sha / 迁移升级 / 向量套件三条，
+当前 `d655e16` 三条全过；唯一未达标是 token 轮换的错误名字面（仍 `AUTH_TOKEN_REVOKED`，
+裁定要 `AUTH_TOKEN_STALE`，等 Core 改名）。
 
 **仍 BLOCKED / 待跟进**：
 

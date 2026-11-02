@@ -36,6 +36,12 @@ from pathlib import Path
 
 B64 = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")
 
+# 裁定的错误名字面（2026-11-02）：版本轮换 = STALE、值不匹配 = INVALID、签名本身 = SIGNATURE。
+# 实现若返回别的名字（例如临时的 AUTH_TOKEN_REVOKED），按 FAIL 记并注明"待改名"，不迁就实现。
+WANT_STALE = "AUTH_TOKEN_STALE"
+WANT_INVALID = "AUTH_TOKEN_INVALID"
+PENDING = {"AUTH_TOKEN_REVOKED": "实现仍是临时名 AUTH_TOKEN_REVOKED，待 Core 改为 AUTH_TOKEN_STALE"}
+
 
 def next_kid(kid: str) -> str:
     """单调递增：k1→k2、1→2、k001→k002；其它形式直接追加 +1 后缀。"""
@@ -193,9 +199,17 @@ def main(argv=None) -> int:
         st, body = call(port, "PUT", f"/v1/transfers/{tid}/prelude", prelude,
                         {"Content-Type": "application/octet-stream", "X-YS-Upload-Token": token})
         revoked = st in (401, 403)
+        got = err_code(body)
         print(f"[轮换后] secret=B{kid_note(args.kid, next_kid(args.kid) if args.kid else None)} "
               f"下用旧 token 打 PUT /prelude → HTTP {st}"
-              + (f"（{err_code(body)}）" if st >= 300 else ""))
+              + (f"（{got}）" if st >= 300 else ""))
+        if st >= 300:
+            want = WANT_STALE if got != WANT_INVALID else WANT_INVALID
+            if got == want:
+                print(f"  名字判定：PASS（符合裁定 {want}）")
+            else:
+                print(f"  名字判定：FAIL（期望 {WANT_STALE}，实得 {got or '无错误名'}）"
+                      + (f" —— {PENDING[got]}" if got in PENDING else ""))
         # 第三态：轮换后重新签发的新 token 应当可用
         st3, body3 = call(port, "POST", "/v1/challenges",
                           json.dumps({"purpose": "TRANSFER_CREATE"}).encode(),
