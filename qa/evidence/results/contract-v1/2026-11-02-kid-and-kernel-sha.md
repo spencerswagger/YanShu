@@ -44,6 +44,20 @@ python3 qa/evidence/check_token_lifecycle.py --binary <yanshu-server> \
 我之前那次 **201** 用的是 `9065eb8`（及其产物 `980fc44`）——那版 `Validate` 只比库里 `SM3(token)`，
 不重算，所以换 secret 不影响。两边不矛盾，是版本差异。
 
+### 1a-2. 与裁定预期的对照（重要）
+
+裁定预期：**只改 `TOKEN_SECRET`、版本不变 → 旧 token 必须仍有效（201）是正确行为**；
+递增版本才吊销。按这个预期核对实现：
+
+| 组 | 裁定预期 | 实测（`ab4279a` / `9bce5bb`） | 判定 |
+|---|---|---|---|
+| 只改 `TOKEN_SECRET`（版本不变） | **201 仍有效** | **401 `AUTH_SIGNATURE_INVALID`** / `AUTH_TOKEN_STALE` | **与预期不符**：当前实现把 secret 也当吊销开关 |
+| 递增版本（EPOCH） | 401 `AUTH_TOKEN_STALE` | **EPOCH 不存在**；`kid`（`9bce5bb`）递增 → 401 `AUTH_TOKEN_STALE` | EPOCH 组 **BLOCKED**；kid 语义相近但不同名 |
+| 版本递增后重签发（`POST /transfers/{id}/token`，PURPOSE 0x08） | 新 token 可用、旧 token 不复活 | **接口表里没有该端点** | **BLOCKED** |
+
+**结论**：按裁定，"只改 secret 仍 201"才是预期；当前实现（`ab4279a` 起）会 401，
+属**实现与裁定偏离**，不是我的测量问题。EPOCH 两组在现有二进制上不可执行。
+
 ### 1b. 「只改 secret 是否吊销」的历史（回答两边为什么各说各话）
 
 | 服务端 commit | 只改 `TOKEN_SECRET` 后同 token | 原因 |

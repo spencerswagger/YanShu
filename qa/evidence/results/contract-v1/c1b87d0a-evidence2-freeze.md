@@ -53,3 +53,14 @@
 
 认证为 `stub-allow` 之外的 sm2 那份单列在 `2026-11-02-evidence1-core-run5-sm2.md`；
 本文件不涉及存储/DB/日志扫描。
+
+## 最终重跑（宿主重启后，`check_all.sh` 一条命令）
+
+```
+wasm 127,313 B / sha256=c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f
+自测 11/11、14/14 → 用户码一致性 26/26 → prelude 元数据 6/6 → 证据二 6/6 + 11/11
+服务端内嵌内核（/worktrees/YS-CORE）sha 白名单 + 向量套件：exit=0
+```
+
+宿主实例（`yanshu-server-980fc44`）端到端冒烟：`/healthz` 200；3 块包（3072B→3738B），
+绕开 `deliver` 自行 GET prelude + 3 块，**逐字节一致**（transfer `e3d6cc8e…`）。
