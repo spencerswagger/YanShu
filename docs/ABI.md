@@ -163,7 +163,21 @@ int32_t ys_unpack_meta_v1(const uint8_t *pack, size_t pack_len, const uint8_t *r
 一行未改就能编译跑通）。**不要**在 `_v2` 上继续多传一个参数——wasm 会静默错位（内存踩踏），
 不是编译错。
 
-## 7. 布局判别（没有独立探针函数）
+## 7. 用户码归一化（`ys_normalize_code`）与校验字符
+
+**一句可核对的定义**：输入按 UTF-8 解码后逐字符处理——先**丢弃** `-`、空格、TAB、CR、LF
+这五种分隔符；其余字符转 ASCII 大写后按 Crockford 映射 `O→0`、`I→1`、`L→1`；映射结果必须
+落在 `0123456789ABCDEFGHJKMNPQRSTVWXYZ`（`U`、标点、非 ASCII **一律拒绝**），且总数必须
+**恰好 4 个**（不足不补齐、超过不截断、不做任何猜测性纠错）；成功返回 4 个大写符号，
+失败返回 `-21 CRYPTO_CODE_INVALID`；该函数**幂等**：`f(f(x)) == f(x)`。
+
+- 向量：`testdata/normalize-vectors.json`（**20 组**：13 组接受 + 7 组拒绝），
+  与 `crypto/sm/src/code.rs::NORMALIZE_VECTORS` 同源（`cargo run --bin gen-code-vectors` 生成）。
+- 合法字符会被**丢弃**的只有那五种分隔符；其它一切非法字符都是**拒绝**，绝不"猜一个最像的码"。
+- `ys_check_symbol`（第 5 位校验字符）**只是本地防误输的辅助**：不参与码的构成、
+  不参与归一化、不作为服务端判定依据。
+
+## 8. 布局判别（没有独立探针函数）
 
 发布构建只认 `YSPK/1.0`，所以判别就是"能不能解"：
 
@@ -174,7 +188,7 @@ const rc = ys_unpack_meta_v1(packPtr, packLen, privPtr, outPtr, cap, lenPtr);
 // 其它负值            → 契约包但内容有问题，用 ys_error_name_v1(rc) 取名字
 ```
 
-## 8. 排期（未实现）
+## 9. 排期（未实现）
 
 - `MAX_BLOCK_SIZE`（产品级单文件上限）与流式分块接口：只在 `crypto/README.md` 的
   "已知限制"里登记，代码里没有任何半成品接口。

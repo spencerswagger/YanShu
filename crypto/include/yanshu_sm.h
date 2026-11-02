@@ -107,6 +107,12 @@ int32_t ys_sm2_sign_der(const uint8_t *priv_key /* 32 */, const uint8_t *seed, s
 int32_t ys_user_code(const uint8_t *public_key /* 64 */, uint8_t *out /* 4 ASCII */);
 /* 第 5 位校验字符：仅 UI 防误输入，**不是用户码的一部分** */
 int32_t ys_check_symbol(const uint8_t *public_key /* 64 */, uint8_t *out /* 1 ASCII */);
+/*
+ * 归一化（一句定义）：丢弃 `-`、空格、TAB、CR、LF；其余转 ASCII 大写后 O→0、I→1、L→1；
+ * 结果必须全在 0123456789ABCDEFGHJKMNPQRSTVWXYZ 且**恰好 4 位**（不足不补齐、超过不截断、
+ * 不做任何猜测性纠错）；失败返回 -21 CRYPTO_CODE_INVALID；**幂等** f(f(x))==f(x)。
+ * 向量：testdata/normalize-vectors.json（20 组：13 接受 + 7 拒绝）。
+ */
 int32_t ys_normalize_code(const uint8_t *input, size_t input_len, uint8_t *out /* 4 ASCII */);
 
 /* ---------------------------------------------------------------- 加密包 YSPK/1.0 */

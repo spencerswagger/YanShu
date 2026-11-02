@@ -24,6 +24,10 @@ name = "ys-tool"
 path = "src/bin/ys_tool.rs"
 
 [[bin]]
+name = "gen-code-vectors"
+path = "src/bin/gen_code_vectors.rs"
+
+[[bin]]
 name = "gen-host-crosscheck"
 path = "src/bin/gen_host_crosscheck.rs"
 

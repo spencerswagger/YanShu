@@ -70,7 +70,41 @@ pub fn check_symbol_for_code(code: &str) -> Result<char> {
     Ok(CHECK_ALPHABET[(value % 37) as usize] as char)
 }
 
+/// 归一化测试向量（`Some` = 期望输出，`None` = 期望拒绝）。
+///
+/// **服务端与前端照这份对齐**；`testdata/normalize-vectors.json` 由
+/// `cargo run --bin gen-code-vectors` 从本表生成，两边同源。
+pub const NORMALIZE_VECTORS: &[(&str, Option<&str>)] = &[
+    ("K7QF", Some("K7QF")),    // 已规范
+    ("k7qf", Some("K7QF")),    // 全小写
+    ("K7qF", Some("K7QF")),    // 混大小写
+    ("K7-QF", Some("K7QF")),   // 连字符分组
+    ("k7 qf", Some("K7QF")),   // 空格分隔
+    (" K7QF\t", Some("K7QF")), // 前后空白（空格/TAB/CR/LF）
+    ("-K7-QF-", Some("K7QF")), // 首尾连字符
+    ("o0il", Some("0011")),    // O→0、I/L→1
+    ("O0IL", Some("0011")),    // 同上（大写）
+    ("0oO0", Some("0000")),    // 全部映射成 0
+    ("awqw", Some("AWQW")),    // 契约样例码
+    ("0000", Some("0000")),    // 下界
+    ("ZZZZ", Some("ZZZZ")),    // 上界
+    ("", None),                // 空：拒绝
+    ("K7Q", None),             // 不足 4 位：拒绝（不补齐）
+    ("K7QF0", None),           // 超过 4 位：拒绝（不截断）
+    ("K7QFU", None),           // U 非法
+    ("U9Z1", None),            // U 非法
+    ("K7QF!", None),           // 标点非法
+    ("K7QF码", None),          // 非 ASCII 非法
+];
+
 /// 输入规范化。
+///
+/// **一句可核对的定义**：
+/// 输入按 UTF-8 解码后逐字符处理——先**丢弃** `-`、空格、TAB、CR、LF 这五种分隔符；
+/// 其余字符转 ASCII 大写后按 Crockford 映射 `O→0`、`I→1`、`L→1`；映射结果必须落在
+/// `0123456789ABCDEFGHJKMNPQRSTVWXYZ`（`U`、标点、非 ASCII 一律拒绝），且总数必须
+/// **恰好 4 个**（不足不补齐、超过不截断）；成功返回 4 个大写符号，失败返回
+/// `CRYPTO_CODE_INVALID`。本函数**幂等**：`f(f(x)) == f(x)`。
 pub fn normalize(input: &str) -> Result<String> {
     let mut out = String::with_capacity(CODE_LEN);
     for ch in input.chars() {
