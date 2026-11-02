@@ -30,6 +30,7 @@ const regError = ref('')
 const regNotice = ref('')
 const serverConfig = ref(null)
 const kernelBuild = ref(null)
+const kernelSelfTest = ref(null)
 const manualAttempts = ref(0)
 const inboxRef = ref(null)
 
@@ -46,20 +47,17 @@ const realCrypto = computed(() => Boolean(kernel.value?.isRealCrypto))
 const kernelLayout = computed(() => kernel.value?.layout || '')
 /** 标签必须如实区分：契约布局 / 旧布局 / 桩 / 未就绪，别让人把旧布局当契约验收。 */
 const kernelLabel = computed(() => {
-  if (kernelMode.value === 'wasm') {
-    return kernelLayout.value === 'contract'
-      ? '真实加密 · 契约布局内核（YSPK/1.0）'
-      : '真实加密 · 非契约布局内核（待对齐）'
-  }
+  if (kernelMode.value === 'wasm') return '真实加密 · 契约布局内核（YSPK/1.0）'
+  if (kernelMode.value === 'wasm-noncontract') return '真实加密 · 非契约布局内核（待对齐）'
   if (kernelMode.value === 'stub-fake') return '开发桩（未加密）'
   if (kernelMode.value === 'unavailable') return '内核未就绪'
   return '加载中'
 })
 const layoutFailed = computed(() => kernel.value?.layoutFailedSignals || [])
 const layoutWarning = computed(() => {
-  if (kernelMode.value !== 'wasm' || kernelLayout.value === 'contract') return ''
-  const why = layoutFailed.value.length ? `缺：${layoutFailed.value.join('、')}` : '特征检测未通过'
-  return `当前内核不是契约布局（${why}）：加密是真的，但结果不能作为 YSPK/1.0 契约的验收。`
+  if (kernelMode.value !== 'wasm-noncontract') return ''
+  const why = layoutFailed.value.length ? `未通过：${layoutFailed.value.join('、')}` : '自检未通过'
+  return `当前内核未通过契约布局判据（${why}）：加密是真的，但结果不能作为 YSPK/1.0 契约的验收。`
 })
 
 function syncSession() {
@@ -80,6 +78,12 @@ onMounted(async () => {
       bootError.value = kernel.value.reason || '端侧加密内核（WASM）未就绪'
       booting.value = false
       return
+    }
+
+    if (kernel.value.mode === 'wasm') {
+      // 标签的事实依据：真跑一遍打包→解包 + 版本闸门（契约 §2.3）
+      kernelSelfTest.value = kernel.value.selfTest()
+      kernelMode.value = kernelSelfTest.value.ok ? 'wasm' : 'wasm-noncontract'
     }
 
     pendingBackend.value = defaultBackend('pending')
@@ -268,6 +272,9 @@ async function doReceive({ transferId, onProgress }) {
   <LogPanel />
 
   <footer class="hint" style="margin-top: 18px">
+    <p v-if="kernelSelfTest">
+      内核自检：{{ kernelSelfTest.ok ? '四项判据全过（版本 / 包头 / 打包解包往返 / 版本闸门）' : '未通过 → ' + Object.entries(kernelSelfTest.checks).filter(([,v]) => !v).map(([k]) => k).join('、') }}
+    </p>
     <p v-if="kernelBuild">
       端侧内核：commit {{ kernelBuild.commit.slice(0, 7) }} · {{ kernelBuild.ysVersion }} · HEADER
       {{ kernelBuild.headerLen }} · {{ kernelBuild.exports }} 导出 / {{ kernelBuild.imports }} import ·

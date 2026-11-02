@@ -573,6 +573,54 @@ export class WasmKernel {
     }
   }
 
+  /**
+   * 自检：用真产物做一次"打包 → 解包"并验证版本闸门（契约 §2.3 的合规判据）。
+   * 这是标签的**事实依据**：常量对而实现错，只有真跑一遍才看得出来。
+   */
+  selfTest() {
+    const checks = {
+      version: this.version === ABI_VERSION,
+      header: this.headerLen === 112,
+      roundtrip: false,
+      versionGate: false,
+    }
+    try {
+      const alice = this.generateIdentity()
+      const bob = this.generateIdentity()
+      const data = new Uint8Array(64).map((_, i) => (i * 3) & 0xff)
+      const pack = this.pack({
+        data,
+        name: 'selftest.bin',
+        mime: 'application/octet-stream',
+        recipientPublic: bob.publicKey,
+        senderPrivate: alice.privateKey,
+        blockSize: 1024,
+      })
+      const plain = this.unpack({ pack, recipientPrivate: bob.privateKey })
+      checks.roundtrip = plain.length === data.length && plain.every((b, i) => b === data[i])
+
+      // 把 VERSION_MAJOR 改成 0x02：必须拒绝（CRYPTO_VERSION_UNSUPPORTED），不得按 v1 猜着读
+      const tampered = new Uint8Array(pack)
+      tampered[4] = 0x02
+      try {
+        this.unpack({ pack: tampered, recipientPrivate: bob.privateKey })
+        checks.versionGate = false
+      } catch (err) {
+        checks.versionGate = err?.code === 'CRYPTO_VERSION_UNSUPPORTED'
+      }
+    } catch {
+      // 打包/解包直接失败：roundtrip 与 versionGate 都保持 false
+    }
+    const ok = Object.values(checks).every(Boolean)
+    this.selfTestResult = { ok, checks }
+    this.contractSignals = { ...this.contractSignals, ...checks }
+    this.layoutFailedSignals = Object.entries(this.contractSignals)
+      .filter(([, pass]) => !pass)
+      .map(([name]) => name)
+    this.layout = this.layoutFailedSignals.length === 0 ? 'contract' : 'legacy-40'
+    return this.selfTestResult
+  }
+
   // ---------------------------------------------------------------- 传输切分（纯算术）
 
   splitPack(args) {

@@ -126,7 +126,24 @@ const unpackRc =
     : e.ys_unpack(write(pack), pack.length, privB, 0, plainOut, plainCap, plainLen)
 const plain = unpackRc === 0 ? read(plainOut, new DataView(e.memory.buffer).getUint32(plainLen, true)) : null
 
+// —— 5) 版本闸门：改 VERSION_MAJOR 必须拒绝（契约 §2.3 第四条）
+let versionGate = false
+try {
+  const bad = new Uint8Array(pack)
+  bad[4] = 0x02
+  const out2 = e.ys_alloc(plainCap)
+  const len2 = e.ys_alloc(4)
+  const rc =
+    typeof e.ys_unpack_v1 === 'function'
+      ? e.ys_unpack_v1(write(bad), bad.length, privB, out2, plainCap, len2)
+      : e.ys_unpack(write(bad), bad.length, privB, 0, out2, plainCap, len2)
+  versionGate = rc === -5
+} catch {
+  versionGate = false
+}
+
 const signals = {
+  versionGate,
   header112: facts.headerLen === 112,
   version1: facts.ysVersion === '0x10000',
   senderPub65: Boolean(metaJson && /^04[0-9a-f]{128}$/.test(metaJson.sender_pub || '')),
@@ -148,6 +165,7 @@ console.log(
       'DER 签名 70..72': signals.signatureDer,
       '解包不再需要发送方公钥（6 参 _v1）': signals.unpackNoSenderKey,
       '清单带 4 位 sender_code': signals.senderCode4,
+      '版本闸门（改版本字节必拒）': signals.versionGate,
       'ys_pack_v1 存在': signals.packV1,
       '0 import': signals.zeroImport,
     },

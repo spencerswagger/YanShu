@@ -46,6 +46,7 @@ export class UnavailableKernel {
   pack() { return this.#fail() }
   unpackMeta() { return this.#fail() }
   unpack() { return this.#fail() }
+  selfTest() { return { ok: false, checks: {} } }
   splitPack() { return this.#fail() }
   joinPack() { return this.#fail() }
   openPackSession() { return this.#fail() }
@@ -255,6 +256,11 @@ export class DevStubKernel {
     }
     if (offset !== pack.length) throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '桩包尾部有多余字节')
     return out
+  }
+
+  /** 开发桩不做任何契约判据（它连真加密都不是），恒返回不通过。 */
+  selfTest() {
+    return { ok: false, checks: { stub: true } }
   }
 
   splitPack(args) {

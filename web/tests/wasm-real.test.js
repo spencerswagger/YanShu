@@ -60,13 +60,10 @@ test('真内核：0 import、导出齐全、版本/包头/块大小可读', { sk
   assert.deepEqual(kernel.layoutFailedSignals, [], `失败特征：${kernel.layoutFailedSignals.join(',')}`)
   // 新原型：6 参自证解包 + DER 签名 + v1 打包
   assert.equal(kernel.capabilities.selfUnpack, true, 'ys_unpack_v1 应为 6 参自证原型')
-  assert.deepEqual(kernel.contractSignals, {
-    header112: true,
-    version1: true,
-    signDer: true,
-    packV1: true,
-    selfUnpack: true,
-  })
+  assert.equal(typeof kernel.exports.ys_layout_of, 'undefined', '当前 ABI 已删掉布局判别导出（单一格式）')
+  const selfTest = kernel.selfTest()
+  assert.equal(selfTest.ok, true, `自检失败：${JSON.stringify(selfTest.checks)}`)
+  assert.deepEqual(selfTest.checks, { version: true, header: true, roundtrip: true, versionGate: true })
   assert.equal(kernel.capabilities.signDer, true)
   assert.equal(kernel.capabilities.packV1, true)
   assert.ok([40, 112].includes(kernel.headerLen), `包头 ${kernel.headerLen}`)
