@@ -139,7 +139,19 @@ TAG_LEN = 16
 EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_BLOCKED = 2
+EXIT_INCONCLUSIVE = 2   # 未判定：没有一条真跑（全 SKIP）、或某个主要篡改类别整体被 SKIP
+                        # 与 BLOCKED 同值（都是"没结论"），但不许被聚合方当成 PASS
 EXIT_PENDING = 4        # 参数/依赖不可用（例如已删除的 rune-v1 布局）：不产结论
+
+# 主要篡改类别 → 用例名前缀；每一类都必须至少真跑一条，否则整体判 INCONCLUSIVE。
+# 说明：reject-legacy-format（版本闸门）不是"篡改"类别，不参与覆盖面判定。
+TAMPER_CATEGORIES = {
+    "翻字节": ("flip-",),
+    "删块": ("drop-",),
+    "换序": ("swap-",),
+    "搬块": ("splice-",),
+    "截断": ("truncate-",),
+}
 
 HERE = Path(__file__).resolve().parent
 FIXTURE_HEX = HERE / "fixtures" / "yspk-contract-v2.hex"
@@ -552,13 +564,14 @@ REQUIRED_CASES: list[tuple[str, Callable[[Envelope, Envelope | None], Tamper]]] 
     ("drop-middle-chunk", t_drop_middle_chunk),
     ("swap-chunks", t_swap_chunks),
     ("splice-donor-chunk", t_splice_donor_chunk),
+    # 截断属五大主要类别之一，必须在默认集里，否则"截断类没跑"会（正确地）判 INCONCLUSIVE
+    ("truncate-tail", t_truncate_tail),
 ]
 
 EXTRA_CASES: list[tuple[str, Callable[[Envelope, Envelope | None], Tamper]]] = [
     ("reject-legacy-format", t_legacy_format),
     ("flip-chunk-tag", t_flip_chunk_tag),
     ("drop-chunk-slice", t_drop_chunk_slice),
-    ("truncate-tail", t_truncate_tail),
 ]
 
 ALL_CASES = {name: fn for name, fn in REQUIRED_CASES + EXTRA_CASES}
@@ -835,14 +848,65 @@ def execute(backend: Backend, pristine: bytes, donor: bytes | None,
     if not keep and not out_dir:
         shutil.rmtree(run_dir, ignore_errors=True)
 
-    code = EXIT_PASS
-    if any(r.status == "FAIL" for r in results):
-        code = EXIT_FAIL
-    return results, code
+    return results, judge(results)
+
+
+def category_coverage(results: Sequence["CaseResult"]) -> dict[str, str]:
+    """每个主要类别 -> 'PASS' / 'FAIL' / 'SKIP'（该类别是否至少有一条真跑）。
+
+    只看篡改用例本身（baseline 不计）。没有任何用例属于某类别时，记 'MISSING'。
+    """
+    cov: dict[str, str] = {}
+    for cat, prefixes in TAMPER_CATEGORIES.items():
+        hits = [r for r in results
+                if r.case != "baseline" and r.case.startswith(prefixes)]
+        if not hits:
+            cov[cat] = "MISSING"
+        elif any(r.status == "PASS" for r in hits):
+            cov[cat] = "PASS"
+        elif any(r.status == "FAIL" for r in hits):
+            cov[cat] = "FAIL"
+        else:
+            cov[cat] = "SKIP"
+    return cov
+
+
+def judge(results: Sequence["CaseResult"]) -> int:
+    """三态判定：FAIL > INCONCLUSIVE > PASS。全 SKIP 或类别缺口一律不给 PASS。"""
+    tamper = [r for r in results if r.case != "baseline"]
+    n_pass = sum(1 for r in tamper if r.status == "PASS")
+    n_fail = sum(1 for r in tamper if r.status == "FAIL")
+    if n_fail:
+        return EXIT_FAIL
+    if n_pass == 0:
+        return EXIT_INCONCLUSIVE
+    cov = category_coverage(results)
+    if any(v in ("SKIP", "MISSING") for v in cov.values()):
+        return EXIT_INCONCLUSIVE
+    return EXIT_PASS
+
+
+def inconclusive_reasons(results: Sequence["CaseResult"]) -> list[str]:
+    """给出"为什么没结论"：全 SKIP、或哪几个类别整体被跳过。"""
+    tamper = [r for r in results if r.case != "baseline"]
+    reasons: list[str] = []
+    if not tamper:
+        reasons.append("没有任何篡改用例（空用例集）")
+        return reasons
+    if not any(r.status == "PASS" for r in tamper):
+        reasons.append(f"没有任何一条篡改真跑成功（PASS 0 / 共 {len(tamper)} 条）")
+    cov = category_coverage(results)
+    skipped = [c for c, v in cov.items() if v == "SKIP"]
+    missing = [c for c, v in cov.items() if v == "MISSING"]
+    if skipped:
+        reasons.append("以下主要类别整体被跳过：" + "、".join(skipped))
+    if missing:
+        reasons.append("以下主要类别没有对应用例：" + "、".join(missing))
+    return reasons
 
 
 def print_report(backend: Backend, env_summary: str, results: Sequence[CaseResult],
-                 started: float) -> None:
+                 started: float, code: int | None = None) -> None:
     print()
     print("=" * 104)
     entry = "生产/半生产导出路径" if backend.production else "⚠ 当前走的是测试入口而非生产导出路径"
@@ -875,8 +939,18 @@ def print_report(backend: Backend, env_summary: str, results: Sequence[CaseResul
     else:
         print("[diag] 未从输出里取到错误名（只凭退出码判定，建议实现方输出稳定错误名）")
 
-    if n_fail:
+    if code is None:
+        code = judge(results)
+    cov = category_coverage(results)
+    cov_line = "，".join(f"{c}={v}" for c, v in cov.items())
+    print(f"[diag] 类别覆盖：{cov_line}")
+
+    if code == EXIT_FAIL:
         print("结论：FAIL —— 至少一类篡改被解密成功或返回了明文")
+    elif code == EXIT_INCONCLUSIVE:
+        why = "；".join(inconclusive_reasons(results)) or "证据不足以判定"
+        print(f"结论：INCONCLUSIVE —— {why}")
+        print("      （未判定 ≠ 通过：全 SKIP 或主要类别缺口都不算 PASS）")
     else:
         print("结论：PASS —— 所有篡改均被明确拒绝（任一道防线拦下即可）")
 
@@ -1019,7 +1093,7 @@ def _selftest() -> int:
         assert res[0].case == "baseline" and res[0].status == "PASS", res[0]
         bad = [r for r in res[1:] if r.status != "PASS"]
         assert not bad, f"以下篡改未被判为报错：{[(r.case, r.detail) for r in bad]}"
-        assert code == EXIT_PASS, code
+        assert code == EXIT_PASS, f"默认集五类齐全时应 PASS，实得 {code}"
         codes = {r.case: r.detail for r in res[1:]}
         return "baseline PASS；" + "，".join(f"{k}={v}" for k, v in codes.items())
 
@@ -1030,8 +1104,9 @@ def _selftest() -> int:
         res, code = execute(SelftestBackend(raw), raw, donor, names, None, False, log=lambda *_: None)
         bad = [r for r in res if r.case != "baseline" and r.status != "PASS"]
         assert not bad, f"附加用例有漏网：{[(r.case, r.detail) for r in bad]}"
-        assert code == EXIT_PASS
-        return "3 条附加用例全部被拒绝"
+        # 只跑附加集：五类里多数类别没跑 → 按三态必须是 INCONCLUSIVE（不是 PASS）
+        assert code == EXIT_INCONCLUSIVE, f"只跑附加集应 INCONCLUSIVE，实得 {code}"
+        return "2 条附加用例全部被拒绝；仅附加集 → INCONCLUSIVE（类别缺口）"
 
     def c_judge_not_vacuous():
         raw = load_fixture()
@@ -1048,8 +1123,27 @@ def _selftest() -> int:
                             ["drop-middle-chunk", "swap-chunks"], None, False, log=lambda *_: None)
         skips = [r for r in res if r.status == "SKIP"]
         assert len(skips) == 2, f"单块包应 SKIP 而非崩：{[(r.case, r.status) for r in res]}"
-        assert code == EXIT_PASS
-        return "单块包自动 SKIP，不误判不崩"
+        # 两条都 SKIP = 一条没跑 → INCONCLUSIVE（不许 PASS）
+        assert code == EXIT_INCONCLUSIVE, f"全 SKIP 应 INCONCLUSIVE，实得 {code}"
+        return "单块包自动 SKIP 不崩；全 SKIP → INCONCLUSIVE（不给 PASS）"
+
+    def c_all_skip_no_pass_sentence():
+        """P2-2 自测：全部用例 SKIP 时必须 INCONCLUSIVE，且不打印"所有篡改均被明确拒绝"。"""
+        import contextlib
+        import io
+        raw = build_synthetic_envelope([32])          # 单块包 → 四类都 SKIP
+        names = ["drop-middle-chunk", "swap-chunks", "splice-donor-chunk", "truncate-tail"]
+        res, code = execute(SelftestBackend(raw), raw, None, names, None, False,
+                            log=lambda *_: None)
+        assert all(r.status in ("SKIP", "PASS") for r in res), res
+        assert code == EXIT_INCONCLUSIVE, f"全 SKIP 应 INCONCLUSIVE，实得 {code}"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print_report(SelftestBackend(raw), parse_envelope(raw).summary(), res, 0.0, code)
+        out = buf.getvalue()
+        assert "所有篡改均被明确拒绝" not in out, "非 PASS 却打印了 PASS 结论句"
+        assert "INCONCLUSIVE" in out and "没有任何一条篡改真跑成功" in out, out[-300:]
+        return "全 SKIP → INCONCLUSIVE，且不打印 PASS 结论句"
 
     def c_parse_rejects():
         raw = load_fixture()
@@ -1153,6 +1247,7 @@ def _selftest() -> int:
     case("附加用例（tag/截断/半块）", c_extra_cases)
     case("判定逻辑非空转", c_judge_not_vacuous)
     case("单块包降级为 SKIP", c_single_chunk_skip)
+    case("全 SKIP 不给 PASS", c_all_skip_no_pass_sentence)
     case("截断包解析被拒", c_parse_rejects)
     case("错误摘要可读", c_error_summary)
     case("cmd 后端接线", c_cmd_backend)
@@ -1302,7 +1397,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[BLOCKED] 执行中断：{exc}", file=sys.stderr)
         return EXIT_BLOCKED
 
-    print_report(backend, env.summary(), results, started)
+    print_report(backend, env.summary(), results, started, code)
     if args.json_out:
         payload = {
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -1314,6 +1409,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                          "bytes": len(pristine)},
             "expected_plaintext": args.expect_plaintext or None,
             "exit_code": code,
+            "verdict": {0: "PASS", 1: "FAIL", 2: "INCONCLUSIVE"}.get(code, "OTHER"),
+            "category_coverage": category_coverage(results),
+            "inconclusive_reasons": inconclusive_reasons(results) if code == EXIT_INCONCLUSIVE else [],
             "cases": [{"case": r.case, "status": r.status, "expect": r.expect,
                        "detail": r.detail, "desc": r.desc, "artifact": r.artifact}
                       for r in results],
