@@ -27,22 +27,43 @@
  *   **同一 seed 二次使用会返回 -3（RNG）**，不再静默复用。
  * - `ys_alloc(n)` ↔ `ys_free(p, n)` 成对、长度一致。
  *
- * ## 公钥口径（一张表，别再猜）
+ * ## 入参/出参字节数表（一行一个函数，别再猜）
  *
- * | 导出 | 公钥入参/出参 | 长度 | 含 0x04 |
- * |---|---|---:|---|
- * | `ys_sm2_keygen` | out `pub_out` | 64 | 否（`X‖Y`） |
- * | `ys_sm2_pubkey` | out `pub_out` | 64 | 否 |
- * | `ys_sm2_encrypt` | in `public_key` | 64 | 否 |
- * | `ys_sm2_decrypt` | 密文 `input`（C1C3C2） | 96+len | 否 |
- * | `ys_sm2_verify` | in `public_key` | 64 | 否 |
- * | `ys_user_code` / `ys_check_symbol` | in `public_key` | 64 | 否 |
- * | `ys_pack` / `ys_pack_v1` | in `recipient_public` | 64 | 否 |
- * | `ys_sm2_sign_der` | 私钥 32 | — | — |
+ * 记法：`in/out` 均为字节；`&n` 是 `size_t *out_len`。整表只有两处出现 65 字节，
+ * 都在**输出/包内**：`SENDER_PUB` 段与 `ys_unpack_meta*` 的 JSON `sender_pub`。
  *
- * **ABI 层一律 64 字节 `X‖Y`，不带 `0x04`**；契约要求的 `0x04‖X‖Y`（包内
- * `SENDER_PUB`、`WRAPPED_KEY` 的 C1）由内核内部补/去。传出包里的 `sender_pub`
- * （`ys_unpack_meta` 的 JSON）是 **65 字节含 `0x04`**，因为那就是包内原文。
+ * | 函数 | 入参关键长度 | 出参 |
+ * |---|---|---|
+ * | `ys_alloc` / `ys_free` | `len` | 内存指针 |
+ * | `ys_version` / `ys_header_len` / `ys_default_block_size` | — | u32 |
+ * | `ys_error_name` / `ys_error_name_v1` | `code` | ASCII 名（`CRYPTO_*`） |
+ * | `ys_sm3` | in 任意 | 32 |
+ * | `ys_hmac_sm3` | key 任意、msg 任意 | 32 |
+ * | `ys_hkdf_sm3` | ikm/salt/info 任意 | `out_len` |
+ * | `ys_sm4_encrypt_block` / `_decrypt_block` | key 16、in 16 | 16 |
+ * | `ys_sm4_gcm_encrypt` | key 16、nonce 12、aad 任意、in 任意 | ct = in 长度、tag 16 |
+ * | `ys_sm4_gcm_decrypt` | key 16、nonce 12、in 任意、tag 16 | pt = in 长度 |
+ * | `ys_sm2_keygen` | seed ≥16 | priv 32、**pub 64**（`X‖Y`） |
+ * | `ys_sm2_pubkey` | priv 32 | **pub 64** |
+ * | `ys_sm2_encrypt` | **pub 64**、seed、明文 1..255 | C1C3C2 = 96+明文（无 `0x04`） |
+ * | `ys_sm2_decrypt` | priv 32、密文 96+len | 明文 |
+ * | `ys_sm2_sign` | **priv 32**、seed、msg 任意 | raw `R‖S` 64 |
+ * | `ys_sm2_verify` | **pub 64**、msg、sig 64 | 1/0/负 |
+ * | `ys_sm2_sign_der` | priv 32、seed、msg | DER 70..72 |
+ * | `ys_sm2_verify_der` | **pub 64**、msg、DER | 1/0/负 |
+ * | `ys_user_code` / `ys_check_symbol` | **pub 64** | 4 / 1 ASCII |
+ * | `ys_normalize_code` | 任意文本 | 4 ASCII |
+ * | `ys_pack` | **recipient_pub 64**、sender_priv 32、name/mime/block_size/seed/data | 包（上界见 `out_len`） |
+ * | `ys_pack_v1` | 同上 + `ext` + `created_at_ms` + `chunk_size` | 包 |
+ * | `ys_unpack` | pack、priv 32、`sender_pub_or_0`（**64 或 0**） | 明文 |
+ * | `ys_unpack_meta` | 同上 | JSON |
+ * | `ys_unpack_v1` / `ys_unpack_meta_v1` | pack、priv 32 | 明文 / JSON |
+ * | `ys_unpack_meta_prelude` | pack（≥ prelude）、priv 32 | JSON（`scope=prelude`） |
+ *
+ * **ABI 入参公钥一律 64 字节 `X‖Y`，不带 `0x04`**（`ys_pack_v1` 与 `ys_pack` 相同）；
+ * 需要 `0x04` 时内核内部补。**65 字节含 `0x04` 只出现在**：
+ * 包内 `SENDER_PUB` 段、`WRAPPED_KEY` 的 C1、`ys_unpack_meta*` JSON 的 `sender_pub`
+ * （这三处就是 wire/包内原文）。
  *
  * ## 错误名（唯一格式）
  * `ys_error_name()` 与 `ys_error_name_v1()` 都返回 **`CRYPTO_*`**（与 Rust 侧

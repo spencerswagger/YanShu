@@ -225,6 +225,26 @@ const isContract = ys_version() === 0x00010000 && ys_header_len() === 112
    后对 65 字节做 SM3，与契约 §15.1 的 `AWQW` 一致。前端传 64 字节不用改。
 3. `ys_pack`：产出 `YSPK/1.0`（清单 `ext=""`、`created_at_ms=0`）；要完整清单字段用 `ys_pack_v1`。
 
+## 5.4 入参/出参字节数表与两个 pack 函数的关系
+
+| 函数 | 入参关键长度 | 出参 |
+|---|---|---|
+| `ys_sm2_keygen` | seed ≥16 | priv 32、**pub 64**（`X‖Y`） |
+| `ys_sm2_pubkey` | priv 32 | **pub 64** |
+| `ys_sm2_encrypt` / `ys_sm2_verify` / `ys_user_code` / `ys_check_symbol` / `ys_pack` / `ys_pack_v1` | **pub 64** | — |
+| `ys_sm2_sign` / `ys_sm2_verify` | sig raw `R‖S` 64 | — |
+| `ys_sm2_sign_der` / `ys_sm2_verify_der` | sig DER 70..72 | — |
+| `ys_unpack` / `ys_unpack_meta` | `sender_pub_or_0` = **64 或 0** | 明文 / JSON |
+| `ys_unpack_v1` / `ys_unpack_meta_v1` / `ys_unpack_meta_prelude` | — | 明文 / JSON |
+
+**65 字节含 `0x04` 只出现在输出/包内**：包内 `SENDER_PUB`、`WRAPPED_KEY` 的 C1、
+`ys_unpack_meta*` JSON 的 `sender_pub`。其余**所有入参公钥都是 64 字节 `X‖Y`**。
+
+**`ys_pack` 与 `ys_pack_v1` 的关系**：除 `ext`、`created_at_ms`、`chunk_size` 三个参数外
+**完全等价**——`ys_pack(...)` ≡ `ys_pack_v1(..., ext="", created_at_ms=0,
+chunk_size=block_size)`，两者产出同一套 `YSPK/1.0` 字节、公钥入参同为 64 字节。
+清单里要写真实 `ext`/`created_at` 就用 `_v1`。
+
 ## 5.5 命名与构建约定
 
 - **`_v1` 后缀只表示契约大版本 `YSPK/1.0`**（`ys_pack_v1` / `ys_unpack_v1` /
