@@ -58,6 +58,14 @@ def start(binary: str, dsn: str, work: Path, secret: str):
     return proc, port
 
 
+def err_code(body: bytes) -> str:
+    try:
+        obj = json.loads(body)
+        return (obj.get("error") or {}).get("code", "") or ""
+    except Exception:
+        return ""
+
+
 def call(port: int, method: str, path: str, body: bytes | None = None, headers=None):
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=body, method=method)
     for k, v in (headers or {}).items():
@@ -121,15 +129,51 @@ def main(argv=None) -> int:
     finally:
         proc.terminate(); proc.wait()
 
+    # 先自证：同一密钥下旧 token 可用（基线，避免"本来就不对"被当成吊销成功）
+    proc, port = start(args.binary, args.dsn, work, "a" * 32)
+    try:
+        st, body = call(port, "PUT", f"/v1/transfers/{tid}/prelude", prelude,
+                        {"Content-Type": "application/octet-stream", "X-YS-Upload-Token": token})
+        print(f"[基线] 同一 secret 下用 token 打 PUT /prelude → HTTP {st}"
+              + (f"（{err_code(body)}）" if st >= 300 else ""))
+        if st >= 300:
+            print("[BLOCKED] 基线都不通过，本轮不能用来判断轮换是否生效", file=sys.stderr)
+            return 2
+    finally:
+        proc.terminate(); proc.wait()
+
     proc, port = start(args.binary, args.dsn, work, "b" * 32)
     try:
         st, body = call(port, "PUT", f"/v1/transfers/{tid}/prelude", prelude,
                         {"Content-Type": "application/octet-stream", "X-YS-Upload-Token": token})
         revoked = st in (401, 403)
-        print(f"secret=B 下用旧 token 打 PUT /prelude → HTTP {st}")
-        print("结论：" + ("旧 token 已随 secret 轮换失效（可应急吊销）"
-                          if revoked else
-                          "旧 token 仍然可用 —— 轮换 secret **不能**吊销已签发 token"))
+        print(f"[轮换后] secret=B 下用旧 token 打 PUT /prelude → HTTP {st}"
+              + (f"（{err_code(body)}）" if st >= 300 else ""))
+        # 第三态：轮换后重新签发的新 token 应当可用
+        st3, body3 = call(port, "POST", "/v1/challenges",
+                          json.dumps({"purpose": "TRANSFER_CREATE"}).encode(),
+                          {"Content-Type": "application/json"})
+        ch3 = json.loads(body3)["challenge_id"]
+        create3 = dict(create)
+        st3, body3 = call(port, "POST", "/v1/transfers", json.dumps(create3).encode(),
+                          {"Content-Type": "application/json", "X-YS-Code": code,
+                           "X-YS-Challenge-Id": ch3, "X-YS-Signature": SIG})
+        new_ok = False
+        if st3 in (200, 201):
+            rep3 = json.loads(body3)
+            st4, body4 = call(port, "PUT", f"/v1/transfers/{rep3['transfer_id']}/prelude", prelude,
+                              {"Content-Type": "application/octet-stream",
+                               "X-YS-Upload-Token": rep3["upload_token"]})
+            new_ok = st4 in (200, 201, 204)
+            print(f"[重签发] 轮换后新建传输 + 新 token 打 PUT /prelude → HTTP {st4}"
+                  + (f"（{err_code(body4)}）" if st4 >= 300 else ""))
+        else:
+            print(f"[重签发] 建传输失败 {st3}（{err_code(body3)}）")
+        print("结论：" + ("轮换即吊销（旧 401 + 新 token 正常）"
+                          if (revoked and new_ok) else
+                          ("旧 token 仍可用 —— 轮换**不能**吊销（缺口未修）"
+                           if not revoked else
+                           "旧 token 已失效，但新签发也有问题，需人工看")))
         if args.json_out:
             Path(args.json_out).write_text(json.dumps(
                 {"transfer_id": tid, "status": st, "revoked": revoked},
