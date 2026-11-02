@@ -13,7 +13,7 @@
 | 日期 | 2026-11-02 |
 | 前端 | `web/`（Vue 3 + Vite，dev server，`/v1` 反代到 Core） |
 | 中转 | Core `yanshu-server`（`9065eb8`，`127.0.0.1:8080`，`search_path=yanshu_web`，`YANSHU_BLOB_DIR` 独立目录，`YANSHU_LOG_FILE` 落盘） |
-| 内核 | 契约布局 wasm（HEADER 112），`npm run wasm:rebuild` 构建自 `feat/endcrypto-wasm` `e9f8254`（`ys_version()=0x00010000`、30 导出、0 import、`ys_unpack_v1` 6 参自证；构建溯源 `sha256=a657b33948b7…` 写在 `public/ys_kernel.build.json`，页面与测试都会显示/校验） |
+| 内核 | 契约布局 wasm（HEADER 112），`npm run wasm:rebuild` 构建自 `feat/endcrypto-wasm` `a33c2de`（`ys_version()=0x00010000`、30 函数 + `memory`、0 import、`ys_unpack_v1` 6 参自证；构建溯源 `sha256=0f953352bf06…` 写在 `public/ys_kernel.build.json`，页面与测试都会显示/校验） |
 | 界面标签 | `真实加密 · 契约布局内核（YSPK/1.0）` |
 | 样本 | 与证据 A **同一份**：2 506 889 字节，sha256 `4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f` |
 | 客户端 | 两个独立 Chrome profile |

@@ -29,6 +29,12 @@ export const CRYPTO_ERRORS = {
   CRYPTO_RNG: '随机数不可用',
   CRYPTO_INTERNAL: '端侧内核内部错误',
   CRYPTO_STUB_FAKE: '当前是开发桩：数据未加密',
+  CRYPTO_CURVE_INVALID: '曲线点或密钥形态非法',
+  CRYPTO_CIPHERTEXT_INVALID: 'SM2 密文非法（封装校验失败）',
+  CRYPTO_CODE_INVALID: '码格式非法（4 位 Crockford，易混字符已纠正）',
+  CRYPTO_CODE_EXHAUSTED: '撞码重试次数用尽',
+  CRYPTO_RNG_FAILED: '随机源不可用（seed 可能被复用）',
+  CRYPTO_UNKNOWN: '未知的端侧错误',
 }
 
 export class CryptoError extends Error {

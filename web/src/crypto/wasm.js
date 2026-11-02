@@ -190,7 +190,9 @@ export class WasmKernel {
   #check(rc, what) {
     if (rc === 0) return
     const name = this.#errorName(rc) || ERROR_CODES[rc] || `RC_${rc}`
-    const code = ERROR_NAME_TO_CODE[name] || 'CRYPTO_INTERNAL'
+    // 内核已把错误名统一成 CRYPTO_*（与契约 §13.1 一致）：直接当端侧错误码用；
+    // 旧轮次的 BAD_* 名字仍按映射表兜底。
+    const code = name.startsWith('CRYPTO_') ? name : ERROR_NAME_TO_CODE[name] || 'CRYPTO_INTERNAL'
     throw new CryptoError(code, `${what} → ${name}(${rc})`)
   }
 
@@ -386,7 +388,14 @@ export class WasmKernel {
         // 注意：头文件注释说 `_v1` 也收 64 字节公钥，实现里却是 `fixed::<65>`（要求 0x04 开头），
         // 所以这里按"先 65 后 64"试一次并记住哪种形式可用。
         const wire = WasmKernel.toWire(recipientPublic)
-        const forms = this.packPubkeyForm === 'wire' ? [wire] : this.packPubkeyForm === 'raw' ? [WasmKernel.toKernel(recipientPublic)] : [wire, WasmKernel.toKernel(recipientPublic)]
+        const raw = WasmKernel.toKernel(recipientPublic)
+        // 头文件当前口径是 64；过渡轮次曾要 65。先按 64，失败再试 65，并记住哪种可用。
+        const forms =
+          this.packPubkeyForm === 'wire'
+            ? [wire]
+            : this.packPubkeyForm === 'raw'
+              ? [raw]
+              : [raw, wire]
         let lastErr
         for (const form of forms) {
           const key = this.#write(form)
@@ -419,7 +428,8 @@ export class WasmKernel {
             return out
           } catch (err) {
             lastErr = err
-            if (!/BAD_ARGUMENT|KEY_UNWRAP|BAD_POINT/.test(String(err.code))) throw err
+            // 公钥形态不对时内核会报 CURVE_INVALID / BAD_ARGUMENT 一类；换另一种形态再试一次
+            if (!/CRYPTO_CURVE_INVALID|CRYPTO_BAD_ARGUMENT|CRYPTO_KEY_UNWRAP_FAILED/.test(String(err.code))) throw err
           } finally {
             key.release()
           }

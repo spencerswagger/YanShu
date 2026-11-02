@@ -97,8 +97,8 @@ npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局�
 | import | **0** |
 | `ys_version()` | `0x00010000` |
 | `ys_header_len()` | `112`（单一契约格式，无布局切换） |
-| `ys_unpack_v1` arity | `6`（只给私钥，来源由包内 `SENDER_PUB` 自证） |
-| `ys_sm2_sign_der` / `ys_pack_v1` | 必须存在 |
+| 6 参自证解包 | `ys_unpack_v1` / `ys_unpack_meta_v1`（arity 6；探测按 arity，改名 `_v2` 也能接） |
+| `ys_sm2_sign_der` / `ys_pack_v1` | 必须存在（`ys_pack_v1` 的公钥形态按"先 64 再 65"探测并记住） |
 
 **界面标签按"契约判据"判定，不是"不是桩就算合规"**。注意：当前 ABI **没有** `ys_layout_of()` / `ys_get_layout()`
 （单一格式后被删掉，`grep` 导出清单可证），所以判据取 `CRYPTO-PACK §2.3` 的四条，并在 `kernel.selfTest()` 里真跑一遍：
