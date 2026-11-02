@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -177,10 +178,10 @@ func run(argv []string) int {
 	rep := report{
 		OK:              true,
 		BaseURL:         cli.base,
-		SenderCode:      senderCode,
+		Code:            senderCode,
 		RecipientCode:   recipient,
-		TransferID:      created.TransferID,
-		ChunkCount:      env.ChunkCount,
+		PackageID:       created.TransferID,
+		Chunks:          env.ChunkCount,
 		ChunkSize:       env.ChunkSize,
 		PlaintextSize:   env.PlaintextSize,
 		PreludeLen:      env.PreludeLen,
@@ -190,44 +191,48 @@ func run(argv []string) int {
 		BlobDir:         opt.blobDir,
 		LogPath:         opt.logPath,
 	}
+	if opt.dsn != "" {
+		rep.DBURL = redactDSN(opt.dsn)
+	}
 	if opt.blobDir != "" {
-		rep.StoragePath = filepath.Join(opt.blobDir, created.TransferID[:2], created.TransferID)
-		if _, err := os.Stat(rep.StoragePath); err != nil {
-			fmt.Fprintf(os.Stderr, "警告：存储路径不存在（--blob-dir 与服务端不一致？）：%v\n", err)
-			rep.StoragePath += " (missing)"
+		p := filepath.Join(opt.blobDir, created.TransferID[:2], created.TransferID)
+		if acked {
+			// ack 达上限后密文已被服务端物理删除，路径不存在是预期结果。
+			rep.StoragePath = p + " (deleted)"
+		} else {
+			rep.StoragePath = p
+			if _, err := os.Stat(p); err != nil {
+				fmt.Fprintf(os.Stderr, "警告：存储路径不存在（--blob-dir 与服务端不一致？）：%v\n", err)
+				rep.StoragePath += " (missing)"
+			}
 		}
 	}
 	if opt.dsn != "" {
-		db, schema, err := probeDSN(opt.dsn)
+		_, schema, err := probeDSN(opt.dsn)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "警告：连不上 --dsn，无法确认 schema：%v\n", err)
 		} else {
-			rep.Database, rep.Schema = db, schema
+			rep.Schema = schema
 		}
 	}
 
+	// 字段名固定（README「一条命令投递」有表），Gate 的 --deliver-cmd 按名字解析 stdout。
 	fmt.Println("=== DELIVERY ===")
-	fmt.Printf("sender_code=%s\n", rep.SenderCode)
+	fmt.Printf("code=%s\n", rep.Code)
 	fmt.Printf("recipient_code=%s\n", rep.RecipientCode)
-	fmt.Printf("transfer_id=%s\n", rep.TransferID)
-	fmt.Printf("chunk_count=%d\n", rep.ChunkCount)
+	fmt.Printf("package_id=%s\n", rep.PackageID)
+	fmt.Printf("chunks=%d\n", rep.Chunks)
 	fmt.Printf("chunk_size=%d\n", rep.ChunkSize)
 	fmt.Printf("plaintext_size=%d\n", rep.PlaintextSize)
 	fmt.Printf("prelude_len=%d\n", rep.PreludeLen)
 	fmt.Printf("ciphertext_bytes=%d\n", rep.CiphertextBytes)
-	fmt.Printf("state=%s acked=%v\n", rep.State, rep.Acked)
-	if rep.BlobDir != "" {
-		fmt.Printf("blob_dir=%s\n", rep.BlobDir)
-		fmt.Printf("storage_path=%s\n", rep.StoragePath)
-	}
-	if rep.Schema != "" {
-		fmt.Printf("database=%s schema=%s\n", rep.Database, rep.Schema)
-	} else if opt.dsn != "" {
-		fmt.Printf("database=? schema=?（--dsn 探测失败，请手工确认）\n")
-	}
-	if rep.LogPath != "" {
-		fmt.Printf("log=%s\n", rep.LogPath)
-	}
+	fmt.Printf("state=%s\n", rep.State)
+	fmt.Printf("acked=%v\n", rep.Acked)
+	fmt.Printf("blob_dir=%s\n", rep.BlobDir)
+	fmt.Printf("storage_path=%s\n", rep.StoragePath)
+	fmt.Printf("db_url=%s\n", rep.DBURL)
+	fmt.Printf("schema=%s\n", rep.Schema)
+	fmt.Printf("log_path=%s\n", rep.LogPath)
 	fmt.Println("================")
 
 	if opt.jsonOut != "" {
@@ -240,24 +245,25 @@ func run(argv []string) int {
 	return exitOK
 }
 
+// report 的 JSON 字段与 stdout 字段一一对应（Gate 按字段名解析）。
 type report struct {
 	OK              bool   `json:"ok"`
 	BaseURL         string `json:"base_url"`
-	SenderCode      string `json:"sender_code"`
+	Code            string `json:"code"`
 	RecipientCode   string `json:"recipient_code"`
-	TransferID      string `json:"transfer_id"`
-	ChunkCount      uint32 `json:"chunk_count"`
+	PackageID       string `json:"package_id"`
+	Chunks          uint32 `json:"chunks"`
 	ChunkSize       uint32 `json:"chunk_size"`
 	PlaintextSize   uint64 `json:"plaintext_size"`
 	PreludeLen      int    `json:"prelude_len"`
 	CiphertextBytes int64  `json:"ciphertext_bytes"`
 	State           string `json:"state"`
 	Acked           bool   `json:"acked"`
-	BlobDir         string `json:"blob_dir,omitempty"`
-	StoragePath     string `json:"storage_path,omitempty"`
-	Database        string `json:"database,omitempty"`
-	Schema          string `json:"schema,omitempty"`
-	LogPath         string `json:"log,omitempty"`
+	BlobDir         string `json:"blob_dir"`
+	StoragePath     string `json:"storage_path"`
+	DBURL           string `json:"db_url"`
+	Schema          string `json:"schema"`
+	LogPath         string `json:"log_path"`
 }
 
 // errFailClosed 表示服务端还没接验签（503 SERVICE_UNAVAILABLE）。
@@ -619,6 +625,18 @@ func sm3Hex(data []byte, cmdline string) (string, error) {
 	}
 	sum := gm.SM3(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// redactDSN 去掉口令，只保留 user@host:port/db?params（可安全写进日志/PR）。
+func redactDSN(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" {
+		return "(unparsable-dsn)"
+	}
+	if u.User != nil {
+		u.User = url.User(u.User.Username())
+	}
+	return u.String()
 }
 
 func probeDSN(dsn string) (string, string, error) {

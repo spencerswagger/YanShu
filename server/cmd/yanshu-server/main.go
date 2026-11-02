@@ -7,10 +7,14 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -31,14 +35,45 @@ func main() {
 }
 
 func run() error {
-	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(log)
+	migrateOnly := flag.Bool("migrate-only", false, "只跑数据库迁移然后退出（spencer 起常驻实例前自检用）")
+	flag.Parse()
 
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	log.Info("starting yanshu-server", "addr", cfg.Addr, "verifier", cfg.Verifier, "contract", "v1")
+
+	out := io.Writer(os.Stdout)
+	if cfg.LogFile != "" {
+		if err := os.MkdirAll(filepath.Dir(cfg.LogFile), 0o750); err != nil {
+			return fmt.Errorf("create log dir: %w", err)
+		}
+		f, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+		if err != nil {
+			return fmt.Errorf("open log file: %w", err)
+		}
+		defer f.Close()
+		out = io.MultiWriter(os.Stdout, f)
+	}
+	log := slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(log)
+
+	if *migrateOnly {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		st, err := store.Open(ctx, cfg.DatabaseURL)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		if err := st.Migrate(ctx); err != nil {
+			return err
+		}
+		log.Info("migrations applied", "logFile", cfg.LogFile)
+		return nil
+	}
+
+	log.Info("starting yanshu-server", "addr", cfg.Addr, "verifier", cfg.Verifier, "contract", "v1", "logFile", cfg.LogFile)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
