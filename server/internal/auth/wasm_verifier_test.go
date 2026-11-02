@@ -1,7 +1,10 @@
 package auth
 
-// 路线 B 的落地验证：用 wazero 加载端侧内核，调 `ys_sm2_verify_der` 跑端侧向量。
-// 内核随仓库提供（server/kernel/yanshu_sm.wasm），所以这个测试不需要 Rust 工具链。
+// 路线 B 的落地验证 + 15 条端侧验签向量。
+//
+// 向量来源：`crypto/sm/vectors/sm2-verify-vectors.json`（分支 feat/endcrypto-wasm）：
+// 7 条正例（七种 PURPOSE）+ 8 条负例，每条给 `expect_verify`（密码学结果）与
+// `expect_server`（服务端策略结果）。
 
 import (
 	"encoding/hex"
@@ -9,6 +12,8 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"github.com/spencerswagger/YanShu/server/internal/gm"
 )
 
 const (
@@ -16,28 +21,43 @@ const (
 	vectorsPath = "../gm/testdata/sm2-verify-vectors.json"
 )
 
-type wasmVector struct {
+type verifyVector struct {
 	Name         string `json:"name"`
+	Purpose      string `json:"purpose"`
 	Pub65        string `json:"pub65"`
 	UserID       string `json:"user_id"`
-	Msg          string `json:"msg"`
+	SigInput     string `json:"sig_input"`
+	SigInputLen  int    `json:"sig_input_len"`
 	SigDER       string `json:"sig_der"`
 	ExpectVerify bool   `json:"expect_verify"`
+	ExpectServer string `json:"expect_server"`
 }
 
-func loadWASMVectors(t *testing.T) []wasmVector {
+func loadVerifyVectors(t *testing.T) []verifyVector {
 	t.Helper()
 	raw, err := os.ReadFile(vectorsPath)
 	if err != nil {
 		t.Fatalf("read vectors: %v", err)
 	}
 	var doc struct {
-		Vectors []wasmVector `json:"verify_vectors"`
+		Vectors []verifyVector `json:"verify_vectors"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
+	if len(doc.Vectors) != 15 {
+		t.Fatalf("expected 15 vectors, got %d", len(doc.Vectors))
+	}
 	return doc.Vectors
+}
+
+func mustHex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatalf("hex %q: %v", s, err)
+	}
+	return b
 }
 
 func newTestVerifier(t *testing.T) *WASMVerifier {
@@ -64,94 +84,108 @@ func TestWASMKernelVersion(t *testing.T) {
 	}
 }
 
-func TestWASMVerifyVectors(t *testing.T) {
+// 密码学层：Go 实现（按向量的 userID）与内核（固定默认 ID）都必须与 expect_verify 一致。
+func TestVerifyVectorsCrypto(t *testing.T) {
 	v := newTestVerifier(t)
-	vectors := loadWASMVectors(t)
-	if len(vectors) == 0 {
-		t.Fatal("no vectors")
-	}
-	for _, vec := range vectors {
-		pub, _ := hex.DecodeString(vec.Pub65)
-		msg, _ := hex.DecodeString(vec.Msg)
-		sig, _ := hex.DecodeString(vec.SigDER)
+	vectors := loadVerifyVectors(t)
 
-		err := v.Verify(pub, msg, sig)
-		if vec.UserID != "1234567812345678" {
-			// 内核固定默认 userID（没有 ID 入参）；这条向量的签名本来就是默认 ID 签的，
-			// 它在服务端口径下应当通过 —— 换 userID 的语义由 Go 侧向量测试覆盖。
-			if err != nil {
-				t.Fatalf("%s: default-userID signature rejected by kernel: %v", vec.Name, err)
+	var pass, reject, okCount int
+	for _, vec := range vectors {
+		pub := mustHex(t, vec.Pub65)
+		msg := mustHex(t, vec.SigInput)
+		sig := mustHex(t, vec.SigDER)
+		if len(msg) != vec.SigInputLen {
+			t.Fatalf("%s: sig_input len %d != %d", vec.Name, len(msg), vec.SigInputLen)
+		}
+
+		if got := gm.VerifySM2DERWithID(pub, msg, sig, vec.UserID); got != vec.ExpectVerify {
+			t.Fatalf("%s: Go(with id=%s) = %v, want %v", vec.Name, vec.UserID, got, vec.ExpectVerify)
+		}
+		if vec.UserID == gm.DefaultSM2ID {
+			if got := gm.VerifySM2DER(pub, msg, sig); got != vec.ExpectVerify {
+				t.Fatalf("%s: Go(default id) = %v, want %v", vec.Name, got, vec.ExpectVerify)
 			}
-			continue
+			// 空/超长消息由服务端在入参层拒（BAD_INPUT），不走内核。
+			if vec.ExpectServer != "BAD_INPUT" {
+				err := v.Verify(pub, msg, sig)
+				if (err == nil) != vec.ExpectVerify {
+					t.Fatalf("%s: kernel = %v, want verify=%v", vec.Name, err, vec.ExpectVerify)
+				}
+			}
 		}
 		if vec.ExpectVerify {
-			if err != nil {
-				t.Fatalf("%s: valid signature rejected: %v", vec.Name, err)
+			pass++
+		} else {
+			reject++
+		}
+		if vec.ExpectServer == "OK" {
+			okCount++
+			if !vec.ExpectVerify {
+				t.Fatalf("%s: an OK vector must verify", vec.Name)
 			}
-			// 64 字节 X‖Y 也应接受（服务端内部会剥掉 0x04）。
-			if err := v.Verify(pub[1:], msg, sig); err != nil {
-				t.Fatalf("%s: 64-byte public key rejected: %v", vec.Name, err)
-			}
-			continue
 		}
-		if err == nil {
-			t.Fatalf("%s: bad signature accepted", vec.Name)
-		}
-		if !errors.Is(err, ErrSignature) {
-			t.Fatalf("%s: want ErrSignature, got %v", vec.Name, err)
-		}
+	}
+	// 7 条正例（七种 PURPOSE）+ 8 条负例；负例里 code_mismatch / empty_message /
+	// oversized_input 的**密码学**结果是"通过"，只是服务端策略要拒，所以 expect_verify
+	// 为 true 的一共 10 条、false 5 条。
+	if okCount != 7 || len(vectors) != 15 {
+		t.Fatalf("OK vectors = %d, total = %d, want 7/15", okCount, len(vectors))
+	}
+	if pass != 10 || reject != 5 {
+		t.Fatalf("expect_verify split = %d/%d, want 10/5", pass, reject)
 	}
 }
 
-// 服务端固定默认 userID，因此 5 组向量的"服务端口径期望"是：
-//
-//	ok_register               通过
-//	sig_flipped_1byte         拒绝
-//	msg_changed               拒绝
-//	wrong_public_key          拒绝
-//	different_user_id         通过（它就是默认 ID 签的；"换 ID 必须拒"只在带 ID 入参时成立）
-//
-// 这条测试把该映射钉死，避免下游误以为 4 条都该拒。
-func TestServerPolicyOnVerifyVectors(t *testing.T) {
+// 策略层：把 expect_server 映射到服务端的对外行为。
+func TestVerifyVectorsServerPolicy(t *testing.T) {
 	v := newTestVerifier(t)
-	vectors := loadWASMVectors(t)
-
-	want := map[string]bool{
-		"ok_register":       true,
-		"sig_flipped_1byte": false,
-		"msg_changed":       false,
-		"wrong_public_key":  false,
-		"different_user_id": true,
-	}
-	seen := map[string]bool{}
-	for _, vec := range vectors {
-		expect, ok := want[vec.Name]
-		if !ok {
-			t.Fatalf("unexpected vector %q", vec.Name)
-		}
-		seen[vec.Name] = true
-		pub, _ := hex.DecodeString(vec.Pub65)
-		msg, _ := hex.DecodeString(vec.Msg)
-		sig, _ := hex.DecodeString(vec.SigDER)
+	for _, vec := range loadVerifyVectors(t) {
+		pub := mustHex(t, vec.Pub65)
+		msg := mustHex(t, vec.SigInput)
+		sig := mustHex(t, vec.SigDER)
 		err := v.Verify(pub, msg, sig)
-		if expect && err != nil {
-			t.Fatalf("%s: want accept, got %v", vec.Name, err)
+
+		switch vec.ExpectServer {
+		case "OK":
+			if err != nil {
+				t.Fatalf("%s: want OK, got %v", vec.Name, err)
+			}
+		case "AUTH_CODE_MISMATCH":
+			// 密码学通过；"码与请求头不一致"由 handler 在验签之后判定（HTTP 层用例覆盖）。
+			if err != nil {
+				t.Fatalf("%s: signature must verify before the code check, got %v", vec.Name, err)
+			}
+		case "CRYPTO_SIGNATURE_INVALID":
+			// 已知向量文件缺陷：`different_user_id` 与 `REGISTER` 的消息、签名**完全相同**，
+			// 只把 user_id 标成 ...5679。服务端固定默认 ID，因此这条签名在服务端口径下
+			// 必然通过 —— 向量里的 expect_server 是按"可配置 ID 的验签器"写的，与 ABI 不符。
+			// 这里按事实断言，并在测试里留痕；不为了绿灯改实现。
+			if vec.Name == "different_user_id" {
+				if err != nil {
+					t.Fatalf("%s: under the fixed default ID this signature must verify, got %v", vec.Name, err)
+				}
+				t.Logf("WARN: %s 的 expect_server 与固定默认 ID 的 ABI 不一致（签名与 REGISTER 同字节）", vec.Name)
+				continue
+			}
+			if !errors.Is(err, ErrSignature) {
+				t.Fatalf("%s: want ErrSignature, got %v", vec.Name, err)
+			}
+		case "BAD_INPUT":
+			if !errors.Is(err, ErrBadInput) {
+				t.Fatalf("%s: want ErrBadInput, got %v", vec.Name, err)
+			}
+		default:
+			t.Fatalf("%s: unknown expect_server %q", vec.Name, vec.ExpectServer)
 		}
-		if !expect && err == nil {
-			t.Fatalf("%s: want reject, got accept", vec.Name)
-		}
-	}
-	if len(seen) != 5 {
-		t.Fatalf("expected 5 vectors, saw %d", len(seen))
 	}
 }
 
 func TestWASMRejectsMalformedInput(t *testing.T) {
 	v := newTestVerifier(t)
-	vectors := loadWASMVectors(t)
-	pub, _ := hex.DecodeString(vectors[0].Pub65)
-	msg, _ := hex.DecodeString(vectors[0].Msg)
-	sig, _ := hex.DecodeString(vectors[0].SigDER)
+	vectors := loadVerifyVectors(t)
+	pub := mustHex(t, vectors[0].Pub65)
+	msg := mustHex(t, vectors[0].SigInput)
+	sig := mustHex(t, vectors[0].SigDER)
 
 	cases := map[string]struct {
 		pub, msg, sig []byte
@@ -163,8 +197,12 @@ func TestWASMRejectsMalformedInput(t *testing.T) {
 		"trailing DER":    {pub, msg, append(append([]byte(nil), sig...), 0x00)},
 	}
 	for name, c := range cases {
-		if err := v.Verify(c.pub, c.msg, c.sig); err == nil {
+		err := v.Verify(c.pub, c.msg, c.sig)
+		if err == nil {
 			t.Fatalf("%s: accepted", name)
+		}
+		if !errors.Is(err, ErrBadInput) && !errors.Is(err, ErrSignature) {
+			t.Fatalf("%s: unexpected error %v", name, err)
 		}
 	}
 }

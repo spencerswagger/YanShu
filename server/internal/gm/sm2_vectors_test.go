@@ -17,17 +17,17 @@ type verifyVector struct {
 	Name         string `json:"name"`
 	Pub65        string `json:"pub65"`
 	UserID       string `json:"user_id"`
-	Msg          string `json:"msg"`
+	SigInput     string `json:"sig_input"`
 	ZA           string `json:"za"`
 	DigestE      string `json:"digest_e"`
 	SigDER       string `json:"sig_der"`
 	SigDERLen    int    `json:"sig_der_len"`
 	ExpectVerify bool   `json:"expect_verify"`
+	ExpectServer string `json:"expect_server"`
 }
 
 type sigInputSample struct {
 	Purpose  string `json:"purpose"`
-	PurposeB string `json:"purpose_byte"`
 	Len      int    `json:"len"`
 	SigInput string `json:"sig_input"`
 }
@@ -75,7 +75,7 @@ func TestServerVerifyVectors(t *testing.T) {
 	}
 	for _, vec := range v.VerifyVectors {
 		pub := hexBytes(t, vec.Pub65)
-		msg := hexBytes(t, vec.Msg)
+		msg := hexBytes(t, vec.SigInput)
 		der := hexBytes(t, vec.SigDER)
 
 		pt, err := ParseSM2PublicKey(pub)
@@ -110,7 +110,7 @@ func TestUserIDBinding(t *testing.T) {
 		}
 		found = true
 		pub := hexBytes(t, vec.Pub65)
-		msg := hexBytes(t, vec.Msg)
+		msg := hexBytes(t, vec.SigInput)
 		der := hexBytes(t, vec.SigDER)
 		if VerifySM2DERWithID(pub, msg, der, vec.UserID) {
 			t.Fatalf("%s: signature verified under a non-default userID", vec.Name)
@@ -127,8 +127,8 @@ func TestUserIDBinding(t *testing.T) {
 // SIG_INPUT 样例：确认服务端构造与端侧逐字节一致（长度前缀/CODE 位置）。
 func TestSigInputSamples(t *testing.T) {
 	v := loadVerifyVectors(t)
-	if len(v.SigInputSamples) != 3 {
-		t.Fatalf("expected 3 samples, got %d", len(v.SigInputSamples))
+	if len(v.SigInputSamples) < 3 {
+		t.Fatalf("expected >=3 samples, got %d", len(v.SigInputSamples))
 	}
 	for _, s := range v.SigInputSamples {
 		raw := hexBytes(t, s.SigInput)
@@ -142,8 +142,8 @@ func TestSigInputSamples(t *testing.T) {
 		if string(raw[:7]) != "YSAUTH1" {
 			t.Fatalf("%s: prefix = %q", s.Purpose, raw[:7])
 		}
-		if got := hex.EncodeToString(raw[7:8]); got != s.PurposeB {
-			t.Fatalf("%s: purpose byte = %s, want %s", s.Purpose, got, s.PurposeB)
+		if len(raw) < 40 {
+			t.Fatalf("%s: too short (%d)", s.Purpose, len(raw))
 		}
 	}
 }

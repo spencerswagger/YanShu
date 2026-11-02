@@ -12,6 +12,9 @@ var (
 	ErrSignature = errors.New("auth: signature invalid")
 	// ErrUnavailable 表示服务端当前没有可用的验签实现。
 	ErrUnavailable = errors.New("auth: verifier unavailable")
+	// ErrBadInput 表示验签入参本身不合法（空消息、超长消息、空签名、公钥长度不对）。
+	// 与"签名不被接受"区分：这是 400 BAD_REQUEST，不是 401。
+	ErrBadInput = errors.New("auth: invalid verifier input")
 )
 
 // Verifier 是 SM2 验签接口。
@@ -23,6 +26,12 @@ var (
 type Verifier interface {
 	Verify(pubKey, message, signature []byte) error
 }
+
+// MaxSIGInputLen 是 SIG_INPUT 的长度上限。
+//
+// 契约里七种 PURPOSE 的字段串都是定长小消息（最长 REGISTER 109 字节）；
+// 超过这个界说明调用方拼错了（例如把整个请求体当消息），按 BAD_INPUT 拒绝。
+const MaxSIGInputLen = 512
 
 // 验签模式。
 const (
@@ -75,10 +84,10 @@ type allowVerifier struct{}
 
 func (allowVerifier) Verify(pubKey, message, signature []byte) error {
 	if len(pubKey) != 65 || pubKey[0] != 0x04 {
-		return ErrSignature
+		return ErrBadInput
 	}
-	if len(message) == 0 || len(signature) == 0 {
-		return ErrSignature
+	if len(message) == 0 || len(message) > MaxSIGInputLen || len(signature) == 0 {
+		return ErrBadInput
 	}
 	return nil
 }

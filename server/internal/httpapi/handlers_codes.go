@@ -41,14 +41,14 @@ func (a *API) handleRegisterCode(w http.ResponseWriter, r *http.Request) {
 		fail(w, r, spec.ErrNicknameInvalid)
 		return
 	}
-	// 码必须等于 SM3(公钥) 的派生结果；否则就是「码与公钥不匹配」。
-	if gm.DeriveCode(pubKey) != code {
-		fail(w, r, spec.ErrAuthCodeMismatch)
-		return
-	}
-
+	// 先验签（签名覆盖的是头里的 CODE），验过之后再比对"码与公钥是否匹配"。
+	// 顺序不能反：签名错时应当报 AUTH_SIGNATURE_INVALID，而不是码不符。
 	if _, ok := a.verifySignature(w, r, spec.PurposeRegister, code, pubKey,
 		func(signedCode string) ([]byte, error) { return auth.RegisterFields(signedCode, pubKey) }); !ok {
+		return
+	}
+	if gm.DeriveCode(pubKey) != code {
+		fail(w, r, spec.ErrAuthCodeMismatch)
 		return
 	}
 

@@ -1229,16 +1229,31 @@ func TestSM2RejectsForgery(t *testing.T) {
 	bad[spec.HeaderSignature] = auth.B64.EncodeToString(rawSig)
 	e.wantError(e.do(http.MethodPost, spec.PathCodes, body, bad), spec.ErrAuthSignatureInvalid)
 
-	// 签名覆盖的码与 X-YS-Code 不一致 → AUTH_CODE_MISMATCH（body 用另一个码）。
-	otherPriv, otherPub, otherCode := newSM2Identity(t)
+	// 签名覆盖的码与请求里的码不一致 → 先验签通过，再报 AUTH_CODE_MISMATCH。
+	// （签名用 header 的 code 与这把公钥；body 里写另一个合法码。）
+	otherCode := "ZZZZ"
+	if otherCode == code {
+		otherCode = "YYYY"
+	}
 	hdrs := e.signed(spec.PurposeRegister, code, priv, func(sc string) ([]byte, error) {
 		return auth.RegisterFields(sc, pub)
 	})
 	resp := e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
-		Code: otherCode, PublicKey: auth.B64.EncodeToString(otherPub), Nickname: "y",
+		Code: otherCode, PublicKey: auth.B64.EncodeToString(pub), Nickname: "y",
 	}, hdrs)
 	e.wantError(resp, spec.ErrAuthCodeMismatch)
-	_ = otherPriv
+
+	// 判定顺序：签名也坏 + 码也不一致时，必须报"签名无效"，不能报码不符。
+	badBoth := e.signed(spec.PurposeRegister, code, priv, func(sc string) ([]byte, error) {
+		return auth.RegisterFields(sc, pub)
+	})
+	rawBoth, _ := auth.B64.DecodeString(badBoth[spec.HeaderSignature])
+	rawBoth[5] ^= 0xff
+	badBoth[spec.HeaderSignature] = auth.B64.EncodeToString(rawBoth)
+	resp = e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
+		Code: otherCode, PublicKey: auth.B64.EncodeToString(pub), Nickname: "y",
+	}, badBoth)
+	e.wantError(resp, spec.ErrAuthSignatureInvalid)
 
 	// 篡改消息：用别的消息签，再提交原消息 → 拒绝。
 	ch := e.challenge(spec.PurposeRegister)

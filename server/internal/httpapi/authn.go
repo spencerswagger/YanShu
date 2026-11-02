@@ -54,11 +54,6 @@ func (a *API) verifySignature(
 		fail(w, r, spec.ErrCodeFormatInvalid)
 		return "", false
 	}
-	if requestCode != "" && requestCode != code {
-		fail(w, r, spec.ErrAuthCodeMismatch)
-		return "", false
-	}
-
 	ch, err := a.store.ConsumeChallenge(r.Context(), challengeID, a.now())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -100,11 +95,22 @@ func (a *API) verifySignature(
 		return "", false
 	}
 	if err := a.verifier.Verify(pubKey, sigInput, sig); err != nil {
-		if errors.Is(err, auth.ErrUnavailable) {
+		switch {
+		case errors.Is(err, auth.ErrUnavailable):
 			fail(w, r, spec.ErrServiceUnavailable)
-			return "", false
+		case errors.Is(err, auth.ErrBadInput):
+			// 入参本身不合法（空/超长消息等）→ 400，不是"签名不被接受"。
+			fail(w, r, spec.ErrBadRequest)
+		default:
+			a.noteAuthFailure(w, r, code)
 		}
-		a.noteAuthFailure(w, r, code)
+		return "", false
+	}
+
+	// 判定顺序（docs/ABI.md）：**先验签，再比对码**。
+	// 反过来的话，"签名错 + 码也不一致"会被误报成 AUTH_CODE_MISMATCH，排障会被带偏。
+	if requestCode != "" && requestCode != code {
+		fail(w, r, spec.ErrAuthCodeMismatch)
 		return "", false
 	}
 	return code, true
