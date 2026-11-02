@@ -44,19 +44,18 @@ python3 qa/evidence/check_token_lifecycle.py --binary <yanshu-server> \
 我之前那次 **201** 用的是 `9065eb8`（及其产物 `980fc44`）——那版 `Validate` 只比库里 `SM3(token)`，
 不重算，所以换 secret 不影响。两边不矛盾，是版本差异。
 
-### 1a-2. 与裁定预期的对照（重要）
+### 1a-2. 状态：**已验证（`08d40e7`）**，只差错误名
 
-裁定预期：**只改 `TOKEN_SECRET`、版本不变 → 旧 token 必须仍有效（201）是正确行为**；
-递增版本才吊销。按这个预期核对实现：
+- **机制**：轮换 token 派生密钥（`TOKEN_SECRET`，`fa479d9` 起再加 `TOKEN_KID`）即**全局吊销**——
+  影响全站所有在传任务，属**应急手段**；恢复靠重建传输（新 token 201）。
+- **实测三态**（`08d40e7`）：基线 **201** → 只换 `TOKEN_SECRET` 重启 → **401** → 重签发 **201**。
+- **待跟进一处**：401 的错误名目前随版本变化（`ab4279a` → `AUTH_SIGNATURE_INVALID`、
+  `9bce5bb` → `AUTH_TOKEN_STALE`），按裁定应统一为 **`AUTH_TOKEN_REVOKED`**（凭据类）；
+  Core 改完我用同一脚本复测三态与错误名。
+- `--epoch-check` 保留在脚本里，仅作 **v2 若引入 EPOCH 时的备用对照**，不是 v1 的缺失项。
 
-| 组 | 裁定预期 | 实测（`ab4279a` / `9bce5bb`） | 判定 |
-|---|---|---|---|
-| 只改 `TOKEN_SECRET`（版本不变） | **201 仍有效** | **401 `AUTH_SIGNATURE_INVALID`** / `AUTH_TOKEN_STALE` | **与预期不符**：当前实现把 secret 也当吊销开关 |
-| 递增版本（EPOCH） | 401 `AUTH_TOKEN_STALE` | **EPOCH 不存在**；`kid`（`9bce5bb`）递增 → 401 `AUTH_TOKEN_STALE` | EPOCH 组 **BLOCKED**；kid 语义相近但不同名 |
-| 版本递增后重签发（`POST /transfers/{id}/token`，PURPOSE 0x08） | 新 token 可用、旧 token 不复活 | **接口表里没有该端点** | **BLOCKED** |
-
-**结论**：按裁定，"只改 secret 仍 201"才是预期；当前实现（`ab4279a` 起）会 401，
-属**实现与裁定偏离**，不是我的测量问题。EPOCH 两组在现有二进制上不可执行。
+> 旧预期"只改 secret 应仍 201"**已作废**——那是 `9065eb8` 的行为（只比库内哈希、不重算），
+> 之后的版本都会吊销。
 
 ### 1b. 「只改 secret 是否吊销」的历史（回答两边为什么各说各话）
 
