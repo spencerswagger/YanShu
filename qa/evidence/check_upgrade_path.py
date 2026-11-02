@@ -104,6 +104,8 @@ def main(argv=None) -> int:
     ap.add_argument("--dsn", required=True, help="基础 DSN（脚本会自带 search_path）")
     ap.add_argument("--schema", default="gate_upgrade_probe")
     ap.add_argument("--column", default="upload_token_kid")
+    ap.add_argument("--column-expect", choices=["present", "absent", "any"], default="present",
+                    help="升级后该列应存在/应不存在/不关心（设计变更时用 absent）")
     ap.add_argument("--json-out")
     args = ap.parse_args(argv)
 
@@ -124,17 +126,26 @@ def main(argv=None) -> int:
     # 2) 老库确实没有该列
     rc, out = psql(base, f"select count(*) from information_schema.columns "
                         f"where table_schema='{sch}' and table_name='transfers' and column_name='{args.column}'", sch)
-    results.append((f"老库缺 {args.column}（前提成立）", out.strip() == "0", f"count={out.strip()}"))
+    old_has = out.strip() != "0"
+    results.append((f"老库该列状态符合预期前提（期望 {'有' if args.column_expect=='absent' else '无'}）",
+                    (old_has if args.column_expect == "absent" else (not old_has)),
+                    f"count={out.strip()}"))
 
-    # 3) 插一行历史数据（只用两版共有的列）
-    insert = (
-        "insert into transfers (transfer_id, sender_code, recipient_code, plaintext_size, chunk_size,"
-        " chunk_count, prelude_len, prelude_sm3, max_downloads, state, created_at, updated_at,"
-        " expires_at, upload_token_sm3)"
-        " values ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','AWQW','AWQW',1024,1024,1,112,"
-        " decode(repeat('00',32),'hex'),1,'LEASED', now(), now(), now() + interval '1 day',"
-        " decode(repeat('00',32),'hex'))"
-    )
+    # 3) 插一行历史数据（列集自适应：老库若已有 kid 列就一并填上）
+    cols = [
+        "transfer_id", "sender_code", "recipient_code", "plaintext_size", "chunk_size",
+        "chunk_count", "prelude_len", "prelude_sm3", "max_downloads", "state",
+        "created_at", "updated_at", "expires_at", "upload_token_sm3",
+    ]
+    vals = [
+        "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'", "'AWQW'", "'AWQW'", "1024", "1024",
+        "1", "112", "decode(repeat('00',32),'hex')", "1", "'LEASED'",
+        "now()", "now()", "now() + interval '1 day'", "decode(repeat('00',32),'hex')",
+    ]
+    if old_has:
+        cols.append(args.column)
+        vals.append("'old-kid'")
+    insert = f"insert into transfers ({', '.join(cols)}) values ({', '.join(vals)})"
     rc, out = psql(base, insert, sch)
     results.append(("插入一行历史 transfers", rc == 0, out))
 
@@ -145,15 +156,20 @@ def main(argv=None) -> int:
     # 5) 列已补上
     rc, out = psql(base, f"select count(*) from information_schema.columns "
                         f"where table_schema='{sch}' and table_name='transfers' and column_name='{args.column}'", sch)
-    results.append((f"升级后 {args.column} 存在", out.strip() == "1", f"count={out.strip()}"))
+    want = {"present": "1", "absent": "0", "any": None}[args.column_expect]
+    ok_col = True if want is None else out.strip() == want
+    results.append((f"升级后 {args.column} 状态符合预期（期望 {args.column_expect}）", ok_col,
+                    f"count={out.strip()}"))
 
     # 6) 历史行还在，且新列有合理值
     rc, out = psql(base, f"select count(*) from transfers where transfer_id='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'", sch)
     results.append(("历史行仍存在", out.strip() == "1", f"rows={out.strip()}"))
-    rc, out = psql(base, f"select coalesce(\"{args.column}\"::text,'<null>') from transfers "
-                        f"where transfer_id='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'", sch)
-    val = out.strip()
-    results.append((f"历史行的 {args.column} 有合理值", val not in ("", "<null>"), f"value={val}"))
+    if args.column_expect == "present":
+        rc, out = psql(base, f"select coalesce(\"{args.column}\"::text,'<null>') from transfers "
+                            f"where transfer_id='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'", sch)
+        val = out.strip()
+        bad = rc != 0 or val in ("", "<null>") or "ERROR" in val
+        results.append((f"历史行的 {args.column} 有合理值", not bad, f"value={val[:80]}"))
 
     # 7) 起服务 + healthz
     work = Path(f"/tmp/ys-upgrade-{sch}")

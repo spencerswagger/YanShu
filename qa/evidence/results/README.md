@@ -50,6 +50,7 @@ results/
 | 证据文件 | 服务端 | 二进制 sha256 | 认证 | 可复跑命令 | 结论 |
 |---|---|---|---|---|---|
 | `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | `08d40e7` | `275fc463…6af55` | **真 sm2** | `YS_EV1_VERIFIER=sm2 YS_EV1_LOG_MODE=dir YS_DELIVER_BIN=core-deliver qa/evidence/run_evidence1_core.sh …` | **闭合**：存储/DB/日志三处零命中，对照 1/1/1/0 |
+| `contract-v1/2026-11-02-names-and-upgrade-d655e16.md` | —（服务端证据） | `d655e16` | `4c331e1f…f1ef9d` | stub-allow | native-api | `check_token_lifecycle.py …`；`check_upgrade_path.py [--column-expect absent]` | **错误名终值**：只换 secret → 401 `AUTH_TOKEN_REVOKED`（旧版误报签名类已修）；**删列迁移**升级路径 9/9 PASS |
 | `contract-v1/2026-11-02-upgrade-path-check.md` | —（服务端证据） | 老 `08d40e7` → 新 `5605907` | — | — | native-api | `python3 qa/evidence/check_upgrade_path.py --old-binary <旧> --new-binary <新> --dsn "<DSN>"` | **升级路径常规项**：老库缺列 → 迁移补列 → 历史行完好（`pre-kid`）→ 服务起 + healthz 200 → 连跑两次幂等（10/10） |
 | `contract-v1/2026-11-02-token-naming-authority-5605907.md` | —（服务端证据） | `5605907` | `3c1e4b2b…35f98f` | stub-allow | native-api | `check_token_lifecycle.py ...`（`--kid` 即 epoch） | **命名权威表**：只改 secret → 204（不吊销）；只改 epoch → 401 `AUTH_TOKEN_STALE`；两者都改 → STALE 优先；新签发 201、旧 token 不复活；epoch 调小拒启动 |
 | `contract-v1/2026-11-02-host-binary-7239888.md` | —（服务端证据） | `7239888` | `bd64d23c…d7d6d7` | stub/sm2 | native-api | `check_token_lifecycle.py --kid 1 …`；`yanshu-server -migrate-only` 验升级路径 | **三件套 + 升级路径已修**：老库（`08d40e7`）升级后补上 `upload_token_kid` 并起得来；token 四步 201 → 401 `AUTH_TOKEN_INVALID`（secret）→ 401 `AUTH_TOKEN_STALE`（kid）→ 新 201，旧 token 不复活 |
@@ -80,10 +81,11 @@ token 轮换（kid → `AUTH_TOKEN_REVOKED`）。
 1. ~~已有 schema 升级缺 `upload_token_kid` 列~~ → **已闭合且有常规检查**（`check_upgrade_path.py`）：
    老 `08d40e7` → 新 `5605907` 十项断言全 PASS（列补上、历史行 `pre-kid`、服务起、连跑两次幂等）。
    **`739293a` 存在该缺口，不可用于已有库**；`7239888` 起修复。
-2. **token 命名以实测为准（`5605907`）**：只改 secret **不吊销**（204），只改 epoch →
-   **401 `AUTH_TOKEN_STALE`**，两者都改 → STALE 优先；`AUTH_TOKEN_INVALID` 与
-   `AUTH_TOKEN_EXPIRED` 在本矩阵未被触发（前者原用于 secret 不匹配，现已不适用；
-   后者覆盖到期场景，未测）。**谁再改名字，先过这张表。**
+2. **token 命名以实测为准（`d655e16`，最新）**：只换 `TOKEN_SECRET` → **401 `AUTH_TOKEN_REVOKED`**
+   （旧版误报 `AUTH_SIGNATURE_INVALID` 的缺陷已修）；`AUTH_TOKEN_INVALID`（值不匹配/格式错）与
+   `AUTH_TOKEN_EXPIRED`（上传 6h / 租约 30min）未在本矩阵触发，属实现内已存在、待单独构造用例。
+   历史实测（`5605907` 的 EPOCH 版：只改 epoch → `AUTH_TOKEN_STALE`）保留在
+   `2026-11-02-token-naming-authority-5605907.md`，**EPOCH 已在 `d655e16` 撤回（`0004` 删列）**。
 
 其余项全部闭合：证据二（生产路径 6/6 + 11/11 + 变体 18/18）、用户码/校验位四形态 26/26 + 反向用例、
 prelude-only 6/6、证据一（存储/DB/日志零命中 + 三组阳性对照，含真 `sm2`）、
