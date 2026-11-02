@@ -85,6 +85,23 @@ node scripts/wasm-smoke/smoke.mjs <上面那个 wasm>
 见 `docs/crypto-pack-v1-draft.md`（**临时锚点**，等 Ark 的 `docs/CRYPTO-PACK.md` 定稿后
 只改 `pack.rs::layout` 与 `Header`/`Manifest` 序列化）。
 
+## 测试向量与交叉验证
+
+`testdata/vectors.json` 是全 hex 向量文件，包含：
+
+* `meta` + `conventions`：算法参数口径（C1C3C2 顺序、点编码、签名 R‖S 非 DER、GCM nonce/AAD 规则、
+  HKDF salt/info、用户码编码、加密包每个字段与 nonce/AAD 规则），宿主侧照它复算；
+* 每条向量还带 `plaintext_len` / `aad_len` / `nonce_len` / `msg_len` / `pack_bytes` 等**长度口径**；
+* SM3 / HMAC-SM3 / HKDF-SM3 / SM4-GCM（空明文、1 字节、16 字节、15 字节、带 AAD 1000 字节）/
+  SM2（3 组密钥含 ZA、4 组加密、3 组签名）/ 用户码 / 4 个完整加密包（含空文件与多块）。
+
+比对脚本 `scripts/crosscheck/`：
+
+* 本机有 GmSSL 就逐字节重算（SM2 固定 k，密文/签名一致）；
+* 没有 GmSSL 时读 `testdata/gmssl-expected.json`（`--emit-template` 生成模板给宿主填），
+  缺失条目打印 `SKIP 待宿主对照` 而不是 FAIL；
+* 两者都没有也照跑，退出码 0。
+
 ## 用户码
 
 `code = CrockfordBase32(SM3(公钥))[0..4]`，字母表 `0123456789ABCDEFGHJKMNPQRSTVWXYZ`，

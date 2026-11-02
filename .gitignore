@@ -6,3 +6,5 @@ target/
 .env
 .DS_Store
 tmp/
+__pycache__/
+*.pyc

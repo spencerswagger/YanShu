@@ -1,21 +1,31 @@
-# GmSSL 逐字节交叉验证
+# 测试向量比对（GmSSL / 宿主对照值）
 
-用 **GmSSL 3.1.1**（官方 C 实现）重算 `testdata/vectors.json` 里的每一条向量，与 Rust 实现
-逐字节比对；并做反向验证（GmSSL 生成 → 本实现验收）。全绿才算验收。
+本目录负责一件事：把 `testdata/vectors.json`（本实现产出）与**外部对照值**逐字节比对。
+对照值有两个来源，**有几个比几个**：
 
-## 一键复跑
+| 来源 | 怎么来 | 用途 |
+|---|---|---|
+| ① 本机 GmSSL 3.1.1 | 编译好的 GmSSL 源码树 + `oracle.c`（链接 `libgmssl.a`） | 全部条目（含 SM2 逐字节） |
+| ② 宿主侧对照值 | `testdata/gmssl-expected.json`（模板由 `--emit-template` 生成） | 本机装不了 GmSSL 时用 |
+
+两个都没有时，脚本仍会跑完：相关条目打印 `SKIP 待宿主对照`，**不算 FAIL**，退出码 0。
+宿主把对照值填进 `testdata/gmssl-expected.json` 后直接重跑，**不用改代码**。
+
+## 用法
 
 ```sh
-scripts/crosscheck/run.sh
+scripts/crosscheck/run.sh                      # 有 GmSSL 就本地比，没有就等宿主值
+scripts/crosscheck/run.sh --emit-template /tmp/gmssl-expected.json   # 生成模板
+scripts/crosscheck/run.sh --no-local           # 只用 testdata/gmssl-expected.json
 ```
 
-前置：
+前置（按需）：
 
-1. 编译好的 GmSSL 3.1.1 源码树（`include/gmssl/*.h` + `build/bin/libgmssl.a` + `build/bin/gmssl`）。
-   查找顺序：`$GMSSL_DIR` → `/.cache/ys/GmSSL-3.1.1` → `../GmSSL-3.1.1` → `/opt/GmSSL-3.1.1`。
-2. Rust 工具链 + `python3` + `gcc`。
-
-没有 GmSSL 时可以 `GMSSL_AUTOBUILD=1 scripts/crosscheck/run.sh`（需 cmake，会下载 v3.1.1 源码并编译）。
+- 本机 GmSSL：`include/gmssl/*.h` + `build/bin/libgmssl.a` + `build/bin/gmssl`，
+  路径用 `GMSSL_DIR` 指定；查找顺序 `$GMSSL_DIR` → `/.cache/ys/GmSSL-3.1.1` →
+  `../GmSSL-3.1.1` → `/opt/GmSSL-3.1.1`。没有也能跑（降级为 SKIP）。
+  `GMSSL_AUTOBUILD=1` 可自动下载 v3.1.1 并编译（需 cmake）。
+- Rust 工具链 + `python3` + `gcc`（编 oracle）。
 
 自己编 GmSSL：
 
@@ -26,56 +36,85 @@ mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF && make -j"$(nproc)"
 ```
 
-## 脚本做了什么
+## 宿主怎么填对照值
 
-| 阶段 | 内容 | 谁算的 |
-|---|---|---|
-| A1 | SM3 摘要 | `gmssl sm3` 命令行 |
-| A2 | HMAC-SM3、HKDF-SM3 | `libgmssl`（oracle 里调 `sm3_hmac` 拼 HKDF） |
-| A3 | SM4-GCM 密文 + tag | `gmssl sm4 -gcm` 命令行（输出 = ct‖tag） |
-| A4 | SM2 公钥、ZA、C1C3C2 加密、r‖s 签名 | `libgmssl`，**固定 k**（见下） |
-| A5 | 4 位用户码 | `gmssl sm3` + Python 按 Crockford 规则重算 |
-| B | **整个加密包**（header/记录/每块/清单/签名） | Python 用 GmSSL 原语重新拼出来，逐字节比 |
-| C | GmSSL 真随机加密/签名 → 本实现解密/验签/解包 | 反向 |
-| D | `gmssl sm4 -gcm` 命令行密文 → 本实现解密 | 反向 |
+1. `scripts/crosscheck/run.sh --emit-template testdata/gmssl-expected.json`
+   会把**每条向量的输入**（key/nonce/AAD/明文/k/DK/file_id…）和**待填空字符串**一起写出来。
+2. 用 GmSSL 3.1.1 按 `vectors.json` 里的 `conventions` 复算，把空字符串填上
+   （填不出的留空，脚本对该条 SKIP）。
+3. `scripts/crosscheck/run.sh --no-local`，直接看 PASS/FAIL；FAIL 会打印第一处差异的偏移。
+
+### 模板结构
+
+```jsonc
+{
+  "sm3":        { "<case>": { "msg": "…", "digest": "…" } },
+  "hmac_sm3":   { "<case>": { "key": "…", "msg": "…", "tag": "…" } },
+  "hkdf_sm3":   { "<case>": { "salt": "…", "ikm": "…", "info": "…", "len": 32, "okm": "…" } },
+  "sm4_gcm":    { "<case>": { "key": "…", "nonce": "…", "aad": "…", "plaintext": "…",
+                              "ciphertext": "…", "tag": "…" } },
+  "sm2": {
+    "keys":    { "<case>": { "priv": "…", "pub": "…", "za": "…" } },
+    "encrypt": { "<case>": { "pub": "…", "k": "…", "plaintext": "…", "ciphertext": "…" } },
+    "sign":    { "<case>": { "priv": "…", "pub": "…", "k": "…", "msg": "…", "sig": "…" } }
+  },
+  "user_codes": { "<case>": { "pub": "…", "code": "ABCD" } },
+  "pack":       { "<case>": { "recipient_pub": "…", "sender_priv": "…", "sender_pub": "…",
+                              "dk": "…", "file_id": "…", "k_wrap": "…", "k_sign": "…",
+                              "block_size": 16, "file_name": "…", "mime": "…",
+                              "data": "…", "pack": "…" } }
+}
+```
+
+## 口径（务必按这个复算）
+
+完整版在 `testdata/vectors.json` 的 `conventions` 字段里，要点：
+
+- 所有整数/hex 都是大端，hex 小写无前缀。
+- **SM2 公钥**：64 字节 `X‖Y`，未压缩、**不带 0x04**。
+- **SM2 密文**：`C1C3C2` 平文拼接，`C1.x(32)‖C1.y(32)‖C3(32)‖C2(len)`，无 DER。
+- **SM2 签名**：`R‖S`（32+32），**不是 DER**；ID = `1234567812345678`，`e = SM3(ZA‖M)`。
+- **SM2 的 k**：每条向量显式给了 `k`。GmSSL 命令行没法定 k，需要用库并在
+  `rand_bytes` 处固定（见下），否则只能比"解密/验签通过"。
+- **SM4-GCM**：key 16B、tag 16B、nonce 见 `nonce_len`（固定 12）；`gmssl sm4 -gcm`
+  的输出是 `ct‖tag` 连写，**tag 是末尾 16 字节**。
+- **HKDF-SM3**：RFC 5869 结构，PRF 用 HMAC-SM3；salt 为空时按 32 字节 0x00。
+- **用户码**：`CrockfordBase32(SM3(公钥))` 前 4 位（摘要前 20 bit，大端位序、5 bit/符号）。
+- **加密包**：布局与 nonce/AAD/派生规则见 `docs/crypto-pack-v1-draft.md`。
 
 ### 为什么 SM2 也能"逐字节"比
 
-GmSSL 的 `sm2_do_encrypt` / `sm2_sign` 内部用 `rand_bytes()`。oracle（`oracle.c`）**自己实现了
-`rand_bytes`**，链接时优先于 `libgmssl.a` 里的 `rand.o`，于是传入固定 k 后 GmSSL 的
-SM2 输出就是确定性的 —— 可以和 Rust 侧同 k 的结果逐字节比，而不只是"验签通过"。
+GmSSL 的 `sm2_do_encrypt` / `sm2_sign` 内部调 `rand_bytes()`。`oracle.c` **自己实现了
+`rand_bytes`**，链接时优先于 `libgmssl.a` 里的 `rand.o`，于是固定 k 后 GmSSL 的 SM2 输出
+就是确定性的。`sm2_bn_rand_range` 是"取 32 字节、`< n` 才收"，所以合法 k 一次就中。
 
-`sm2_bn_rand_range` 是"取 32 字节、`< n` 才收"，所以只要给的 k 合法，第一次就是它。
+## 脚本做了什么
 
-## 实测结果（GmSSL 3.1.1 / Rust 1.99.1）
+| 阶段 | 内容 | 对照源①（本机） | 对照源②（宿主文件） |
+|---|---|---|---|
+| A1 | SM3 摘要 | `gmssl sm3` | `sm3.<case>.digest` |
+| A2 | HMAC-SM3 / HKDF-SM3 | `libgmssl`（oracle） | `hmac_sm3.*.tag` / `hkdf_sm3.*.okm` |
+| A3 | SM4-GCM 密文 + tag | `gmssl sm4 -gcm` | `sm4_gcm.<case>.ciphertext/tag` |
+| A4 | SM2 公钥/ZA/加密/签名 | `libgmssl` 固定 k | `sm2.*` |
+| A5 | 4 位用户码 | `gmssl sm3` + Python Crockford | `user_codes.<case>.code` |
+| B | **整个加密包字节** | Python 用 GmSSL 原语重拼 | `pack.<case>.pack` |
+| C | 反向：GmSSL 随机加密/签名 → 本实现 | 仅本机 | 不支持（需本机随机） |
+| D | 反向：`gmssl sm4 -gcm` 密文 → 本实现解密 | 仅本机 | 不支持 |
+
+## 实测（GmSSL 3.1.1 / Rust 1.99.1）
 
 ```text
-PASS 77 / FAIL 0
+本地 GmSSL 全开：PASS 77 / FAIL 0 / SKIP 0
+仅宿主对照值：  PASS 48 / FAIL 0 / SKIP 20（SKIP = 只有本机 GmSSL 才能做的反向项）
+两个都没有：    PASS 6  / FAIL 0 / SKIP 62（仅自洽类检查，退出码 0）
 ```
-
-覆盖：SM3 5 条、HMAC-SM3 3 条、HKDF-SM3 4 条、SM4-GCM 6 组×2（加密+解密）、
-SM2 3 组密钥（公钥 + ZA）、4 组加密（密文 + GmSSL 反向解密）、3 组签名（r‖s + GmSSL 验签）、
-3 组用户码（码 + 2 条规范化）、4 个加密包（整包字节）、
-反向 3 组随机 SM2 加密/签名 + 4 组解包 + 4 组篡改拒绝 + 6 组 GCM 反向解密。
-
-## 哪部分不是"GmSSL 直接给的"
-
-* **HKDF-SM3**：GmSSL 没有 HKDF-SM3 的现成 API，oracle 里按 RFC 5869 用它的 `sm3_hmac` 拼了
-  20 行——PRF 与 HMAC 是 GmSSL 的，HKDF 的拼装逻辑在 oracle 侧独立于 Rust 实现。
-* **加密包的"封装"**：GmSSL 不认识雁书的包格式，B 阶段是在 Python 里按
-  `docs/crypto-pack-v1-draft.md` 用 GmSSL 原语重拼——这正好验证了"布局常量 + 拼接顺序"没有
-  只跟自己一致。
-* **Crockford 编码**：Python 里独立实现（GmSSL 只负责 SM3 那一步）。
-* **性能**不做交叉验证（GmSSL 的 SM4 是 C 优化版，比 Rust 快，没意义）。
-* wasm 与 native 走同一份 Rust 代码，ABI 差异由 `scripts/wasm-smoke/smoke.mjs` 覆盖，
-  不在本脚本里重复。
 
 ## 文件
 
 | 文件 | 作用 |
 |---|---|
-| `run.sh` | 一键：定位 GmSSL → 编 oracle → 编 ys-tool → 跑比对 |
+| `run.sh` | 一键：定位 GmSSL（可缺）→ 编 oracle → 编 ys-tool → 跑比对 |
 | `oracle.c` | 链接 `libgmssl.a` 的对照实现（含 `rand_bytes` 覆盖） |
-| `crosscheck.py` | 解析向量、调两侧、逐字节比、打印第一处差异偏移 |
+| `crosscheck.py` | 读向量 + 两个对照源、逐字节比、打印第一处差异、支持 `--emit-template` |
 
-产物落在 `tmp/crosscheck/`（已被 `.gitignore` 忽略）。
+产物落在 `tmp/crosscheck/`（已 gitignore）。

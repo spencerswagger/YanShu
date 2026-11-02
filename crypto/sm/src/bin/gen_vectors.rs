@@ -44,6 +44,88 @@ fn private_key(label: &str) -> [u8; 32] {
     d
 }
 
+/// 算法参数口径（宿主侧用 GmSSL/其它实现复算时必须按这个口径）。
+const CONVENTIONS: &str = r#"  "conventions": {
+    "sm3": {
+      "standard": "GB/T 32905-2016",
+      "digest_bytes": 32,
+      "input": "msg 字段原样作为字节流（空串表示 0 字节）"
+    },
+    "hmac_sm3": {
+      "standard": "RFC 2104 结构，PRF = SM3",
+      "block_size": 64,
+      "key_handling": "key 长度 > 64 时先 SM3(key) 再左补零到 64；否则直接左补零到 64",
+      "output_bytes": 32
+    },
+    "hkdf_sm3": {
+      "standard": "RFC 5869 结构，PRF = HMAC-SM3，HashLen = 32",
+      "salt_empty": "salt 为空时用 32 字节 0x00",
+      "info": "info 字段原样拼接",
+      "max_output": "255*32 字节",
+      "out_len": "len 字段（0 表示空输出）"
+    },
+    "sm4_gcm": {
+      "standard": "GB/T 36624-2018 / SP 800-38D 构造，分组密码 = SM4",
+      "key_bytes": 16,
+      "key_bits": 128,
+      "tag_bytes": 16,
+      "tag_bits": 128,
+      "nonce_bytes": "见每条向量的 nonce_len；本套件固定 12（96 位）",
+      "iv_construction": "nonce 长度 12 时 J0 = nonce || 00 00 00 01；否则 J0 = GHASH(H, {}, nonce)",
+      "aad": "aad 字段原样作为附加认证数据，可为空",
+      "ciphertext": "与 plaintext 等长（GCM 不填充、不改变长度）",
+      "tag_position": "向量里 ciphertext 与 tag 分开存；命令行/库若输出 ct||tag 连写，tag 是末尾 16 字节",
+      "ghash": "GF(2^128) 位反射约定（MSB 对应 x^0）"
+    },
+    "sm2": {
+      "standard": "GB/T 32918（推荐曲线 sm2p256v1，a = p-3）",
+      "private_key": "32 字节大端标量 d ∈ [1, n-2]",
+      "public_key": "64 字节 = X(32) || Y(32)，**未压缩点、不带 0x04 前缀**",
+      "ciphertext_order": "C1C3C2 平文拼接：C1.x(32) || C1.y(32) || C3(32) || C2(len)",
+      "c1_point_encoding": "同上，C1 只放 X||Y 两个坐标，不带 0x04、不做 DER 包装",
+      "signature_format": "**raw R||S**，R(32) || S(32)，不是 DER SEQUENCE",
+      "user_id": "1234567812345678（ENTL = 0x0080）",
+      "za": "ZA = SM3(ENTL || ID || a || b || Gx || Gy || Px || Py)",
+      "signature_digest": "e = SM3(ZA || M)，签名值对 e 计算",
+      "k": "每条向量显式给出临时标量 k（< n）；宿主侧用 GmSSL 复算时需固定 rand_bytes 或直接调底层",
+      "kdf": "SM2 KDF：ct 从 1 递增，SM3(x2||y2||ct_be32) 拼接后截断；全零则重试",
+      "plaintext_len_range": "1..=255（GmSSL 的 SM2_MAX_PLAINTEXT_SIZE）"
+    },
+    "user_code": {
+      "alphabet": "0123456789ABCDEFGHJKMNPQRSTVWXYZ（去掉 I L O U）",
+      "derive": "对公钥 64 字节做 SM3，取摘要前 20 bit（大端位序、每 5 bit 一个符号）编成 4 位码",
+      "normalization": "转大写；O→0；I/L→1；去掉 '-'（以及空白）；U 非法；长度必须正好 4",
+      "check_symbol": "未并入用户码（保持 4 位）；code::check_symbol 仅为可选工具"
+    },
+    "pack": {
+      "version": 1,
+      "header_len": 40,
+      "header_fields": "magic(4)=YSPK | version(1)=1 | suite(1)=1 | flags(1)=bit0=1 | reserved(1)=0 | file_id(16) | block_size(4) | block_count(4) | plain_size(8)",
+      "record_order": "HEADER | KEY_REC | SIG_REC | MANIFEST_REC | BLOCK(0..n-1)",
+      "key_rec": "kind(1)=1 | len(4)=128 | SM2(C1C3C2) 封装的 32 字节 DK",
+      "sig_rec": "kind(1)=2 | len(4)=64 | SM2 签名 R||S，签名对象 = HEADER || MANIFEST_PLAINTEXT",
+      "manifest_rec": "ct_len(4) | ct | tag(16)",
+      "manifest_nonce": "ffffffffffffffff 80 000000（12 字节）",
+      "block_nonce": "index_be32 || 00000000 || flag(1) || 000000，flag=1 仅末块",
+      "block_rec": "index(4) | flags(1) | ct_len(4) | ct | tag(16)",
+      "kdf_block": "HKDF-SM3(salt=\"YanShu/v1/block\", ikm=DK, info=file_id, 16B)",
+      "kdf_manifest": "HKDF-SM3(salt=\"YanShu/v1/manifest\", ikm=DK, info=file_id, 16B)",
+      "aad": "HEADER 40 字节（每个数据块与清单都用它做 AAD）",
+      "block_digest": "SM3(ct || tag)，写进清单",
+      "block_count": "max(1, ceil(plain_size / block_size))；空文件 = 1 个空块",
+      "manifest_plaintext": "u16 name_len | name | u16 mime_len | mime | u32 block_size | u32 block_count | u64 plain_size | u32 digest_count | 32*digest_count"
+    }
+  },
+"#;
+
+fn packed_block_count(plain_size: usize, block_size: u32) -> usize {
+    if plain_size == 0 {
+        1
+    } else {
+        plain_size.div_ceil(block_size as usize)
+    }
+}
+
 fn main() {
     let out_path = std::env::args()
         .nth(1)
@@ -52,7 +134,8 @@ fn main() {
 
     let mut json = String::new();
     json.push_str("{\n");
-    json.push_str("  \"meta\": {\"suite\": \"SM4-GCM-128/SM3/SM2-C1C3C2\", \"pack_version\": 1, \"id\": \"1234567812345678\"},\n");
+    json.push_str("  \"meta\": {\"suite\": \"SM4-GCM-128/SM3/SM2-C1C3C2\", \"pack_version\": 1, \"id\": \"1234567812345678\", \"generated_by\": \"yanshu-sm gen-vectors\", \"byte_order\": \"所有整数与 hex 字段均为大端/网络序；hex 为小写，无 0x 前缀\"},\n");
+    json.push_str(CONVENTIONS);
 
     // ---------------- SM3
     json.push_str("  \"sm3\": [\n");
@@ -222,12 +305,15 @@ fn main() {
         let mut tag = [0u8; TAG_SIZE];
         gcm::encrypt(&c.key, &c.nonce, &c.aad, &c.pt, &mut ct, &mut tag);
         json.push_str(&format!(
-            "    {{\"name\": \"{}\", \"key\": {}, \"nonce\": {}, \"aad\": {}, \"plaintext\": {}, \"ciphertext\": {}, \"tag\": {}}}{}\n",
+            "    {{\"name\": \"{}\", \"key\": {}, \"key_bits\": 128, \"nonce\": {}, \"nonce_len\": {}, \"aad\": {}, \"aad_len\": {}, \"plaintext\": {}, \"plaintext_len\": {}, \"ciphertext\": {}, \"tag\": {}}}{}\n",
             c.name,
             hex_vec(&c.key),
             hex_vec(&c.nonce),
+            c.nonce.len(),
             hex_vec(&c.aad),
+            c.aad.len(),
             hex_vec(&c.pt),
+            c.pt.len(),
             hex_vec(&ct),
             hex_vec(&tag),
             if i + 1 == gcm_cases.len() { "" } else { "," }
@@ -271,13 +357,15 @@ fn main() {
         let k = scalar(k_label);
         let ct = sm2::encrypt(pk, &msg, &k).expect("encrypt");
         json.push_str(&format!(
-            "      {{\"name\": \"{}\", \"priv\": {}, \"pub\": {}, \"k\": {}, \"plaintext\": {}, \"ciphertext\": {}}}{}\n",
+            "      {{\"name\": \"{}\", \"priv\": {}, \"pub\": {}, \"k\": {}, \"plaintext\": {}, \"plaintext_len\": {}, \"ciphertext\": {}, \"ciphertext_len\": {}}}{}\n",
             name,
             hex_vec(sk),
             hex_vec(pk),
             hex_vec(&k.to_be_bytes()),
             hex_vec(&msg),
+            msg.len(),
             hex_vec(&ct),
+            ct.len(),
             if i + 1 == encrypt_cases.len() { "" } else { "," }
         ));
     }
@@ -294,12 +382,13 @@ fn main() {
             .expect("sign")
             .expect("k usable");
         json.push_str(&format!(
-            "      {{\"name\": \"{}\", \"priv\": {}, \"pub\": {}, \"k\": {}, \"msg\": {}, \"sig\": {}}}{}\n",
+            "      {{\"name\": \"{}\", \"priv\": {}, \"pub\": {}, \"k\": {}, \"msg\": {}, \"msg_len\": {}, \"sig\": {}, \"sig_len\": 64}}{}\n",
             name,
             hex_vec(sk),
             hex_vec(pk),
             hex_vec(&k.to_be_bytes()),
             hex_vec(msg),
+            msg.len(),
             hex_vec(&sig),
             if i + 1 == sign_cases.len() { "" } else { "," }
         ));
@@ -401,7 +490,7 @@ fn main() {
         assert_eq!(out.data, c.data);
 
         json.push_str(&format!(
-            "    {{\"name\": \"{}\", \"recipient_priv\": {}, \"recipient_pub\": {}, \"sender_priv\": {}, \"sender_pub\": {}, \"dk\": {}, \"file_id\": {}, \"k_wrap\": {}, \"k_sign\": {}, \"block_size\": {}, \"file_name\": \"{}\", \"mime\": \"{}\", \"data\": {}, \"pack\": {}}}{}\n",
+            "    {{\"name\": \"{}\", \"recipient_priv\": {}, \"recipient_pub\": {}, \"sender_priv\": {}, \"sender_pub\": {}, \"dk\": {}, \"file_id\": {}, \"k_wrap\": {}, \"k_sign\": {}, \"block_size\": {}, \"file_name\": \"{}\", \"mime\": \"{}\", \"data\": {}, \"plaintext_len\": {}, \"block_count\": {}, \"pack\": {}, \"pack_bytes\": {}}}{}\n",
             c.name,
             hex_vec(&bob.1),
             hex_vec(&bob.2),
@@ -415,7 +504,10 @@ fn main() {
             c.file_name,
             c.mime,
             hex_vec(&c.data),
+            c.data.len(),
+            packed_block_count(c.data.len(), c.block_size),
             hex_vec(&packed),
+            packed.len(),
             if i + 1 == pack_cases.len() { "" } else { "," }
         ));
     }
