@@ -424,7 +424,13 @@ def scan_storage(root: str, patterns: Sequence[Pattern], stats: Stats,
     hits: list[Hit] = []
     is_log = target == "logs"
     root = os.path.abspath(root)
-    for dirpath, dirnames, filenames in os.walk(root):
+    if os.path.isfile(root):
+        # 允许直接给单个文件（例如按日滚动的日志），否则 os.walk 会静默扫 0 个文件
+        parent, single = os.path.dirname(root), os.path.basename(root)
+        trees = [(parent, [], [single])]
+    else:
+        trees = os.walk(root)
+    for dirpath, dirnames, filenames in trees:
         dirnames.sort()
         for fn in sorted(filenames):
             path = os.path.join(dirpath, fn)

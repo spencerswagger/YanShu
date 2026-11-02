@@ -97,7 +97,7 @@ python3 qa/evidence/scan_plaintext.py \
 | 1 | `YANSHU_BLOB_DIR` | 默认 `./data/blobs`；布局 `<root>/<id[0:2]>/<id>/{prelude,chunks/<8 位序号>}` | 退出码 4，报"存储根目录不存在" |
 | 2 | `YANSHU_DATABASE_URL` | schema 由 DSN 的 `search_path` 决定，未指定即 `public`；本仓库脚本用 `--pg-schema` 传（psql 的 URI 不认 `search_path` 参数） | 退出码 4，报"拿不到 transfers / transfer_chunks" |
 | 3 | migrations | 服务端**启动时自动跑**（`internal/store` 里带 `schema_migrations` 记账）；手工跑法见 `server/README.md` | 退出码 4，报"缺表：codes、auth_challenges…" |
-| 4 | 日志位置 | `--log-path` / `--log-cmd`；**服务端只写 stdout，`YANSHU_LOG_DIR` 目前未被使用**，所以"扫哪儿"取决于部署方重定向到哪个文件 | 退出码 4，报"日志路径未知" |
+| 4 | 日志位置 | `--log-path` / `--log-cmd`；两种落地都支持：① 部署重定向 stdout（`YS_EV1_LOG_MODE=stdout`，默认）② 服务端内建按日滚动 `YANSHU_LOG_DIR`（`YS_EV1_LOG_MODE=dir`，`2bc7dae` 起可用，会按投递日期选当日文件） | 退出码 4，报"日志路径未知" |
 | 5 | 触发一次完整投递 | `--deliver-cmd '<命令>'`，命令 stdout 需给出 `code` / `package_id` / `blob_dir` / `db_url` / `log_path` 五个键 | 缺键 → 退出码 4 并点名；命令本身失败 → 2；命令成功但语料为空 → 3 |
 
 五项齐了才算"参数就绪"；任何一项缺，`--profile core-skeleton` 都会点名并以退出码 4 结束。
@@ -227,6 +227,7 @@ PostgreSQL 走 `row_to_json`：`TEXT` 列明文原样、`BYTEA` 列以 `\x<hex>`
 qa/evidence/
 ├─ scan_plaintext.py            证据一
 ├─ tamper_probe.py              证据二
+├─ STARTUP.md                   常驻实例启动配方（可直接粘走执行）
 ├─ run_evidence1_core.sh        证据一一键复跑（起真服务 → 投递 → 三处扫 → 阳性对照）
 ├─ run_evidence2_contract.sh    证据二一键复跑（契约布局，Rust 原生入口）
 ├─ run_evidence2_wasm.sh        证据二一键复跑（**wasm 生产导出路径**）

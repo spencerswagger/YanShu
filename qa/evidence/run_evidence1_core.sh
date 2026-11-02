@@ -72,10 +72,21 @@ echo "tool:   $BIN/ys-tool"
 
 echo "== 2/6 建 schema 并起服务 =="
 psql -X -q "$base_dsn" -c "create schema if not exists $schema" >/dev/null
-YANSHU_DATABASE_URL="$dsn" YANSHU_BLOB_DIR="$work/blobs" YANSHU_ADDR="127.0.0.1:$port" \
+log_mode="${YS_EV1_LOG_MODE:-stdout}"    # stdout = 重定向；dir = 服务端内建按日滚动
+if [ "$log_mode" = "dir" ]; then
+    YANSHU_LOG_DIR="$work/logs" \
+    YANSHU_DATABASE_URL="$dsn" YANSHU_BLOB_DIR="$work/blobs" YANSHU_ADDR="127.0.0.1:$port" \
+    YANSHU_VERIFIER=stub-allow \
+    YANSHU_TOKEN_SECRET="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
+    "$work/bin/yanshu-server" >"$work/stdout.log" 2>&1 &
+    LOG_SCAN="$work/logs/yanshu-server-$(date -u +%F).log"
+else
+    YANSHU_DATABASE_URL="$dsn" YANSHU_BLOB_DIR="$work/blobs" YANSHU_ADDR="127.0.0.1:$port" \
     YANSHU_VERIFIER=stub-allow \
     YANSHU_TOKEN_SECRET="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
     "$work/bin/yanshu-server" >"$work/logs/server.log" 2>&1 &
+    LOG_SCAN="$work/logs"
+fi
 SRV=$!
 trap 'kill "$SRV" 2>/dev/null || true' EXIT INT TERM
 
@@ -84,20 +95,25 @@ while [ $i -lt 60 ]; do
     if curl -fsS --max-time 2 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then break; fi
     i=$((i+1)); sleep 0.2
 done
+# 启动检查要看**真正的日志落点**：stdout 模式是重定向文件，dir 模式是当日滚动文件
+LOG_CHECK="${LOG_SCAN:-$work/logs/server.log}"
+[ -d "$LOG_CHECK" ] && LOG_CHECK="$LOG_CHECK/server.log"
+for _i in $(seq 1 20); do [ -s "$LOG_CHECK" ] && break; sleep 0.2; done
+
 # 必须是**我们自己起的**那个进程在服务：进程活着、日志里有 listening、没有 bind 失败
 if ! kill -0 "$SRV" 2>/dev/null; then
     echo "[BLOCKED] 服务进程已退出，日志尾部：" >&2
-    tail -20 "$work/logs/server.log" >&2
+    tail -20 "$LOG_CHECK" >&2
     exit 2
 fi
-if grep -q "bind: address already in use" "$work/logs/server.log" 2>/dev/null; then
+if grep -q "bind: address already in use" "$LOG_CHECK" 2>/dev/null; then
     echo "[BLOCKED] 端口 $port 被占（可能是上一轮没退干净的服务）：换 YS_EV1_PORT 重跑" >&2
-    tail -5 "$work/logs/server.log" >&2
+    tail -5 "$LOG_CHECK" >&2
     exit 2
 fi
-if ! grep -q "listening" "$work/logs/server.log" 2>/dev/null; then
-    echo "[BLOCKED] 日志里没有 listening，服务未就绪：" >&2
-    tail -20 "$work/logs/server.log" >&2
+if ! grep -q "listening" "$LOG_CHECK" 2>/dev/null; then
+    echo "[BLOCKED] 日志里没有 listening，服务未就绪（日志落点：$LOG_CHECK）：" >&2
+    tail -20 "$LOG_CHECK" >&2
     exit 2
 fi
 echo "healthz OK（port $port，pid $SRV）"
@@ -165,10 +181,18 @@ if [ -z "$(find "$SCAN_BLOB" -type f 2>/dev/null | head -1)" ]; then
 fi
 echo "  存储里已有 $(find "$SCAN_BLOB" -type f | wc -l) 个文件，可以扫了"
 
+if [ "$log_mode" = "dir" ]; then
+    if [ ! -s "$LOG_SCAN" ]; then
+        echo "[BLOCKED] 内建日志当日文件不存在或为空：$LOG_SCAN（跨天会换名，按投递时间选文件）" >&2
+        exit 2
+    fi
+    echo "  内建日志：$LOG_SCAN（$(wc -c <"$LOG_SCAN") 字节）"
+fi
+
 echo "== 5/6 三处检索 =="
 set +e
 python3 "$here/scan_plaintext.py" --profile core-skeleton \
-    --storage-root "$SCAN_BLOB" --dsn "$SCAN_DSN" --pg-schema "$schema" --log-path "$SCAN_LOG" \
+    --storage-root "$SCAN_BLOB" --dsn "$SCAN_DSN" --pg-schema "$schema" --log-path "${LOG_SCAN:-$SCAN_LOG}" \
     --sample "$work/sample/sample.json" \
     --json-out "$work/scan.json"
 SCAN_RC=$?
@@ -181,17 +205,19 @@ if [ "${YS_EV1_CONTROLS:-1}" = "1" ]; then
     scan() {
         python3 "$here/scan_plaintext.py" --profile core-skeleton \
             --storage-root "$SCAN_BLOB" --dsn "$SCAN_DSN" --pg-schema "$schema" \
-            --log-path "$SCAN_LOG" --sample "$work/sample/sample.json" >/dev/null 2>&1
+            --log-path "${LOG_SCAN:-$SCAN_LOG}" --sample "$work/sample/sample.json" >/dev/null 2>&1
     }
     # ① 存储：把明文样本塞进 blob 目录
     cp "$work/sample/sample.bin" "$work/blobs/_control_plaintext.bin"
     set +e; scan; rc_store=$?; set -e
     rm -f "$work/blobs/_control_plaintext.bin"
     # ② 日志：追加一行带文件名的请求日志
-    cp "$work/logs/server.log" "$work/logs/server.log.bak"
-    printf '%s\n' "2026-01-01T00:00:00Z level=INFO msg=\"upload name=$NAME\"" >> "$work/logs/server.log"
+    LOG_CTL="${LOG_SCAN:-$work/logs/server.log}"
+    [ -d "$LOG_CTL" ] && LOG_CTL="$LOG_CTL/server.log"
+    cp "$LOG_CTL" "$LOG_CTL.bak"
+    printf '%s\n' "2026-01-01T00:00:00Z level=INFO msg=\"upload name=$NAME\"" >> "$LOG_CTL"
     set +e; scan; rc_log=$?; set -e
-    mv "$work/logs/server.log.bak" "$work/logs/server.log"
+    mv "$LOG_CTL.bak" "$LOG_CTL"
     # ③ 数据库：把文件名写进 nickname 列
     psql -X -q "$base_dsn" -c "set search_path=$schema; update codes set nickname='$NAME' where code=(select code from codes limit 1)" >/dev/null
     set +e; scan; rc_db=$?; set -e
