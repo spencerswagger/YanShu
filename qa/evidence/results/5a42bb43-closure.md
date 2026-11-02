@@ -68,7 +68,20 @@ go build -trimpath -buildvcs=false -ldflags "-s -w" -o deliver ./cmd/deliver
 | **旧凭据 → 401 `AUTH_TOKEN_STALE`**（非 500、非 INVALID） | PASS |
 | 启动日志无 `does not exist` / `sweep failed` | PASS |
 
-复跑：`python3 qa/evidence/check_restore_after_drop.py --binary <bin> --dsn "<DSN>"`。
+**更强的一条（真实迁移路径，非手工模拟）**：用**含 `0004_drop_token_epoch.sql` 的 `d655e16` 二进制**建库
+（它真的把列与状态表删掉）→ 插历史行 → 换本版本 `-migrate-only` → **12/12 PASS**：
+列恢复、状态表恢复、历史行 `pre-kid`、连跑两次 `rows 1→1`、服务起 + `/healthz` 200、
+**旧凭据 401 `AUTH_TOKEN_STALE`**（恢复没有复活旧凭据）。
+
+复跑（两种力度都有脚本）：
+
+```sh
+# 手工模拟损坏（快）
+python3 qa/evidence/check_restore_after_drop.py --binary <bin> --dsn "<DSN>"
+# 真实迁移路径（旧版含 drop → 新版恢复）
+python3 qa/evidence/check_restore_from_real_drop.py \
+  --old-binary <d655e16 编的> --new-binary <新版> --dsn "<DSN>"
+```
 
 ## 三、KID 矩阵（逐字错误名与 message）
 
