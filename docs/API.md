@@ -239,7 +239,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 凭证 | 授予什么 | 绑定 | 寿命 | 谁持有 |
 |---|---|---|---|---|
 | `transfer_id` | 读该传输的元数据与密文（**能力凭证**，持有即可读） | 单一传输 | 传输生命周期 | 接收方（经已鉴权通道获得） |
-| `upload_token` | 写操作：`PUT prelude`、`PUT chunks/{i}`、`GET status`、`POST complete` | 单一传输 + 签发时的 KID | **6 小时**（且 ≤ 传输 `expires_at`） | 发送方 |
+| `upload_token` | 写操作：`PUT prelude`、`PUT chunks/{i}`、`GET status`、`POST complete` | 单一传输 + 签发时的 KID | **6 小时**（且 ≤ 传输 `expires_at`）**（待实测确认，见 `contract-rulings` K6）** | 发送方 |
 | `download_id` | 下载租约：`GET chunks/{i}`、`POST ack` | 单一传输的**一次**租约 + 签发时的 KID | 30 分钟 | 接收方 |
 
 `transfer_id` 与 token **互不替代**：前者能读密文，后者能写。用户码不是凭证（§1.1）。
@@ -290,7 +290,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 
 | 运维操作 | 旧凭据结果 | 语义 |
 |---|---|---|
-| **只换 `TOKEN_SECRET`**（`KID` 不变） | **仍然有效**（`SM3(token)` 与记录一致、`KID` 一致） | `TOKEN_SECRET` 只是派生盐：轮换它**不吊销**任何凭据，只影响此后新签发凭据的派生值 |
+| **只换 `TOKEN_SECRET`**（`KID` 不变） | **仍然有效**（`SM3(token)` 与记录一致、`KID` 一致）**（待实测确认，见 `contract-rulings` K6）** | `TOKEN_SECRET` 只是派生盐：轮换它**不吊销**任何凭据，只影响此后新签发凭据的派生值 |
 | **递增 `KID`**（`TOKEN_SECRET` 可不变） | `401 AUTH_TOKEN_STALE` | 版本已轮换——"我签发过，但版本作废了" |
 | 两者都做 | `401 AUTH_TOKEN_STALE` | 先比 `KID`，版本失效优先 |
 
@@ -302,7 +302,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 |---|---:|---|---|
 | 缺凭证头 | 401 | `AUTH_MISSING` | 补头 |
 | 凭据不存在 / 格式错 / 与任何已签发凭据不匹配 | 401 | `AUTH_TOKEN_INVALID` | 重新申领（上传见 §1.7.5；下载重新 `GET /prelude`）；**不要**重试同一凭据 |
-| 凭据超过自身有效期：**上传 6 小时** / **下载租约 30 分钟** | 401 | `AUTH_TOKEN_EXPIRED` | 上传走 §1.7.5 重签发（已传块不重传）；下载重新 `GET /prelude` 取新租约 |
+| 凭据超过自身有效期：**上传 6 小时** / **下载租约 30 分钟** | 401 | `AUTH_TOKEN_EXPIRED`（**待实测确认**，见 `contract-rulings` K6） | 上传走 §1.7.5 重签发（已传块不重传）；下载重新 `GET /prelude` 取新租约 |
 | 凭据记录的 `KID` 落后于当前版本（版本已轮换） | 401 | `AUTH_TOKEN_STALE` | 重新挑战 → 签名 → 取新凭据（§1.7.5）；**不要重算签名**；文案"凭据已过期版本，请重新获取" |
 | 传输进入终态 | 410 | `TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` | 停止并清理本地 |
 
