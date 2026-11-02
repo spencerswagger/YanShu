@@ -42,7 +42,7 @@
 
 | R11 | 凭据类错误名字面值反复变更 | **已定稿**：凭据类三码 —— `AUTH_TOKEN_STALE`（`KID` 轮换）/ `AUTH_TOKEN_INVALID`（值不匹配·格式错·不存在）/ `AUTH_TOKEN_EXPIRED`（上传 6 h / 租约 30 min）；签名类 `AUTH_SIGNATURE_INVALID` 仅用于签名本身；传输终结走 `410`。本期**不定义**任何"显式吊销"专用名（留给将来的显式吊销列表语义） | API §1.7.4、§10.1 | 否 |
 
-**K3 已撤销**：凭据版本机制（`KID`）已落地，不存在"版本机制缺失"这类偏离；凭据错误名以契约定稿 `AUTH_TOKEN_STALE` 为准。
+**K3（登记保留）**：凭据版本机制（`KID`）已落地，不存在"版本机制缺失"这类偏离；错误名**以契约为准**（`AUTH_TOKEN_STALE`），实现侧须与之对齐——`grep -rn "AUTH_TOKEN_REVOKED" server/` 应为 **0**（Core `06c9f56` 自报 0、Gate 的契约-实现双向字面检查 PASS；此后若再出现 `REVOKED` 即判偏差）。
 
 ## 凭证吊销 · 可复跑用例（验收集直接抄）
 
@@ -72,7 +72,7 @@
 | K4 | 内核二进制曾**未被 git 跟踪**：根 `.gitignore` 的 `*.wasm` 让 `git add -A` 静默跳过 `server/kernel/yanshu_sm.wasm`，仓库里从来没有这份内核，别人 clone 下来拿不到 | 内核资产 MUST 以 **git blob** 形式存在于仓库：`git cat-file blob HEAD:server/kernel/yanshu_sm.wasm` 的 sha256 == 冻结值 `c1b87d0a…7259f`（127,313 B）。**仅工作区有文件不算交付**（修法：`server/.gitignore` 加 `!kernel/yanshu_sm.wasm`） | 已修复，陷阱登记保留 |
 | K5 | **构建入口决定字节**：从成员目录 `crypto/sm` 构建会绕过 workspace 的 `Cargo.lock` 与 `[profile.release]`（`opt-level=3`/`lto=true`/`codegen-units=1`），得 130,653 B / `8b89dd7f…`；从 `crypto/` 用 `-p yanshu-sm` 才是 127,313 B / `c1b87d0a…` | 唯一正确命令：`cd crypto && cargo build --release --target wasm32-unknown-unknown -p yanshu-sm`；**不要**从成员 crate 目录构建。规范条文见 `CRYPTO-PACK` §18 | 已固化，陷阱登记保留 |
 
-> 编号说明：`K3` 已撤销（KID 机制已落地），故本表在 K3 处留空，其余连续；`K2` 保留为"已实现（结案）"的记录，便于追溯"曾登记为未实现、`d8d90a2` 起落地"。
+> 编号说明：`K2` 保留为"已实现（结案）"的记录（曾登记为未实现、后落地）；`K3` 保留为"错误名对齐"的登记（详见上表下方说明）；其余连续。
 
 ## 易错点（自查清单）
 
