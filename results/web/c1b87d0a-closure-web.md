@@ -32,12 +32,12 @@ B 端：待收 → 取 prelude（`ys_unpack_meta_prelude` 先显示「来自谁/
 | 昵称签名 `NICKNAME_UPDATE`（真挑战 + 真 DER 签名） | **200** | `{"code":"…","nickname":"阿雁·真认证",…}` |
 | 改 `SIG_INPUT` 一字节（DER 末字节取反） | **401** | `{"error":{"code":"AUTH_SIGNATURE_INVALID","message":"signature verification failed","request_id":"b55a2dcf24652b21"}}` |
 | 复用已用挑战 | **401** | `{"error":{"code":"AUTH_CHALLENGE_INVALID",…}}`（未误报成签名错） |
-| 请求路径码 ≠ 头里的码（签名对头里那枚码有效） | **401 `AUTH_SIGNATURE_INVALID`** | `{"error":{"code":"AUTH_SIGNATURE_INVALID","message":"signature verification failed","request_id":"064a4515b477d44d"}}` |
+| 请求路径码 ≠ 头里的码（签名对头码有效） | **401 `AUTH_CODE_MISMATCH`** | `{"error":{"code":"AUTH_CODE_MISMATCH","message":"X-YS-Code does not match the signed code","request_id":"req_732b4a4470d592b7"}}` |
 
-> **偏差（如实记，需 Core 判）**：契约要求此场景返回 **`AUTH_CODE_MISMATCH`**（签名有效、码不一致要能分开）；
-> 本次在宿主当前产物上得到的是 `AUTH_SIGNATURE_INVALID`。同一地址更早一次运行曾返回 `AUTH_CODE_MISMATCH`
-> （`results/web/c1b87d0a-sm2-auth-branches.json`），说明该分支行为随服务端产物变化，前端两种码都会分开提示，
-> 但服务端当前实现把“路径码≠头码”归到了验签失败。
+> **更正（撤回一条假偏差）**：此前本文件记过“宿主返回 `AUTH_SIGNATURE_INVALID`”，那是**我构造错了**
+> （签名与头码不对应，服务端按头码重建 `SIG_INPUT` 时验签先失败）。用最小复现
+> `web/scripts/repro-code-mismatch.mjs`（只让路径码 ≠ 头码、签名严格按头码构造）在**同一宿主**复跑：
+> **401 `AUTH_CODE_MISMATCH`**，与契约一致。该条偏差**撤回**，偏差清单以 Gate 的证伪结论为准。
 
 ## 401 凭证自愈（宿主 `EPOCH=1` 无法构造，用交付二进制本地真演练）
 
