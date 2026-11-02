@@ -38,7 +38,7 @@ type ConfigResponse struct {
 	STUNURLs          []string     `json:"stun_urls"`
 	WSURL             *string      `json:"ws_url"`
 	Limits            ConfigLimits `json:"limits"`
-	// TokenEpoch 是当前只读的 KID（契约 §1.7 的 token_epoch；本实现里就是 KID）。
+	// TokenEpoch 是当前只读的密钥版本（递增即吊销全部旧 upload_token）。
 	TokenEpoch int64 `json:"token_epoch"`
 }
 

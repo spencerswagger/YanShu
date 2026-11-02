@@ -61,8 +61,8 @@ func newEnv(t *testing.T, mode string) *env {
 	e.cfg = config.Config{
 		Verifier:          config.VerifierMode(mode),
 		TokenSecret:       []byte("test-secret"),
-		TokenKID:          "1",
-		TokenKIDNum:       1,
+		TokenEpoch:        "1",
+		TokenEpochNum:     1,
 		STUNURLs:          []string{"stun:stun.example:3478"},
 		WSURL:             "wss://example/v1/ws",
 		StorageQuotaBytes: 64 << 20,
@@ -82,8 +82,8 @@ func newEnv(t *testing.T, mode string) *env {
 		t.Fatal(err)
 	}
 	e.tokens = tokens
-	if _, err := st.EnsureTokenKID(context.Background(), 1, e.now); err != nil {
-		t.Fatalf("seed token kid: %v", err)
+	if _, err := st.EnsureTokenEpoch(context.Background(), 1, e.now); err != nil {
+		t.Fatalf("seed token epoch: %v", err)
 	}
 	e.logBuf = &bytes.Buffer{}
 	e.api = New(e.cfg, st, blobs, v, tokens, ratelimit.NewMemory(), ratelimit.NewMemoryLockout(),
@@ -286,6 +286,9 @@ func TestConfig(t *testing.T) {
 	}
 	if cfg.WSURL == nil || *cfg.WSURL == "" {
 		t.Fatalf("missing ws url: %+v", cfg)
+	}
+	if cfg.TokenEpoch != 1 {
+		t.Fatalf("token_epoch = %d, want 1", cfg.TokenEpoch)
 	}
 	if strings.Contains(string(resp.body), "turn:") {
 		t.Fatal("config must not advertise TURN")
@@ -1137,7 +1140,7 @@ func TestTokenRotationMatrix(t *testing.T) {
 		spec.HeaderUploadToken: "not-a-real-token",
 	}), spec.ErrAuthTokenInvalid)
 
-	// ① 只换 secret（KID 不变）→ 旧 token 变成"凭据不匹配"。
+	// ① 只换 secret（EPOCH 不变）→ 旧 token 仍然有效（secret 只是派生盐）。
 	rotatedTokens, err := auth.NewTokenIssuer([]byte("rotated-secret"))
 	if err != nil {
 		t.Fatal(err)
@@ -1152,12 +1155,13 @@ func TestTokenRotationMatrix(t *testing.T) {
 	e2.srv = httptest.NewServer(e2.api.Handler())
 	defer e2.srv.Close()
 
-	// 只换 secret → 派生值变了 → 凭据不匹配（AUTH_TOKEN_INVALID），不是签名类。
-	e2.wantError(e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
+	if got := e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
 		spec.HeaderUploadToken: tr.UploadToken,
-	}), spec.ErrAuthTokenInvalid)
+	}); got.status != 200 {
+		t.Fatalf("only-secret must keep the token alive, got %d %s", got.status, got.body)
+	}
 
-	// ② KID 递增 → 旧 token 立刻 STALE。
+	// ② EPOCH 递增 → 旧 token 立刻 STALE。
 	if _, err := e.st.Pool().Exec(context.Background(),
 		`UPDATE token_kid_state SET kid = 2 WHERE id = true`); err != nil {
 		t.Fatal(err)
@@ -1172,6 +1176,22 @@ func TestTokenRotationMatrix(t *testing.T) {
 	if resp := e2.putPrelude(tr2.UploadToken, tr2, f2.Prelude); resp.status != http.StatusCreated {
 		t.Fatalf("after kid bump new token: %d %s", resp.status, resp.body)
 	}
+}
+
+// 上传凭据 6 小时过期 → AUTH_TOKEN_EXPIRED。
+func TestUploadTokenExpires(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, nil)
+	if resp := e.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusCreated {
+		t.Fatalf("put: %d", resp.status)
+	}
+	e.advance(6*time.Hour + time.Minute)
+	e.wantError(e.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
+		spec.HeaderUploadToken: tr.UploadToken,
+	}), spec.ErrAuthTokenExpired)
 }
 
 // 真认证链路：注册 → 建传输 → 分块 → complete → 取件 → ack，全部用真实 SM2 签名。

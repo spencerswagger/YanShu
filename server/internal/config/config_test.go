@@ -8,7 +8,7 @@ import (
 func TestValidateForServeRequiresTokenSecret(t *testing.T) {
 	t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
 	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
-	t.Setenv("YANSHU_TOKEN_KID", "1")
+	t.Setenv("YANSHU_TOKEN_EPOCH", "1")
 	t.Setenv("YANSHU_TOKEN_SECRET", "")
 
 	cfg, err := Load()
@@ -60,7 +60,7 @@ func TestSM2RequiresKernelWhenServing(t *testing.T) {
 	t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
 	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
 	t.Setenv("YANSHU_TOKEN_SECRET", strings.Repeat("k", MinTokenSecretLen))
-	t.Setenv("YANSHU_TOKEN_KID", "1")
+	t.Setenv("YANSHU_TOKEN_EPOCH", "1")
 	t.Setenv("YANSHU_VERIFIER", "sm2")
 	t.Setenv("YANSHU_KERNEL_WASM", "")
 
@@ -78,18 +78,18 @@ func TestSM2RequiresKernelWhenServing(t *testing.T) {
 }
 
 // 缺 KID 必须拒绝启动（fail closed）。
-func TestTokenKIDRequired(t *testing.T) {
+func TestTokenEpochRequired(t *testing.T) {
 	t.Setenv("YANSHU_DATABASE_URL", "postgres://x@127.0.0.1:5432/x?sslmode=disable")
 	t.Setenv("YANSHU_BLOB_DIR", t.TempDir())
 	t.Setenv("YANSHU_TOKEN_SECRET", strings.Repeat("k", MinTokenSecretLen))
-	t.Setenv("YANSHU_TOKEN_KID", "")
+	t.Setenv("YANSHU_TOKEN_EPOCH", "")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if err := cfg.ValidateForServe(); err == nil || !strings.Contains(err.Error(), "YANSHU_TOKEN_KID") {
-		t.Fatalf("missing KID: err=%v", err)
+	if err := cfg.ValidateForServe(); err == nil || !strings.Contains(err.Error(), "YANSHU_TOKEN_EPOCH") {
+		t.Fatalf("missing EPOCH: err=%v", err)
 	}
 }
 

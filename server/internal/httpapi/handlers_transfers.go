@@ -115,7 +115,7 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 				a.internalError(w, r, "get idempotent transfer", err)
 				return
 			}
-			cur, err := a.store.CurrentTokenKID(ctx)
+			cur, err := a.store.CurrentTokenEpoch(ctx)
 			if err != nil {
 				a.internalError(w, r, "current token kid", err)
 				return
@@ -170,12 +170,12 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, "transfer id", err)
 		return
 	}
-	kid, err := a.store.CurrentTokenKID(ctx)
+	epoch, err := a.store.CurrentTokenEpoch(ctx)
 	if err != nil {
 		a.internalError(w, r, "current token kid", err)
 		return
 	}
-	token, err := a.tokens.UploadToken(transferID, kid)
+	token, err := a.tokens.UploadToken(transferID, epoch)
 	if err != nil {
 		a.internalError(w, r, "upload token", err)
 		return
@@ -194,7 +194,7 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(time.Duration(ttl) * time.Second),
 		UploadTokenSM3: auth.UploadTokenHash(token),
-		UploadTokenKID: strconv.FormatInt(kid, 10),
+		UploadTokenKID: strconv.FormatInt(epoch, 10),
 		UploaderIP:     ip,
 	})
 	if err != nil {
@@ -556,20 +556,24 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 		return store.Transfer{}, false
 	}
 	// 判定顺序（先凭据后状态）：
-	// ① KID 不符 → AUTH_TOKEN_STALE（KID 是唯一吊销开关，与 secret 无关）
-	kid, err := a.store.CurrentTokenKID(r.Context())
+	// ① EPOCH 不符 → AUTH_TOKEN_STALE（EPOCH 是唯一吊销开关，递增即生效、无需重启）
+	epoch, err := a.store.CurrentTokenEpoch(r.Context())
 	if err != nil {
-		a.internalError(w, r, "current token kid", err)
+		a.internalError(w, r, "current token epoch", err)
 		return store.Transfer{}, false
 	}
-	if t.UploadTokenKID != strconv.FormatInt(kid, 10) {
+	if t.UploadTokenKID != strconv.FormatInt(epoch, 10) {
 		writeError(w, r, apiError{code: spec.ErrAuthTokenStale})
 		return store.Transfer{}, false
 	}
-	// ② 凭据不匹配（伪造 / 串了传输 / 签发后 TOKEN_SECRET 被轮换）→ AUTH_TOKEN_INVALID
-	rowKID, _ := strconv.ParseInt(t.UploadTokenKID, 10, 64)
-	if !a.tokens.Derives(token, t.ID, rowKID, t.UploadTokenSM3) {
+	// ② 值不对（伪造/串传输）→ AUTH_TOKEN_INVALID。**不重算**：secret 只是派生盐。
+	if !auth.ValidateHash(token, t.UploadTokenSM3) {
 		writeError(w, r, apiError{code: spec.ErrAuthTokenInvalid})
+		return store.Transfer{}, false
+	}
+	// ③ 上传凭据 6 小时过期 → AUTH_TOKEN_EXPIRED（传输终结仍走 410）
+	if a.now().After(t.CreatedAt.Add(spec.UploadTokenTTL)) {
+		writeError(w, r, apiError{code: spec.ErrAuthTokenExpired})
 		return store.Transfer{}, false
 	}
 	return t, true

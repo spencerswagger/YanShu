@@ -364,9 +364,9 @@ func (a *API) checkLease(w http.ResponseWriter, r *http.Request, t store.Transfe
 		fail(w, r, spec.ErrDownloadNotStarted)
 		return errors.New("invalid lease")
 	}
-	// 租约 30 分钟：过期仍按"没拿到有效租约"处理（409 DOWNLOAD_NOT_STARTED）。
+	// 租约 30 分钟：过期属"凭据过期"（401 AUTH_TOKEN_EXPIRED），不是"没开始"（409）。
 	if !d.LeaseExpiresAt.After(a.now()) {
-		fail(w, r, spec.ErrDownloadNotStarted)
+		writeError(w, r, apiError{code: spec.ErrAuthTokenExpired})
 		return errors.New("lease expired")
 	}
 	return nil

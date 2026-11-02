@@ -36,9 +36,9 @@ type Config struct {
 
 	// TokenSecret 是 upload_token 的 HMAC 密钥（只作派生盐）。
 	TokenSecret []byte
-	// TokenKID 是 token 的密钥版本（严格单调递增；唯一吊销开关）。
-	TokenKID    string
-	TokenKIDNum int64
+	// TokenEpoch 是 token 的密钥版本（严格单调递增；唯一吊销开关）。
+	TokenEpoch    string
+	TokenEpochNum int64
 
 	// 对外配置（GET /v1/config）。
 	STUNURLs []string
@@ -93,9 +93,9 @@ func (c Config) ValidateForServe() error {
 		return fmt.Errorf("config: YANSHU_VERIFIER=sm2 requires the wasm kernel; " +
 			"set YANSHU_KERNEL_WASM=/path/to/yanshu_sm.wasm (repo ships it at server/kernel/yanshu_sm.wasm)")
 	}
-	if c.TokenKIDNum <= 0 {
+	if c.TokenEpochNum <= 0 {
 		// fail closed：没有 KID 就无法判断"旧凭据"，宁可拒绝启动。
-		return fmt.Errorf("config: YANSHU_TOKEN_KID is required when serving (positive decimal integer)")
+		return fmt.Errorf("config: YANSHU_TOKEN_EPOCH is required when serving (positive decimal integer)")
 	}
 	if len(c.TokenSecret) < MinTokenSecretLen {
 		return fmt.Errorf("config: YANSHU_TOKEN_SECRET is required when serving (>=%d bytes); "+
@@ -125,17 +125,17 @@ func Load() (Config, error) {
 	if secret := os.Getenv("YANSHU_TOKEN_SECRET"); secret != "" {
 		c.TokenSecret = []byte(secret)
 	}
-	kidRaw := os.Getenv("YANSHU_TOKEN_KID")
+	kidRaw := os.Getenv("YANSHU_TOKEN_EPOCH")
 	if kidRaw == "" {
-		kidRaw = os.Getenv("YANSHU_TOKEN_EPOCH") // 兼容旧变量名
+		kidRaw = os.Getenv("YANSHU_TOKEN_KID") // 兼容旧变量名
 	}
 	if kidRaw != "" {
 		n, err := strconv.ParseInt(kidRaw, 10, 64)
 		if err != nil || n <= 0 {
-			return Config{}, fmt.Errorf("config: YANSHU_TOKEN_KID must be a positive decimal integer (got %q)", kidRaw)
+			return Config{}, fmt.Errorf("config: YANSHU_TOKEN_EPOCH must be a positive decimal integer (got %q)", kidRaw)
 		}
-		c.TokenKID = strconv.FormatInt(n, 10)
-		c.TokenKIDNum = n
+		c.TokenEpoch = strconv.FormatInt(n, 10)
+		c.TokenEpochNum = n
 	}
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: YANSHU_DATABASE_URL is required")

@@ -107,21 +107,21 @@ check "baseline status" 200 "" "$(status_of "$PKG1" "$TOK1")"
 check "wrong token" 401 "AUTH_TOKEN_INVALID" "$(status_of "$PKG1" "not-a-real-token")"
 stop_server
 
-echo "== 2) 只换 TOKEN_SECRET（KID 不变）→ 旧 token 凭据不匹配 =="
+echo "== 2) 只换 TOKEN_SECRET（EPOCH 不变）→ 旧 token 仍有效 =="
 start_server "rotation-secret-0002" "1"
-check "only-secret: 旧 token" 401 "AUTH_TOKEN_INVALID" "$(status_of "$PKG1" "$TOK1")"
+check "only-secret: 旧 token" 200 "" "$(status_of "$PKG1" "$TOK1")"
 set -- $(new_transfer); PKG2=$1; TOK2=$2
 check "only-secret: 新 token" 200 "" "$(status_of "$PKG2" "$TOK2")"
 stop_server
 
-echo "== 3) KID +1（secret 不变）→ 旧 token 立刻 STALE =="
+echo "== 3) EPOCH +1（secret 不变）→ 旧 token 立刻 STALE =="
 start_server "rotation-secret-0002" "2"
-check "kid+1: 旧 token" 401 "AUTH_TOKEN_STALE" "$(status_of "$PKG2" "$TOK2")"
+check "epoch+1: 旧 token" 401 "AUTH_TOKEN_STALE" "$(status_of "$PKG2" "$TOK2")"
 set -- $(new_transfer); PKG3=$1; TOK3=$2
-check "kid+1: 新 token" 200 "" "$(status_of "$PKG3" "$TOK3")"
+check "epoch+1: 新 token" 200 "" "$(status_of "$PKG3" "$TOK3")"
 stop_server
 
-echo "== 4) KID 调小 → 拒绝启动 =="
+echo "== 4) EPOCH 调小 → 拒绝启动 =="
 if YANSHU_DATABASE_URL="$DSN" YANSHU_BLOB_DIR="$BLOB" YANSHU_ADDR="127.0.0.1:$PORT" \
    YANSHU_VERIFIER=stub-allow YANSHU_TOKEN_SECRET="rotation-secret-0002" YANSHU_TOKEN_KID="1" \
    "$BIN" >"$WORK/kid-lower.log" 2>&1; then

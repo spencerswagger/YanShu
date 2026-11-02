@@ -113,15 +113,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// KID 只增不减：调小会让被吊销的旧凭据复活，直接拒绝启动（相等允许，重复启动幂等）。
-	if stored, err := st.EnsureTokenKID(ctx, cfg.TokenKIDNum, time.Now().UTC()); err != nil {
-		if errors.Is(err, store.ErrTokenKIDLower) {
-			return fmt.Errorf("config: YANSHU_TOKEN_KID must increase (current=%d, provided=%d); refusing to start",
-				stored, cfg.TokenKIDNum)
+	// EPOCH 只增不减：调小会让被吊销的旧凭据复活，直接拒绝启动（相等允许，重复启动幂等）。
+	if stored, err := st.EnsureTokenEpoch(ctx, cfg.TokenEpochNum, time.Now().UTC()); err != nil {
+		if errors.Is(err, store.ErrTokenEpochLower) {
+			return fmt.Errorf("config: YANSHU_TOKEN_EPOCH must increase (current=%d, provided=%d); refusing to start",
+				stored, cfg.TokenEpochNum)
 		}
-		return fmt.Errorf("check token kid: %w", err)
+		return fmt.Errorf("check token epoch: %w", err)
 	} else {
-		log.Info("token kid", "provided", cfg.TokenKIDNum, "current", stored)
+		log.Info("token epoch", "provided", cfg.TokenEpochNum, "current", stored)
 	}
 
 	verifier, err := auth.NewVerifier(string(cfg.Verifier), cfg.ResolveKernelWASM(), log)
