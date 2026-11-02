@@ -103,3 +103,52 @@ token 轮换（kid → `AUTH_TOKEN_REVOKED`）。
 其余项全部闭合：证据二（生产路径 6/6 + 11/11 + 变体 18/18）、用户码/校验位四形态 26/26 + 反向用例、
 prelude-only 6/6、证据一（存储/DB/日志零命中 + 三组阳性对照，含真 `sm2`）、
 token 矩阵（INVALID/STALE 两码 + 四码覆盖）、服务端内嵌内核同源（白名单 + 向量套件）。
+
+## 经验条目（防重复踩坑）
+
+### 经验一：同源不同字节的根因是**构建入口用错**（2026-11-02）
+
+之前那对 `127,313 B / c1b87d0a…` 与 `130,653 B / 8b89dd7f…` 不是"环境差异"，是**从错的目录构建**：
+
+| 命令 | 结果 |
+|---|---|
+| `cd crypto && cargo build --release --target wasm32-unknown-unknown -p yanshu-sm` | **127,313 B / `c1b87d0a…`**（唯一正确） |
+| `cd crypto/sm && cargo build …`（成员目录） | 130,653 B / `8b89dd7f…`（绕过 workspace 的 `Cargo.lock` 与 `[profile.release]`） |
+
+教训：① 同一份源码可以有**两种字节**，判定只能比 **sha256**——commit 号、导出数、`ys_version()`、
+"能跑通"都不足以为凭；② 交付说明必须写**唯一正确构建命令**并注明"禁止从成员目录构建"。
+
+（另一面：根 `.gitignore` 的 `*.wasm` 会让 `server/kernel/yanshu_sm.wasm` 被静默跳过——
+有的提交里它是**空 blob**，别人 clone 拿不到内核。）
+
+### 经验二：入参宽度错一位造成的"假缺陷"
+
+同一把公钥 `PB_S`：传 **64 字节 `X‖Y` → `AWQW`**（正确）；误传 **65 字节（`0x04‖X‖Y`）给只收
+64 字节的 `ys_user_code`** → 内核把 `0x04` 当 X 首位、整体错位一字节 → `X2EH`，且**不报错**。
+规矩：**每个公钥入参函数调用前显式断言缓冲区长度**；65 字节形态只走 `ys_user_code_wire`。
+
+### 经验三：零命中的证据必须配阳性对照
+
+"存储/日志/DB 三处零命中"本身可能是检测器瞎了。每轮必须做三组注入对照（塞明文到存储、
+写文件名到日志、写文件名到 DB）→ 期望 exit=1；复原 → exit=0。对照不成立即判本轮不可信。
+
+### 经验四：向量超出 ABI 能力时，标"不可执行 + 别处断言"，而不是判 FAIL
+
+**做法（2026-11-02 定，Rune `221c300` 落地）**：向量自带 `executable` 字段，`false` 表示
+"该条需要的能力超出已验证 ABI"，**不计入通过/拒绝统计**，并在 `note` 写明原因与替代覆盖点。
+
+样板 `different_user_id`：只改 `user_id`、签名体不变，而 ABI 验签**没有 userID 入参**
+（固定国标默认串），固定默认 ID 下**必然通过**——当"必拒"就会把正确实现判成 FAIL。
+于是向量改成 `expect_verify=true` + **`executable:false`**，原意图"换 ID 必拒"挪到
+**库层断言** `sig_conventions.rs::different_user_id_must_fail_at_library_level`。
+
+统计口径：**15 = 14 可执行（10 正 + 4 负）+ 1 不可执行**；
+`check_server_kernel.py` 直接读 `executable` 跳过并打印原因（老向量无该字段时回退看 `user_id`）。
+
+### 经验五：假 PASS 的两种来源（都被实盘抓到过）
+
+1. **旧进程占端口**：第二个实例 `bind: address already in use` 起不来，旧实例继续应答 →
+   旧 token 得 200、密文落旧目录而扫新目录却"PASS"。修法：端口由内核分配、三重判活
+   （进程活 + 日志 `listening` + 无 bind 错误）、并断言落盘路径在本次 blob 根下。
+2. **`--log-path` 指向单个文件**：`os.walk` 遍历不到 → 日志 0 份却 PASS。修法：文件/目录都支持，
+   逐目标空语料告警。
