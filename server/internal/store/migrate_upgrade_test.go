@@ -86,3 +86,24 @@ func TestMigrateRestoresAfterDrop(t *testing.T) {
 		t.Fatalf("second migrate: %v", err)
 	}
 }
+
+// 回归：uploader_ip 为 NULL（无 IP 或历史行）时 GetTransfer 不能 500。
+func TestGetTransferWithNullUploaderIP(t *testing.T) {
+	st := testutil.NewStore(t, "store")
+	ctx := context.Background()
+	if _, err := st.Pool().Exec(ctx, `INSERT INTO transfers
+		(transfer_id,sender_code,recipient_code,plaintext_size,chunk_size,chunk_count,prelude_len,
+		 prelude_sm3,state,max_downloads,created_at,updated_at,expires_at,upload_token_sm3,upload_token_kid)
+		VALUES ('0123456789abcdef0123456789abcdef','AWQW','X2EH',1024,1024,1,100,
+		        decode(repeat('00',32),'hex'),'UPLOADING',1,now(),now(),now()+interval '1 day',
+		        decode(repeat('11',32),'hex'),'pre-kid')`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetTransfer(ctx, "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("get transfer with NULL uploader_ip: %v", err)
+	}
+	if got.UploaderIP != "" {
+		t.Fatalf("uploader ip = %q", got.UploaderIP)
+	}
+}

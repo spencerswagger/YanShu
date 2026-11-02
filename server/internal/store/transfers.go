@@ -57,11 +57,15 @@ const transferColumns = `transfer_id, sender_code, recipient_code, plaintext_siz
 
 func scanTransfer(row interface{ Scan(...any) error }) (Transfer, error) {
 	var t Transfer
+	var uploaderIP *string
 	err := row.Scan(&t.ID, &t.SenderCode, &t.RecipientCode, &t.PlaintextSize, &t.ChunkSize,
 		&t.ChunkCount, &t.PreludeLen, &t.PreludeSM3, &t.PreludeReceived, &t.ReceivedChunks,
 		&t.TotalCiphertextBytes, &t.DownloadCount, &t.MaxDownloads, &t.State,
 		&t.TerminalReason, &t.TerminalAt, &t.CreatedAt, &t.UpdatedAt, &t.ExpiresAt,
-		&t.UploadTokenSM3, &t.UploadTokenKID, &t.UploaderIP)
+		&t.UploadTokenSM3, &t.UploadTokenKID, &uploaderIP)
+	if err == nil && uploaderIP != nil {
+		t.UploaderIP = *uploaderIP
+	}
 	return t, err
 }
 
