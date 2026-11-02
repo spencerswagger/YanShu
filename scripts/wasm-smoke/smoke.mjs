@@ -255,6 +255,39 @@ if (e.ys_header_len() !== 112) throw new Error(`header len ${e.ys_header_len()} 
   if (meta.name !== "报告.pdf" || meta.size !== data.length) throw new Error(`meta ${JSON.stringify(meta)}`);
   if (meta.sender_code !== code) throw new Error(`sender_code ${meta.sender_code} != ${code}`);
 
+  // 只凭 prelude 取元信息（契约 §4.3/§8.1/§10.2）：应成功且标 scope=prelude / data_verified=false
+  {
+    const pkBytes = pk.bytes;
+    const u64at = (off) => Number(new DataView(pkBytes.buffer, pkBytes.byteOffset + off, 8).getBigUint64(0, false));
+    const preludeLen = 112 + 65 + 129 + u64at(40) + u64at(72);
+    // 只给前 preludeLen 字节
+    let rc = e.ys_unpack_meta_prelude(pk.ptr, preludeLen, recipientPrivPtr, 0, 0, lenPtr);
+    expectRc(rc, -2, "meta_prelude probe");
+    const need = dv().getUint32(lenPtr, true);
+    const mp = alloc(need);
+    check(e.ys_unpack_meta_prelude(pk.ptr, preludeLen, recipientPrivPtr, mp, need, lenPtr), "meta_prelude");
+    const meta = JSON.parse(Buffer.from(read(mp, need)).toString("utf8"));
+    if (meta.scope !== "prelude" || meta.data_verified !== false) {
+      throw new Error(`meta_prelude flags: ${JSON.stringify(meta)}`);
+    }
+    if (meta.sender_code !== code || meta.size !== data.length) {
+      throw new Error(`meta_prelude fields: ${JSON.stringify(meta)}`);
+    }
+    // 整包入口在 prelude-only 时必须拒绝（CRYPTO_TRUNCATED=-7）
+    expectRc(
+      e.ys_unpack_meta_v1(pk.ptr, preludeLen, recipientPrivPtr, mp, need, lenPtr),
+      -7,
+      "meta_v1 on prelude-only",
+    );
+    // prelude 少 1 字节 → 截断
+    expectRc(
+      e.ys_unpack_meta_prelude(pk.ptr, preludeLen - 1, recipientPrivPtr, mp, need, lenPtr),
+      -7,
+      "meta_prelude truncated",
+    );
+    e.ys_free(mp, need);
+  }
+
   // ys_pack_v1：ABI 公钥同样是 64 字节 X‖Y（实现与头文件一致）
   {
     const ext = Buffer.from("bin");

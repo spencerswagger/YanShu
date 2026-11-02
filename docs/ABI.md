@@ -62,6 +62,28 @@ int32_t ys_unpack_meta(const uint8_t *pack, size_t pack_len,
 
 * 元数据里的 `sender_code` 就是契约 §13 #18 要比对的码；`sender_pub` 是包内公钥原文。
 
+## 2.5 只凭 prelude 看元信息（`ys_unpack_meta_prelude`）
+
+**契约允许**：`prelude = HEADER ‖ SENDER_PUB ‖ WRAPPED_KEY ‖ MANIFEST_SEC ‖ SIG_SEC`（§4.3），
+清单在 `MANIFEST_SEC` 里（§8.1），签名 `SIG_INPUT` 覆盖 `HDR_CORE ‖ SENDER_PUB ‖ MANIFEST_SEC`（§10.2）——
+**这些全都在 prelude 内**，所以"块还没下完就先显示发件人码 / 文件名 / 大小 / 块数"是可以的。
+
+```c
+int32_t ys_unpack_meta_prelude(const uint8_t *pack, size_t pack_len,
+                               const uint8_t *recipient_private, uint8_t *out, size_t out_cap,
+                               size_t *out_len);
+```
+
+- 要求 `pack_len >= PRELUDE_LEN`（`112+65+129+MANIFEST_LEN+SIG_LEN`；不足 → `CRYPTO_TRUNCATED`）。
+- JSON 里固定带两个字段，避免"看起来成功但完整性未验证"：
+  `"scope":"prelude"` 与 **`"data_verified":false`**。
+- **prelude 阶段已校验**：魔数/版本/算法 ID/头部字段、`SENDER_PUB` 派生码、SM2 解封 DK、
+  清单认证与结构、签名（来源自证）。
+- **prelude 阶段未校验**：块 AEAD（tag）与每块明文摘要——它们要等块到齐。
+  数据完整性只认 `ys_unpack` / `ys_unpack_v1` **成功返回**（成功即代表所有块 tag + 摘要都过）。
+- `ys_unpack_meta` / `ys_unpack_meta_v1` 仍是**整包**语义（`ENVELOPE_LEN` 必须一致），
+  JSON 里 `"scope":"full"`、`"data_verified":false`（它同样不解块，只是长度自洽）。
+
 ## 3. `ys_unpack_v1` / `ys_unpack_meta_v1`（6 参，新代码建议用）
 
 > `_v1` 后缀表示**契约大版本 `YSPK/1.0`**（与 `ys_pack_v1` 同族），不是"第二套布局"。

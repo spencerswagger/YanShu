@@ -423,3 +423,43 @@ fn digest_is_over_plaintext_block() {
 fn v1_pack_bytes() -> Vec<u8> {
     v1_pack()
 }
+
+/// 只凭 prelude 解元信息：契约允许（清单与签名都在 prelude 内，§4.3/§8.1/§10.2）。
+/// 此时只验证来源与清单，**块摘要/块 AEAD 未校验**。
+#[test]
+fn prelude_only_metadata_is_allowed_but_marked_unverified() {
+    use yanshu_sm::error::Error;
+
+    let envelope = v1_pack();
+    let header = pack::read_header(&envelope).unwrap();
+    let prelude_len = 112 + 65 + 129 + header.manifest_len as usize + header.sig_len as usize;
+    assert_eq!(prelude_len, 485, "契约 §15.2 的 PRELUDE_LEN");
+
+    let d_r: [u8; 32] = h(D_R).try_into().unwrap();
+    let info = pack::open_only_prelude(&envelope[..prelude_len], &d_r).expect("prelude-only");
+    assert_eq!(info.sender_code, "AWQW");
+    assert_eq!(info.manifest.name, "hi.txt");
+    assert_eq!(info.manifest.file_size, 5);
+
+    // 整包入口仍然要求完整包（不会把 prelude 当整包）
+    assert_eq!(
+        pack::open_only(&envelope[..prelude_len], &d_r).unwrap_err(),
+        Error::Truncated
+    );
+    // prelude 少 1 字节 → 截断
+    assert_eq!(
+        pack::open_only_prelude(&envelope[..prelude_len - 1], &d_r).unwrap_err(),
+        Error::Truncated
+    );
+    // prelude 内篡改清单或签名都要被拒
+    let mut bad = envelope[..prelude_len].to_vec();
+    bad[112 + 65 + 129 + 3] ^= 1; // 清单密文
+    assert!(pack::open_only_prelude(&bad, &d_r).is_err());
+    let mut bad2 = envelope[..prelude_len].to_vec();
+    let sig_off = prelude_len - header.sig_len as usize;
+    bad2[sig_off + 10] ^= 1;
+    assert_eq!(
+        pack::open_only_prelude(&bad2, &d_r).unwrap_err(),
+        Error::SignatureMismatch
+    );
+}

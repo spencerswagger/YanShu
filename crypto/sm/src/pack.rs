@@ -789,15 +789,26 @@ fn total_envelope_len(header: &Header) -> Result<usize> {
 }
 
 /// 解到清单为止（含验签），不解数据块。
-fn open(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
+/// prelude 长度（契约 §4.2）：`112 + 65 + 129 + MANIFEST_LEN + SIG_LEN`。
+fn prelude_len(header: &Header) -> Result<usize> {
+    HEADER_LEN
+        .checked_add(SENDER_PUB_LEN)
+        .and_then(|v| v.checked_add(WRAPPED_KEY_LEN))
+        .and_then(|v| v.checked_add(header.manifest_len as usize))
+        .and_then(|v| v.checked_add(header.sig_len as usize))
+        .ok_or(Error::HeaderInvalid)
+}
+
+/// 只要 **prelude 完整** 就能解到清单并验签（契约 §4.3：清单与签名都在 prelude 里）。
+///
+/// 这对应"收件人还没下完块，先看到发件人码/文件名/大小/块数"的能力。
+/// **注意**：此时只验证了来源（`SENDER_PUB` 的签名）与清单本身；块摘要 / 块 AEAD
+/// 都还没校验，调用方不能据此宣称"数据完整"。
+fn open_from_prelude(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
     let header = Header::decode(pack)?;
-    let expected_len = total_envelope_len(&header)?;
-    // 截断 vs 尾随字节 vs 字段互相矛盾，三者分开（契约 §13.1）
-    if pack.len() < expected_len {
+    let plen = prelude_len(&header)?;
+    if pack.len() < plen {
         return Err(Error::Truncated);
-    }
-    if pack.len() > expected_len {
-        return Err(Error::TrailingBytes);
     }
 
     let mut pos = HEADER_LEN;
@@ -881,12 +892,37 @@ fn open(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
     })
 }
 
+/// 严格入口：要求整包长度与 `ENVELOPE_LEN` 完全一致（截断/尾随都拒）。
+fn open(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
+    let header = Header::decode(pack)?;
+    let expected_len = total_envelope_len(&header)?;
+    if pack.len() < expected_len {
+        return Err(Error::Truncated);
+    }
+    if pack.len() > expected_len {
+        return Err(Error::TrailingBytes);
+    }
+    open_from_prelude(pack, recipient_private)
+}
+
 /// 只解到清单（不解数据块）的结果。
+#[derive(Debug)]
 pub struct OpenedInfo {
     pub header: Header,
     pub manifest: Manifest,
     pub sender_public: [u8; SENDER_PUB_LEN],
     pub sender_code: String,
+}
+
+/// 只解 prelude（允许整包还没到齐）：返回包头、清单与包内自证的发送方信息。
+pub fn open_only_prelude(pack: &[u8], recipient_private: &[u8; 32]) -> Result<OpenedInfo> {
+    let o = open_from_prelude(pack, recipient_private)?;
+    Ok(OpenedInfo {
+        header: o.header,
+        manifest: o.manifest,
+        sender_public: o.sender_public,
+        sender_code: o.sender_code,
+    })
 }
 
 /// 只解到清单（不解数据块，不做发送方校验）。

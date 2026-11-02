@@ -163,8 +163,20 @@ int32_t ys_unpack_meta(const uint8_t *pack, size_t pack_len, const uint8_t *reci
 /* P1 新原型（6 参）：来源完全由包内 SENDER_PUB 自证，不给公钥。新代码建议用这两个。 */
 int32_t ys_unpack_v1(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
                      uint8_t *out, size_t out_cap, size_t *out_len);
+/* 整包：要求 ENVELOPE_LEN 完全一致；JSON 里 "scope":"full" */
 int32_t ys_unpack_meta_v1(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
                           uint8_t *out, size_t out_cap, size_t *out_len);
+
+/*
+ * 只凭 prelude 解元信息（允许整包未到齐）。契约允许：清单与签名都在 prelude 内
+ * （§4.3 prelude 定义、§8.1 MANIFEST_SEC、§10.2 SIG_INPUT 覆盖 HDR_CORE/SENDER_PUB/MANIFEST_SEC）。
+ * 需要 pack_len >= PRELUDE_LEN = 112+65+129+MANIFEST_LEN+SIG_LEN。
+ * JSON 里 "scope":"prelude"、**"data_verified":false**：来源与清单已校验，
+ * 块摘要 / 块 AEAD 尚未校验 —— 不能据此宣称数据完整；完整性只认 ys_unpack(_v1) 成功。
+ */
+int32_t ys_unpack_meta_prelude(const uint8_t *pack, size_t pack_len,
+                               const uint8_t *recipient_private, uint8_t *out, size_t out_cap,
+                               size_t *out_len);
 
 /* 打包（完整参数）：多一个 ext 与 created_at_ms（u64）。公钥 64 字节 X‖Y。 */
 int32_t ys_pack_v1(const uint8_t *recipient_public /* 64 = X‖Y */, const uint8_t *sender_private,

@@ -682,7 +682,12 @@ pub unsafe extern "C" fn ys_unpack_meta(
                 return Err(Error::SenderMismatch);
             }
         }
-        let json = meta_json(&opened.header, &opened.manifest, &opened.sender_public);
+        let json = meta_json(
+            &opened.header,
+            &opened.manifest,
+            &opened.sender_public,
+            "full",
+        );
         write_out(json.as_bytes(), out, out_cap, out_len)
     })())
 }
@@ -699,7 +704,40 @@ pub unsafe extern "C" fn ys_unpack_meta_v1(
 ) -> i32 {
     rc((|| {
         let opened = pack::open_only(as_slice(pack, pack_len)?, &fixed::<32>(recipient_private)?)?;
-        let json = meta_json(&opened.header, &opened.manifest, &opened.sender_public);
+        let json = meta_json(
+            &opened.header,
+            &opened.manifest,
+            &opened.sender_public,
+            "full",
+        );
+        write_out(json.as_bytes(), out, out_cap, out_len)
+    })())
+}
+
+/// 只凭 **prelude** 解元信息（允许整包未到齐）。
+///
+/// 等价于"收件人还没下完块，先看到发件人码 / 文件名 / 大小 / 块数"。
+/// 返回 JSON 里 `"scope":"prelude"`、`"data_verified":false`：
+/// 来源（`SENDER_PUB` 签名）与清单已校验，**块摘要 / 块 AEAD 尚未校验**。
+/// 要数据完整性必须走 `ys_unpack` / `ys_unpack_v1`（成功即代表块都验过）。
+#[no_mangle]
+pub unsafe extern "C" fn ys_unpack_meta_prelude(
+    pack: *const u8,
+    pack_len: usize,
+    recipient_private: *const u8,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    rc((|| {
+        let opened =
+            pack::open_only_prelude(as_slice(pack, pack_len)?, &fixed::<32>(recipient_private)?)?;
+        let json = meta_json(
+            &opened.header,
+            &opened.manifest,
+            &opened.sender_public,
+            "prelude",
+        );
         write_out(json.as_bytes(), out, out_cap, out_len)
     })())
 }
@@ -793,9 +831,14 @@ fn hex(b: &[u8]) -> String {
     s
 }
 
-fn meta_json(header: &pack::Header, manifest: &Manifest, sender_public: &[u8; 65]) -> String {
+fn meta_json(
+    header: &pack::Header,
+    manifest: &Manifest,
+    sender_public: &[u8; 65],
+    scope: &str,
+) -> String {
     format!(
-        "{{\"version\":\"{}\",\"name\":\"{}\",\"mime\":\"{}\",\"ext\":\"{}\",\"size\":{},\"chunk_size\":{},\"chunk_count\":{},\"created_at_ms\":{},\"sender_code\":\"{}\",\"sender_pub\":\"{}\",\"kdf_salt\":\"{}\"}}",
+        "{{\"version\":\"{}\",\"name\":\"{}\",\"mime\":\"{}\",\"ext\":\"{}\",\"size\":{},\"chunk_size\":{},\"chunk_count\":{},\"created_at_ms\":{},\"sender_code\":\"{}\",\"sender_pub\":\"{}\",\"kdf_salt\":\"{}\",\"scope\":\"{}\",\"data_verified\":false}}",
         pack::v1::VERSION_STRING,
         json_escape(&manifest.name),
         json_escape(&manifest.mime),
@@ -807,5 +850,6 @@ fn meta_json(header: &pack::Header, manifest: &Manifest, sender_public: &[u8; 65
         crate::code::from_public_key(sender_public),
         hex(sender_public),
         hex(&header.kdf_salt),
+        scope,
     )
 }
