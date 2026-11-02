@@ -50,6 +50,7 @@ results/
 | 证据文件 | 服务端 | 二进制 sha256 | 认证 | 可复跑命令 | 结论 |
 |---|---|---|---|---|---|
 | `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | `08d40e7` | `275fc463…6af55` | **真 sm2** | `YS_EV1_VERIFIER=sm2 YS_EV1_LOG_MODE=dir YS_DELIVER_BIN=core-deliver qa/evidence/run_evidence1_core.sh …` | **闭合**：存储/DB/日志三处零命中，对照 1/1/1/0 |
+| `contract-v1/2026-11-02-token-naming-authority-5605907.md` | —（服务端证据） | `5605907` | `3c1e4b2b…35f98f` | stub-allow | native-api | `check_token_lifecycle.py ...`（`--kid` 即 epoch） | **命名权威表**：只改 secret → 204（不吊销）；只改 epoch → 401 `AUTH_TOKEN_STALE`；两者都改 → STALE 优先；新签发 201、旧 token 不复活；epoch 调小拒启动 |
 | `contract-v1/2026-11-02-host-binary-7239888.md` | —（服务端证据） | `7239888` | `bd64d23c…d7d6d7` | stub/sm2 | native-api | `check_token_lifecycle.py --kid 1 …`；`yanshu-server -migrate-only` 验升级路径 | **三件套 + 升级路径已修**：老库（`08d40e7`）升级后补上 `upload_token_kid` 并起得来；token 四步 201 → 401 `AUTH_TOKEN_INVALID`（secret）→ 401 `AUTH_TOKEN_STALE`（kid）→ 新 201，旧 token 不复活 |
 | `contract-v1/2026-11-02-token-kid-fa479d9.md` | —（服务端证据） | `fa479d9` | 二进制前缀 `b9d4086e…` | stub-allow | native-api | `python3 qa/evidence/check_token_lifecycle.py --kid k1 --binary <bin> --dsn "<DSN>" --ys-tool <t>` | **token 已验证（kid）**：基线 201 → 只换 secret 401 `AUTH_SIGNATURE_INVALID` → 只换 kid 401 `AUTH_TOKEN_STALE` → 新签发 201、旧 token 不复活；不设 KID 启动 exit 1 |
 | `contract-v1/2026-11-02-kid-and-kernel-sha.md` | `ab4279a`/`9bce5bb`/`739293a` | 各自现编 | stub-allow | `check_token_lifecycle.py --kid k1 …`；`check_server_kernel.py --server-dir <src> --vectors-dir <vec>` | token 三态已验证（201→401→201，待统一错误名）；内嵌内核已换冻结产物、白名单+向量套件全 PASS；老库缺 `upload_token_kid` 列（唯一真 BLOCKED） |
@@ -77,9 +78,10 @@ token 轮换（kid → `AUTH_TOKEN_REVOKED`）。
 
 1. ~~已有 schema 升级缺 `upload_token_kid` 列~~ → **已闭合**（`7239888` 补 `0002/0003` 迁移）：
    实测用 `08d40e7` 建老库 → 新二进制 `-migrate-only` → 列补上、服务起得来、无 `sweep failed`。
-2. **token 错误名待归一（非阻塞）**：`7239888` 实测 `AUTH_TOKEN_INVALID`（只换 secret）与
-   `AUTH_TOKEN_STALE`（只换 kid）；契约最新稿写 `AUTH_TOKEN_REVOKED`，两边尚未统一，
-   统一后复测一次即可（脚本判状态码与"是否被拒"，不依赖名字）。
+2. **token 命名以实测为准（`5605907`）**：只改 secret **不吊销**（204），只改 epoch →
+   **401 `AUTH_TOKEN_STALE`**，两者都改 → STALE 优先；`AUTH_TOKEN_INVALID` 与
+   `AUTH_TOKEN_EXPIRED` 在本矩阵未被触发（前者原用于 secret 不匹配，现已不适用；
+   后者覆盖到期场景，未测）。**谁再改名字，先过这张表。**
 
 其余项全部闭合：证据二（生产路径 6/6 + 11/11 + 变体 18/18）、用户码/校验位四形态 26/26 + 反向用例、
 prelude-only 6/6、证据一（存储/DB/日志零命中 + 三组阳性对照，含真 `sm2`）、
