@@ -212,3 +212,17 @@ token 矩阵（INVALID/STALE 两码 + 四码覆盖）、服务端内嵌内核同
 4. 两次实例分别确认日志里各有一条 `listening`（不是只有一条）。
 
 **教训**：任何"重启后行为"的验证，先把"新实例真的是新的"证明出来，否则测的是旧进程。
+
+### 常驻核对的一次真实命中：`SIG_INPUT_TOO_LONG`（2026-11-02）
+
+契约方把 `SIG_INPUT_TOO_LONG` 从 `§10.1` 删了（改成"防御性上限、HTTP 不可达"的散文描述），
+但实现里**这个码还在**：`server/internal/spec/errors.go:34` 有 `ErrSIGInputTooLong = "SIG_INPUT_TOO_LONG"`，
+且有 `TestSIGInputTooLong`（513 → `TOO_LONG`）。
+
+双向核对结果：**FAIL —— 实现有、契约无**（"实现提供了未定义的行为"）。
+
+> 结论：**契约应把它加回 `§10.1`**，注明"防御性上限、当前 HTTP 路径不可达（字段级先拒），
+> 若触发返回 400"；或者实现侧删掉该码（但不推荐，单测已断言它）。
+> 这条正好证明常驻核对有用：散文里写了、表里没有，一样会被判出来。
+
+（另：`SIG_INPUT_MAX` / `SIG_INPUT_HARD_LIMIT` / `SIG_INPUT_LEN` 是上限常量与公式名，已列入 `NON_CODE` 不算错误码。）
