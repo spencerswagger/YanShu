@@ -25,7 +25,12 @@
 ===============================================================================
 * **baseline（对照）**：未篡改的包必须先能**解密成功**。基线不过 → 直接 BLOCKED，
   因为一个"什么都解不开"的解密器会让后面每条篡改都假 PASS。
-* 每条篡改：解密返回明确错误 = PASS；解密成功 = FAIL（含"返回部分明文"）。
+* 每条篡改：**只要被任一道防线拒绝就算 PASS**（清单层、AEAD 层、结构层任意一层报错都行）。
+  判 FAIL 的唯一条件是「解密成功或返回部分明文」。
+* **不绑定任何特定错误码**：错误名只作为诊断信息打印，不参与通过判定 —— 换实现、
+  换布局、换分层顺序都会改错误名，绑死错误码等于把证据绑在实现细节上。
+* 错误名要"稳定且可区分"：若所有失败都塌成同一个通用错误，脚本会打诊断警告
+  （不判 FAIL，但这是可诊断性缺陷）。
 * 全 PASS 退出码 0；任何一条 FAIL 退出码 1；配置/依赖问题 2。
 
 ===============================================================================
@@ -736,6 +741,29 @@ def build_backend(args, pristine: bytes) -> Backend:
 # 执行与判定
 # --------------------------------------------------------------------------- #
 
+ERROR_NAME_RE = re.compile(r"\b(?:CRYPTO_[A-Z0-9_]+|[A-Z][A-Z0-9_]{3,})\b")
+
+
+def error_name_of(detail: str) -> str:
+    """从输出里抠错误名，仅作诊断；抠不到返回空串。"""
+    m = ERROR_NAME_RE.search(detail or "")
+    return m.group(0) if m else ""
+
+
+def summarize_error_names(results: Sequence["CaseResult"]) -> tuple[dict[str, int], bool]:
+    """统计各用例的错误名分布，并判断是否"全塌成一个名字"。"""
+    counts: dict[str, int] = {}
+    for r in results:
+        if r.case == "baseline" or r.status != "PASS":
+            continue
+        name = error_name_of(r.detail)
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    total = sum(counts.values())
+    collapsed = total >= 3 and len(counts) == 1
+    return counts, collapsed
+
+
 @dataclass
 class CaseResult:
     case: str
@@ -803,8 +831,10 @@ def print_report(backend: Backend, env_summary: str, results: Sequence[CaseResul
     if backend.note:
         print(f"说明：{backend.note}")
     print(f"包  ：{env_summary}")
+    print("判定：解密必须失败（清单层 / AEAD 层 / 结构层任一道拒绝即 PASS）；"
+          "错误名只作诊断，不作通过条件")
     print("=" * 104)
-    print(f"{'用例':<24}{'结果':<7}{'期望':<7}说明")
+    print(f"{'用例':<24}{'结果':<7}{'期望':<7}实际错误名（诊断）")
     print("-" * 104)
     for r in results:
         print(f"{r.case:<24}{r.status:<7}{r.expect:<7}{r.detail}")
@@ -815,10 +845,21 @@ def print_report(backend: Backend, env_summary: str, results: Sequence[CaseResul
     n_fail = sum(1 for r in results if r.status == "FAIL")
     n_skip = sum(1 for r in results if r.status == "SKIP")
     print(f"合计：PASS {n_pass} / FAIL {n_fail} / SKIP {n_skip}    耗时 {time.time() - started:.2f}s")
-    if n_fail:
-        print("结论：FAIL —— 至少一类篡改没有被明确报错")
+
+    counts, collapsed = summarize_error_names(results)
+    if counts:
+        dist = "，".join(f"{name}×{n}" for name, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+        print(f"[diag] 错误名分布（仅诊断）：{dist}")
+        if collapsed:
+            print("[diag] ⚠ 所有失败都塌成同一个错误名，无法区分是哪种篡改被拒 —— "
+                  "不作为 FAIL，但属可诊断性缺陷，应报给实现方")
     else:
-        print("结论：PASS —— 所有篡改均被明确拒绝")
+        print("[diag] 未从输出里取到错误名（只凭退出码判定，建议实现方输出稳定错误名）")
+
+    if n_fail:
+        print("结论：FAIL —— 至少一类篡改被解密成功或返回了明文")
+    else:
+        print("结论：PASS —— 所有篡改均被明确拒绝（任一道防线拦下即可）")
 
 
 # --------------------------------------------------------------------------- #
@@ -1069,6 +1110,20 @@ def _selftest() -> int:
         return "rune-v1 四类篡改全部被拒：" + "，".join(
             f"{r.case}={r.detail}" for r in res[1:])
 
+    def c_error_names():
+        """错误名只作诊断：不参与判定，但要能发现"全塌成一个名字"。"""
+        same = [CaseResult(f"c{i}", "", "PASS", "error", "ERR SAME_ERROR") for i in range(3)]
+        mixed = [CaseResult("a", "", "PASS", "error", "ERR BLOCK_SEQUENCE"),
+                 CaseResult("b", "", "PASS", "error", "ERR MANIFEST_MISMATCH"),
+                 CaseResult("c", "", "PASS", "error", "退出码 3（未取到错误码）")]
+        c1, collapsed1 = summarize_error_names(same)
+        c2, collapsed2 = summarize_error_names(mixed)
+        assert collapsed1 and c1 == {"SAME_ERROR": 3}, (c1, collapsed1)
+        assert not collapsed2 and len(c2) == 2, (c2, collapsed2)
+        # 判定与错误名无关：错误名不同也照样 PASS
+        return "塌成一个错误名会被点名；名字不同不影响 PASS 判定"
+
+    case("错误名诊断（不参与判定）", c_error_names)
     case("解析契约样例（YSPK v1 / 743B）", c_fixture)
     case("解析单块契约样例（522B）", c_fixture_v1)
     case("布局自动识别", c_layout_detect)

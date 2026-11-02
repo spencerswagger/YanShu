@@ -52,7 +52,8 @@ echo "== 3/4 打包 =="
 decrypt="\"$probe\" unpack {in} {out} --recipient-sk \"$work/bob.sk\" --sender-pk \"$work/alice.pk\""
 
 echo "!! 注意：本脚本跑的是端侧旧布局（rune-v1），结果只作非契约实现的临时验证，不作验收；"
-echo "!!      契约实现就绪后请用默认布局（--layout contract-v1）重跑，结果另存 *-contract-v1.md。"
+echo "!!      结果按布局分目录：本脚本的结果属于 results/rune-v1-noncontract/；"
+echo "!!      契约实现就绪后请用默认布局（--layout contract-v1）重跑，结果放 results/contract-v1/。"
 
 echo "== 4a/4 单块包 =="
 python3 "$here/tamper_probe.py" --envelope "$work/a.yspk" --layout rune-v1 \

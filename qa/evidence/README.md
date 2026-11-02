@@ -5,10 +5,10 @@
 > **当前状态（2026-11-02 首夜·三轮）**
 > * 默认布局 = **契约布局 `contract-v1`**（CRYPTO-PACK `YSPK/1.0`）。`rune-v1` 只能显式
 >   `--layout rune-v1` 使用，且输出会打「非契约实现、不作验收」横幅。
-> * 证据二在端侧真实实现上跑过一轮（`rune-v1`），10/10 篡改 + 16 种变体全部被拒；
+> * 证据二在端侧旧实现上跑过一轮（`rune-v1`），10/10 篡改 + 16 种变体全部被拒；
 >   该结果**不是对契约实现的验收**，单独存放在
->   `results/2026-11-02-evidence2-rune-v1-noncontract.md`。等端侧按契约重写完，
->   用默认布局重跑，结果另存为 `*-contract-v1.md`。
+>   `results/rune-v1-noncontract/`。等端侧按契约重写完，用默认布局重跑，
+>   结果存进 `results/contract-v1/`。
 > * 证据一仍是骨架：检索逻辑、投递钩子、存储/日志/数据库三路扫描、表列白名单都已可用
 >   且自测通过，但**服务端还没跑起来**；`--profile core-skeleton` 缺参时打印
 >   「待 Core 合入 + 参数确认」并以退出码 4 结束 —— 既不伪装 PASS，也不误报 FAIL。
@@ -138,8 +138,16 @@ PostgreSQL 走 `row_to_json`：`TEXT` 列明文原样、`BYTEA` 列以 `\x<hex>`
 | `drop-chunk-slice`（`--extra-cases`） | 只删"密文+tag"、留块头 | §6.2 |
 | `truncate-tail`（`--extra-cases`） | 截掉尾块 | §6.4 / §13#22 |
 
-判定：**解密成功 = FAIL**（含"返回部分明文"）；**明确报错 = PASS**。
+判定：**解密失败（清单层 / AEAD 层 / 结构层任一道拒绝）= PASS**；
+**解密成功或返回部分明文 = FAIL**。错误名只作诊断打印，**不参与通过判定**——
+换实现、换布局、换分层顺序都会改错误名，绑死错误码等于把证据绑在实现细节上。
+脚本另会统计错误名分布：若所有失败都塌成同一个通用错误，会打诊断警告（不判 FAIL）。
+
 `--expect-plaintext <file>` 给了以后，baseline 还要逐字节比对明文，否则整轮不算数。
+
+> 预期内的观察（不是缺陷）：契约里清单摘要是第一道防线、AEAD tag 是第二道，
+> 所以端到端篡改**通常拿不到 tag 类错误**（清单层先拦）。两层各自可触发由实现方的
+> 单元级反例覆盖，Gate 只记录这个观察，不据此判 FAIL。
 
 ### 包布局（两套，自动识别）
 
@@ -151,7 +159,7 @@ PostgreSQL 走 `row_to_json`：`TEXT` 列明文原样、`BYTEA` 列以 `\x<hex>`
 | `rune-v1` | `crypto/sm/src/pack.rs::layout` 旧实现 | HEADER 40B、块头 9B | 仅"非契约实现的临时验证"，输出带横幅、不作验收 |
 | `auto` | 按头部判别 | — | 排查用；判不出即报错 |
 
-两者**目前不一致**（差异清单见 `results/2026-11-02-evidence2-rune.md`）。脚本不猜测：
+两者**曾不一致**（差异清单见 `results/rune-v1-noncontract/2026-11-02-evidence2-rune-v1.md`）。脚本不猜测：
 识别不出就报错退出，绝不拿一套布局去解释另一套的字节。
 
 ### 解密后端
@@ -187,9 +195,9 @@ qa/evidence/
 │  ├─ build_probe.sh            把驱动塞进端侧 crate 的临时副本并编译
 │  └─ README.md                 为什么这样构建、怎么接
 ├─ fixtures/                    契约公开测试向量 + 样本描述示例
-└─ results/                     实测结果，文件名带布局，避免混淆：
-                                `*-contract-v1.md`（对契约实现，验收用）
-                                `*-rune-v1-noncontract.md`（非契约实现，仅记录）
+└─ results/                     实测结果，**按布局分目录**：
+    ├─ contract-v1/             对契约实现（默认布局）→ 算验收
+    └─ rune-v1-noncontract/     对旧/其它实现 → 只作记录与对照
 ```
 
 ---
