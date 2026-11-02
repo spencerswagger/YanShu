@@ -83,6 +83,17 @@ python3 qa/evidence/check_restore_from_real_drop.py \
   --old-binary <d655e16 编的> --new-binary <新版> --dsn "<DSN>"
 ```
 
+### ②c 两条 Go 回归 + P0（`uploader_ip` 为 NULL）
+
+在 `06c9f56` 树上跑（该 head 相对 `d8d90a2` 只多这一处 P0 修复）：
+
+```
+--- PASS: TestMigrateUpgradeFromOldSchema      # 老库升级
+--- PASS: TestMigrateRestoresAfterDrop         # 跑过 drop 迁移的库恢复
+--- PASS: TestGetTransferWithNullUploaderIP    # P0：uploader_ip 为 NULL 不再 500
+--- PASS: TestStaleTokenCannotBeReincarnated   # 旧凭据不复活
+```
+
 ## 三、KID 矩阵（逐字错误名与 message）
 
 | 步 | 场景 | 状态 | 错误名 / message |
