@@ -307,6 +307,7 @@ export class WasmKernel {
     }
   }
 
+  /** 签名：`message` 是 `SIG_INPUT` **原文**（不要预哈希），DER 输出。 */
   sign(privateKey, message) {
     const priv = this.#write(privateKey)
     const msg = this.#write(message)
@@ -335,19 +336,36 @@ export class WasmKernel {
     }
   }
 
+  /**
+   * 验签。`message` 必须是 **原文**（`SIG_INPUT`），不要先算 SM3——`e = SM3(ZA‖SIG_INPUT)` 由内核内部完成。
+   * 优先走 `ys_sm2_verify_der`（与 Core 服务端同一入口），没有该导出才退回 `ys_sm2_verify` + 本地 DER 解码。
+   */
   verify(publicKey, message, signature) {
     const pub = this.#write(WasmKernel.toKernel(publicKey))
     const msg = this.#write(message)
-    const raw = decodeSignature(signature) // DER → r‖s
-    const sig = this.#write(raw)
     try {
-      const rc = this.exports.ys_sm2_verify(pub.ptr, msg.ptr, msg.len, sig.ptr)
-      if (rc < 0) this.#check(rc, 'ys_sm2_verify')
-      return rc === 1
+      if (typeof this.exports.ys_sm2_verify_der === 'function') {
+        const der = this.#write(signature)
+        try {
+          const rc = this.exports.ys_sm2_verify_der(pub.ptr, msg.ptr, msg.len, der.ptr, der.len)
+          if (rc < 0) this.#check(rc, 'ys_sm2_verify_der')
+          return rc === 1
+        } finally {
+          der.release()
+        }
+      }
+      const raw = decodeSignature(signature) // DER → r‖s
+      const sig = this.#write(raw)
+      try {
+        const rc = this.exports.ys_sm2_verify(pub.ptr, msg.ptr, msg.len, sig.ptr)
+        if (rc < 0) this.#check(rc, 'ys_sm2_verify')
+        return rc === 1
+      } finally {
+        sig.release()
+      }
     } finally {
       pub.release()
       msg.release()
-      sig.release()
     }
   }
 
