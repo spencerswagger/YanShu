@@ -55,5 +55,6 @@ B 端：待收 → 取 prelude（`ys_unpack_meta_prelude` 先显示「来自谁/
 
 - **端到端在真 sm2 下成立**：浏览器双端、分块、解密、落盘逐字节一致；`ack` 后 410。
 - **真签名链路成立**：注册/昵称/建包全走真签名，篡改签名被拒，挑战复用被单独识别。
-- **残留 1 条**：`路径码≠头码` 在当前服务端产物上返回 `AUTH_SIGNATURE_INVALID` 而非 `AUTH_CODE_MISMATCH`（需 Core 定位是重建 `SIG_INPUT` 用了路径码，还是判定顺序问题）。
+- **无残留偏差**：此前记的“路径码≠头码返回 `AUTH_SIGNATURE_INVALID`”已查明是我方构造错误（签名与头码不对应），
+  用 `web/scripts/repro-code-mismatch.mjs` 正确构造后同宿主实测 **401 `AUTH_CODE_MISMATCH`**，与契约一致；该条已撤回。
 - 未在宿主构造 `AUTH_TOKEN_STALE`（需递增 EPOCH，属运维动作）；自愈逻辑已在交付二进制上真演练通过。
