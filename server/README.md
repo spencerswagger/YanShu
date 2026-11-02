@@ -220,7 +220,7 @@ YANSHU_KERNEL_WASM=./kernel/yanshu_sm.wasm \
 - 默认值：`YANSHU_VERIFIER` 缺省 `stub-deny`（一律拒绝，fail closed）；`stub-allow` 只能显式开启
   并打 WARN。三者都非法值 → 启动报错。
 - **吊销操作**：v1 不引入 EPOCH —— **轮换 `TOKEN_SECRET` 并重启**即吊销全部旧 token
-  （`401 AUTH_TOKEN_REVOKED`，全局生效，属应急手段）；6 小时过期走 `401 AUTH_TOKEN_EXPIRED`，
+  （`401 AUTH_TOKEN_REVOKED`，全局生效）；
   token 值不对走 `401 AUTH_TOKEN_INVALID`，签名本身不被接受才用 `AUTH_SIGNATURE_INVALID`。
   详见 `docs/TOKEN-LIFECYCLE.md` 与 `TestTokenRotationMatrix`。
 - **切换清单与 token 失效机制**见 `docs/TOKEN-LIFECYCLE.md`：`upload_token` 由

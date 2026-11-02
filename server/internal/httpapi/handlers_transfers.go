@@ -556,24 +556,19 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 		return store.Transfer{}, false
 	}
 	// 判定顺序（先凭据后状态）：
-	// ① KID 不符 → AUTH_TOKEN_STALE（KID 是唯一吊销开关，与 secret 无关）
+	// ① KID 不符 → AUTH_TOKEN_REVOKED（KID 是唯一吊销开关，与 secret 无关）
 	kid, err := a.store.CurrentTokenKID(r.Context())
 	if err != nil {
 		a.internalError(w, r, "current token kid", err)
 		return store.Transfer{}, false
 	}
 	if t.UploadTokenKID != strconv.FormatInt(kid, 10) {
-		writeError(w, r, apiError{code: spec.ErrAuthTokenStale})
+		writeError(w, r, apiError{code: spec.ErrAuthTokenRevoked})
 		return store.Transfer{}, false
 	}
 	// ② token 与库内哈希对不上 → AUTH_TOKEN_INVALID
 	if !auth.ValidateHash(token, t.UploadTokenSM3) {
 		writeError(w, r, apiError{code: spec.ErrAuthTokenInvalid})
-		return store.Transfer{}, false
-	}
-	// ③ 凭据过期（上传 token 6h）→ AUTH_TOKEN_EXPIRED
-	if a.now().After(t.CreatedAt.Add(spec.UploadTokenTTL)) {
-		writeError(w, r, apiError{code: spec.ErrAuthTokenExpired})
 		return store.Transfer{}, false
 	}
 	return t, true

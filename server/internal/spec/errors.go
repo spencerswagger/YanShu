@@ -26,12 +26,10 @@ const (
 	ErrAuthSignatureInvalid ErrorCode = "AUTH_SIGNATURE_INVALID"
 	ErrAuthChallengeInvalid ErrorCode = "AUTH_CHALLENGE_INVALID"
 	ErrAuthCodeMismatch     ErrorCode = "AUTH_CODE_MISMATCH"
-	// ErrAuthTokenStale：upload_token 因 KID 轮换而失效（旧 token）。
-	ErrAuthTokenStale ErrorCode = "AUTH_TOKEN_STALE"
+	// ErrAuthTokenRevoked：upload_token 因 KID 轮换而失效（旧 token）。
+	ErrAuthTokenRevoked ErrorCode = "AUTH_TOKEN_REVOKED"
 	// ErrAuthTokenInvalid：token 值不对（伪造/不属于该传输），与"签名不被接受"分开。
 	ErrAuthTokenInvalid ErrorCode = "AUTH_TOKEN_INVALID"
-	// ErrAuthTokenExpired：凭据过期（上传 token 6h、下载租约 30min）。
-	ErrAuthTokenExpired ErrorCode = "AUTH_TOKEN_EXPIRED"
 
 	// 403
 	ErrSignalPeerMismatch ErrorCode = "SIGNAL_PEER_MISMATCH"
@@ -92,9 +90,8 @@ var errStatus = map[ErrorCode]int{
 	ErrAuthSignatureInvalid: http.StatusUnauthorized,
 	ErrAuthChallengeInvalid: http.StatusUnauthorized,
 	ErrAuthCodeMismatch:     http.StatusUnauthorized,
-	ErrAuthTokenStale:       http.StatusUnauthorized,
+	ErrAuthTokenRevoked:     http.StatusUnauthorized,
 	ErrAuthTokenInvalid:     http.StatusUnauthorized,
-	ErrAuthTokenExpired:     http.StatusUnauthorized,
 
 	ErrSignalPeerMismatch: http.StatusForbidden,
 	ErrNotTransferParty:   http.StatusForbidden,
@@ -146,9 +143,8 @@ var errMessage = map[ErrorCode]string{
 	ErrAuthSignatureInvalid: "signature verification failed",
 	ErrAuthChallengeInvalid: "challenge is expired, used or purpose mismatch",
 	ErrAuthCodeMismatch:     "X-YS-Code does not match the signed code",
-	ErrAuthTokenStale:       "upload token is stale: its key version was rotated; create a new transfer",
+	ErrAuthTokenRevoked:     "upload token was revoked by a key version rotation; create a new transfer",
 	ErrAuthTokenInvalid:     "upload token is invalid for this transfer",
-	ErrAuthTokenExpired:     "token has expired; obtain a new one",
 
 	ErrSignalPeerMismatch: "signal peers do not match the transfer",
 	ErrNotTransferParty:   "authenticated credential is not a party of this transfer",

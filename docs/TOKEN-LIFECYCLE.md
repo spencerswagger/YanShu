@@ -13,10 +13,9 @@ upload_token = base64url(HMAC-SHA256(TOKEN_SECRET,
 - 库里只存 `SM3(upload_token)`（`transfers.upload_token_sm3`）与**签发时的 KID**
   （`transfers.upload_token_kid`）。
 - 校验顺序（**先凭据后状态**）：
-  1. 行内 KID != 当前 KID → `401 AUTH_TOKEN_STALE`；
+  1. 行内 KID != 当前 KID → `401 AUTH_TOKEN_REVOKED`；
   2. `SM3(token)` != 库内哈希 → `401 AUTH_TOKEN_INVALID`；
-  3. 签发超过 **6 小时** → `401 AUTH_TOKEN_EXPIRED`（下载租约 30 分钟同属此类）；
-  4. 之后才看传输状态（409/410）。
+  3. 之后才看传输状态：终结态一律 `410`（含传输 TTL 过期 `410 TRANSFER_EXPIRED`）。
 - `AUTH_SIGNATURE_INVALID` **只**用于签名本身不被接受（伪造 DER、消息被改、公钥不符），
   与上面三个凭据类是两套。
 
@@ -43,9 +42,8 @@ config: YANSHU_TOKEN_KID must increase (current=3, provided=2); refusing to star
 
 | 事件 | 结果 |
 |---|---|
-| KID 递增 | 全部旧 token 立刻 `401 AUTH_TOKEN_STALE`（无需重启） |
+| KID 递增 | 全部旧 token 立刻 `401 AUTH_TOKEN_REVOKED`（无需重启） |
 | 只换 `TOKEN_SECRET` | 旧 token **仍然有效**（KID 未变、哈希未变） |
-| 超过 6 小时 | `401 AUTH_TOKEN_EXPIRED` |
 | token 值不对/串了传输 | `401 AUTH_TOKEN_INVALID` |
 | 传输终结（撤回/过期/取完） | 上传接口 409/410（状态层） |
 
@@ -53,9 +51,8 @@ config: YANSHU_TOKEN_KID must increase (current=3, provided=2); refusing to star
 
 | 错误名 | 含义 | 客户端动作 |
 |---|---|---|
-| `AUTH_TOKEN_STALE` | KID 已轮换，凭据作废 | 重新 `POST /v1/transfers` 建传输拿新 token；**不要**重算签名 |
+| `AUTH_TOKEN_REVOKED` | KID 已轮换，凭据作废 | 重新 `POST /v1/transfers` 建传输拿新 token；**不要**重算签名 |
 | `AUTH_TOKEN_INVALID` | token 值不对/串了传输 | 检查本地 token 与 transfer_id 是否配对 |
-| `AUTH_TOKEN_EXPIRED` | 超过 6 小时 / 租约 30 分钟 | 重建传输 / 重新拿租约 |
 | `AUTH_SIGNATURE_INVALID` | 签名本身不被接受 | 检查 `SIG_INPUT` 与私钥；**与 token 无关** |
 
 ## 5. 切换 sm2 与 schema
