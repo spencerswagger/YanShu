@@ -191,7 +191,7 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 - 校验时用**当前** `TOKEN_SECRET` 重算并常量时间比对（§1.7.2）。
 - `TOKEN_SECRET` 只来自部署密钥，不入库、不写日志。
 - **`KID` 进派生输入**：递增 `KID` 后重签发的凭据与旧凭据逐字节不同，旧凭据不会因重签发而复活（§1.7.3）。`KID` 只作派生输入与记录元数据，**不出现在任何请求/响应字段里**，wire 格式不变。
-- **两种吊销语义**：只换 `TOKEN_SECRET`（`KID` 不变）→ 旧凭据 `AUTH_TOKEN_INVALID`；递增 `KID` → 旧凭据 `AUTH_TOKEN_REVOKED`（§1.7.3 / §1.7.4）。
+- **两种吊销语义**：只换 `TOKEN_SECRET`（`KID` 不变）→ 旧凭据 `AUTH_TOKEN_INVALID`；递增 `KID` → 旧凭据 `AUTH_TOKEN_STALE`（§1.7.3 / §1.7.4）。
 
 服务端只存 `SM3(upload_token)`，不存明文 token。`transfer_id` 泄漏的后果：他人可消耗你的下载次数并拿到密文（拿不到明文，因为 DK 被 `SM2` 封给接收方）——这是被显式接受的风险，写入威胁模型。
 
@@ -230,7 +230,7 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 - 服务端**只存凭据的哈希**（`upload_token` 存 `SM3`），不存明文。
 - `upload_token` 由令牌派生密钥 `TOKEN_SECRET` 与**凭据版本 `KID`** 确定性派生（§1.5）；`KID` 是**服务端元数据**：不出现在任何请求/响应字段、不改变 wire 格式（仍是 32 字节 base64url）。
-- **校验顺序写死**：① 先比 `KID`（该传输记录的签发 `KID` vs 当前 `KID`）——不等即 `AUTH_TOKEN_REVOKED`；② 再用当前 `TOKEN_SECRET` 重算凭据并做常量时间比对——不符即 `AUTH_TOKEN_INVALID`。
+- **校验顺序写死**：① 先比 `KID`（该传输记录的签发 `KID` vs 当前 `KID`）——不等即 `AUTH_TOKEN_STALE`；② 再用当前 `TOKEN_SECRET` 重算凭据并做常量时间比对——不符即 `AUTH_TOKEN_INVALID`。
 - 因此吊销不是"删数据"，而是"版本或密钥换了、对不上"——可秒级全站生效。
 
 #### 1.7.3 版本吊销（`KID`，v1 必配）
@@ -245,7 +245,7 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 **吊销效果**
 
-- 签发凭据时记录当时的 `KID`；校验时**先比 `KID`**：记录 `KID` < 当前 `KID` → 一律 `AUTH_TOKEN_REVOKED`（立即生效，不等过期）。
+- 签发凭据时记录当时的 `KID`；校验时**先比 `KID`**：记录 `KID` < 当前 `KID` → 一律 `AUTH_TOKEN_STALE`（立即生效，不等过期）。
 - 新签发/重签发的凭据用当前 `KID` 派生，**与任何旧凭据逐字节不同**——旧凭据不会因为重签发而复活。
 - 这是**全局操作**：影响全站所有在传任务（发送中的上传会中断，需要重签发或重建传输），属**应急手段**，不作日常轮换。
 
@@ -253,7 +253,7 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 1. 把配置里的 `YANSHU_TOKEN_KID` 改成**比当前更大的整数**（如 `1 → 2`）；需要更强隔离时**同时**更换 `TOKEN_SECRET`（可选）。
 2. 重启服务（或触发等价的配置重载）。
-3. 生效后**所有既有凭据立即失效**：`KID` 落后的 → `401 AUTH_TOKEN_REVOKED`（若同时换了 secret，仍是版本失效码，因为先比 `KID`）。
+3. 生效后**所有既有凭据立即失效**：`KID` 落后的 → `401 AUTH_TOKEN_STALE`（若同时换了 secret，仍是版本失效码，因为先比 `KID`）。
 4. 客户端处置：**重新挑战 → 签名 → 取新凭据**（上传走 §1.7.5，下载重新 `GET /prelude`），**不要重算签名**；已传块不重传。
 5. 记一条运维日志：`KID` 旧值 → 新值、时间、原因（应急吊销）；**不要**把 `TOKEN_SECRET` 写进日志。
 
@@ -262,8 +262,8 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 | 运维操作 | 旧凭据结果 | 语义 |
 |---|---|---|
 | **只换 `TOKEN_SECRET`**（`KID` 不变） | `401 AUTH_TOKEN_INVALID` | 凭据重算不匹配——"这不是我签发的" |
-| **递增 `KID`**（`TOKEN_SECRET` 可不变） | `401 AUTH_TOKEN_REVOKED` | 版本已轮换——"我签发过，但版本作废了" |
-| 两者都做 | `401 AUTH_TOKEN_REVOKED`（先比 `KID`） | 版本失效优先 |
+| **递增 `KID`**（`TOKEN_SECRET` 可不变） | `401 AUTH_TOKEN_STALE` | 版本已轮换——"我签发过，但版本作废了" |
+| 两者都做 | `401 AUTH_TOKEN_STALE`（先比 `KID`） | 版本失效优先 |
 
 两种都能吊销；但**只有递增 `KID` 表示"版本失效"**，只换 secret 表示"凭据不匹配"。日志与排查必须按此区分。
 
@@ -274,25 +274,25 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 | 缺凭证头 | 401 | `AUTH_MISSING` | 补头 |
 | 凭据不存在 / 格式错 / 与任何已签发凭据不匹配 | 401 | `AUTH_TOKEN_INVALID` | 重新申领（上传见 §1.7.5；下载重新 `GET /prelude`）；**不要**重试同一凭据 |
 | 下载租约过期（30 min），或凭据被端侧丢弃后重放 | 401 | `AUTH_TOKEN_INVALID` | 重新 `GET /prelude` 取新租约 |
-| 凭据记录的 `KID` 落后于当前版本（版本已轮换） | 401 | `AUTH_TOKEN_REVOKED` | 重新挑战 → 签名 → 取新凭据（§1.7.5）；**不要重算签名**；文案"凭据已过期版本，请重新获取" |
+| 凭据记录的 `KID` 落后于当前版本（版本已轮换） | 401 | `AUTH_TOKEN_STALE` | 重新挑战 → 签名 → 取新凭据（§1.7.5）；**不要重算签名**；文案"凭据已过期版本，请重新获取" |
 | 传输进入终态 | 410 | `TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` | 停止并清理本地 |
 
 **判定顺序写死**：先凭据（401）、后状态（410）；凭据内部**先比 `KID`、再比凭据本身**。
 
 **两类错误不得互相顶替**（写死）：
 
-- 凭据类**只有两个**：`AUTH_TOKEN_INVALID`（不存在 / 格式错 / 值不匹配 / 租约过期）、`AUTH_TOKEN_REVOKED`（`KID` 已轮换）；
+- 凭据类**只有两个**：`AUTH_TOKEN_INVALID`（不存在 / 格式错 / 值不匹配 / 租约过期）、`AUTH_TOKEN_STALE`（`KID` 已轮换）；
 - 签名类：`AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受：伪造 DER、消息被改、公钥不符）、`AUTH_CODE_MISMATCH`（码与签名不一致）。
 
-**三个终值**：`AUTH_TOKEN_REVOKED`（以实测为准；若最终定为 `AUTH_TOKEN_STALE` 则全文替换）/ `AUTH_TOKEN_INVALID` / `AUTH_SIGNATURE_INVALID`。
+**三个终值（定稿）**：`AUTH_TOKEN_STALE`（版本已过期，`KID` 轮换）/ `AUTH_TOKEN_INVALID`（值不匹配·格式错·不存在）/ `AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受）。
 
-> **字面值以服务端实际返回为唯一权威，本契约随实测同步。** 语义与 HTTP 状态不随字面变化；客户端与门禁按**语义**分叉，替换字面时只改名字。
+> `AUTH_TOKEN_STALE` 本期**不定义**：本实现没有"显式吊销列表"这类独立语义，将来若引入再单独定义，避免两个近义名混用。
 
 **客户端处置按名字分叉**：前两个都走"重新挑战 → 签名 → 取新凭据"（**不要重算签名**，那是签名问题的解法）；只有拿到 `AUTH_SIGNATURE_INVALID` 才去查 `SIG_INPUT` 拼接、私钥与公钥是否配对。
 
 **v1 不设凭据级的"过期"错误码**：上传凭据的有效期就是传输的 `expires_at`，到期由传输终结表达（`410 TRANSFER_EXPIRED`）；下载租约到期视为凭据失效（`AUTH_TOKEN_INVALID`）。凭据类 **MUST NOT** 再造 `*_EXPIRED`。
 
-凭据失效 **MUST NOT** 返回签名类错误：否则客户端会被引去"重算签名 / 怀疑私钥"，而真正原因是"该换凭据了"。同理 `AUTH_TOKEN_REVOKED` 也 **MUST NOT** 被 `AUTH_TOKEN_INVALID` 顶替——两者客户端处置相同，但排查含义完全不同（一个是版本、一个是来源）。
+凭据失效 **MUST NOT** 返回签名类错误：否则客户端会被引去"重算签名 / 怀疑私钥"，而真正原因是"该换凭据了"。同理 `AUTH_TOKEN_STALE` 也 **MUST NOT** 被 `AUTH_TOKEN_INVALID` 顶替——两者客户端处置相同，但排查含义完全不同（一个是版本、一个是来源）。
 
 #### 1.7.5 重签发（可选端点）
 
@@ -311,7 +311,7 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 **③ 失效联动：旧凭据不得复活**
 
-新凭据用当前 `KID` 派生，与旧凭据**逐字节不同**；旧凭据的记录 `KID` 永久落后 → 永久 `AUTH_TOKEN_REVOKED`。重签发不是"续期"，MUST NOT 让任何旧凭据重新可用。
+新凭据用当前 `KID` 派生，与旧凭据**逐字节不同**；旧凭据的记录 `KID` 永久落后 → 永久 `AUTH_TOKEN_STALE`。重签发不是"续期"，MUST NOT 让任何旧凭据重新可用。
 
 **④ 已传块不重传（该端点的核心价值）**
 
@@ -331,7 +331,7 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 1. 建传输记 `tokenA`，`PUT /prelude` → 期望 `201`；
 2. 递增 `KID`（可同时换 `TOKEN_SECRET`）并生效；
-3. 用 `tokenA` 再打 `PUT /prelude` → **期望 `401 AUTH_TOKEN_REVOKED`**；
+3. 用 `tokenA` 再打 `PUT /prelude` → **期望 `401 AUTH_TOKEN_STALE`**；
 4. `POST /v1/transfers/{id}/token`（`PURPOSE 0x08`）换 `tokenB` → `200`，且 `tokenB ≠ tokenA`；
 5. 用 `tokenB` 打 `PUT /prelude` → 期望 `201`/`204`（**不得要求重传已完成块**）；
 6. 同一 `(TOKEN_SECRET, KID)` 下重复第 4 步 → `200` 且返回**与 `tokenB` 逐字节相同**（幂等）；
@@ -789,7 +789,7 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
 
 | 项 | 值 |
 |---|---|
-| 头 | `X-YS-Download-Id: <先前拿到的>`；缺失 → `409 DOWNLOAD_NOT_STARTED`；租约过期 → `401 AUTH_TOKEN_INVALID`；`KID` 轮换后 → `401 AUTH_TOKEN_REVOKED`（§1.7.4，重新 `GET /prelude` 取新租约） |
+| 头 | `X-YS-Download-Id: <先前拿到的>`；缺失 → `409 DOWNLOAD_NOT_STARTED`；租约过期 → `401 AUTH_TOKEN_INVALID`；`KID` 轮换后 → `401 AUTH_TOKEN_STALE`（§1.7.4，重新 `GET /prelude` 取新租约） |
 | 响应 200 | 块切片原始字节（`PT_LEN+16` 字节），`Accept-Ranges: bytes` |
 | Range | 支持单区间（§8） |
 | 乱序 | 任意顺序请求，服务端不做顺序约束（顺序由端侧 AAD 保证） |
@@ -951,7 +951,7 @@ v1 的信令与在线表**未实现**（排期见 §15），所以"WS 不可用"
 | `AUTH_CHALLENGE_INVALID` | 401 | 挑战过期/已用/用途不符 | 重新 `POST /challenges` 后重试一次 |
 | `AUTH_CODE_MISMATCH` | 401 | `X-YS-Code` 与 `SIG_INPUT` 里被签名的 `CODE(4)` 不一致 | 修 bug；用同一码重算签名 |
 | `AUTH_TOKEN_INVALID` | 401 | 凭据不存在 / 与任何已签发凭据不匹配（随机串、别的传输的 token；§1.7.4） | 重新申领（上传 §1.7.5、下载重取租约）；不要重试同一凭据 |
-| `AUTH_TOKEN_REVOKED` | 401 | 凭据记录的 `KID` 落后于当前版本（版本已轮换，§1.7.3）。字面以实测为准（见 §1.7.4 脚注） | 重新挑战 → 签名 → 取新凭据（上传 §1.7.5、下载重取租约）；**不要重算签名** |
+| `AUTH_TOKEN_STALE` | 401 | 凭据记录的 `KID` 落后于当前版本（版本已轮换，§1.7.3） | 重新挑战 → 签名 → 取新凭据（上传 §1.7.5、下载重取租约）；**不要重算签名**；文案"凭据已过期版本，请重新获取" |
 | `SIGNAL_PEER_MISMATCH` | 403 | 信令双方与传输不匹配 | 停止该直传尝试，走中转 |
 | `NOT_TRANSFER_PARTY` | 403 | 已认证（签名有效）但**不是该传输的当事人**：非接收方调 `ack`、非发送方调 `revoke` | 停止操作、不要重试；提示"这不是你的传输" |
 | `CODE_NOT_FOUND` | 404 | 码未注册 | 提示"码不对或对方已换浏览器" |
@@ -1101,7 +1101,7 @@ Content-Type: application/json
 13. 码的归一化在任何判定之前完成，且限速/锁定按归一化后的码计数（§1.6）。
 14. WS 不可用是 v1 的正常路径：上传/下载/续传/取件/撤回功能不受影响，只静默降级（§9.6）。
 15. 审计只记路由模板，不记实际路径参数；`upload_token` 库内只存 `SM3`。
-16. 版本吊销 = 递增 `KID`（**严格单调递增**，调小/调回 MUST 拒绝启动）：旧凭据一律 `401 AUTH_TOKEN_REVOKED`；只换 `TOKEN_SECRET` 不换 `KID` 则是 `AUTH_TOKEN_INVALID`；未配置 `KID` 拒绝启动；凭据类只有 `INVALID`/`REVOKED` 两码，传输级过期走 410（§1.7）。
+16. 版本吊销 = 递增 `KID`（**严格单调递增**，调小/调回 MUST 拒绝启动）：旧凭据一律 `401 AUTH_TOKEN_STALE`；只换 `TOKEN_SECRET` 不换 `KID` 则是 `AUTH_TOKEN_INVALID`；未配置 `KID` 拒绝启动；凭据类只有 `INVALID`/`REVOKED` 两码，传输级过期走 410（§1.7）。
 
 ---
 
