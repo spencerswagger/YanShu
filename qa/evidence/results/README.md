@@ -18,6 +18,7 @@ results/
 | 文件 | 对象（head） | 产物 sha256 | 认证 | 入口类型 | 一句话结论 |
 |---|---|---|---|---|---|
 | `contract-v1/2026-11-02-evidence2-freeze-80400ec.md` | 端侧 `80400ec`（**冻结 head**） | `c1b87d0a…c97259f`（127,313B） | — | wasm-production | 证据二 6/6 + 11/11 + 变体 18/18，未报错 0；用户码 4 入口一致 |
+| `contract-v1/2026-11-02-host-binary-980fc44.md` | 服务端 `980fc44` | 二进制 sha256 `168ef3af…` | **真 sm2** | native-api | 宿主二进制 + run #5（三处零命中）+ token 轮换实测（旧 token 仍 201） |
 | `contract-v1/2026-11-02-prelude-meta.md` | 端侧 `031e95b`（= 冻结 `80400ec` 同一产物） | `c1b87d0a…`（127,313B） | — | wasm-production | prelude-only 能读且标注 `data_verified:false`；整包入口拒绝半包；篡改来源/清单必失败（6/6） |
 | `contract-v1/2026-11-02-user-code-consistency.md` | 端侧 `f1ef9f9` | — | — | wasm + 原生 | 20/20 通过；P0 定位为驱动调用约定 bug |
 | `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | 服务端 `08d40e7` + 端侧 `0f33a15` | — | **真 sm2** | native-api | 存储/DB/日志三处零命中，对照 1/1/1/0 |

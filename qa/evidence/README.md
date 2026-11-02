@@ -233,6 +233,7 @@ qa/evidence/
 ├─ STARTUP.md                   常驻实例启动配方（可直接粘走执行）
 ├─ check_code_consistency.py    跨实现一致性：用户码派生（4 入口）+ 码归一化（wasm vs Core）
 ├─ check_prelude_meta.py        prelude-only 元数据语义（能读 + 标注未校验 + 整包入口拒绝半包）
+├─ check_token_lifecycle.py     token 生命周期实测（轮换 TOKEN_SECRET 后旧 token 是否失效）
 ├─ check_all.sh                 一条命令跑全部：构建 → 自测 → 用户码 → prelude 元数据 → 证据二
 ├─ run_evidence1_core.sh        证据一一键复跑（起真服务 → 投递 → 三处扫 → 阳性对照）
 ├─ run_evidence2_contract.sh    证据二一键复跑（契约布局，Rust 原生入口）
