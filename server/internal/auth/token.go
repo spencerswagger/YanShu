@@ -88,6 +88,17 @@ func (t *TokenIssuer) UploadToken(transferID string, kid int64) (string, error) 
 	return B64.EncodeToString(mac.Sum(nil)), nil
 }
 
+// Derives 判断 token 是否等于该传输在当前密钥 + 指定 KID 下的派生值，
+// 且与库内哈希一致。密钥轮换后派生值变化 → 返回 false（凭据不匹配）。
+func (t *TokenIssuer) Derives(token, transferID string, kid int64, storedHash []byte) bool {
+	expected, err := t.UploadToken(transferID, kid)
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare(UploadTokenHash(token), UploadTokenHash(expected)) == 1 &&
+		subtle.ConstantTimeCompare(UploadTokenHash(expected), storedHash) == 1
+}
+
 // ValidateHash 只比对 token 的 SM3 与库里存的哈希。
 //
 // **不重算**：EPOCH 才是吊销开关（见 UploadToken 的注释与 API §1.7）。

@@ -14,7 +14,7 @@ upload_token = base64url(HMAC-SHA256(TOKEN_SECRET,
   （`transfers.upload_token_kid`）。
 - 校验顺序（**先凭据后状态**）：
   1. 行内 KID != 当前 KID → `401 AUTH_TOKEN_REVOKED`；
-  2. `SM3(token)` != 库内哈希 → `401 AUTH_TOKEN_INVALID`；
+  2. token 不等于当前密钥下的派生值（伪造/串传输/**secret 被轮换**）→ `401 AUTH_TOKEN_INVALID`；
   3. 之后才看传输状态：终结态一律 `410`（含传输 TTL 过期 `410 TRANSFER_EXPIRED`）。
 - `AUTH_SIGNATURE_INVALID` **只**用于签名本身不被接受（伪造 DER、消息被改、公钥不符），
   与上面三个凭据类是两套。
@@ -36,14 +36,15 @@ config: YANSHU_TOKEN_KID must increase (current=3, provided=2); refusing to star
 ```
 
 调小会让被吊销的旧凭据复活，所以这是硬校验，不是告警。
-`TOKEN_SECRET` 只是派生盐：**轮换它不会吊销任何 token**。
+`TOKEN_SECRET` 参与派生：轮换它会让既有 token 派生值对不上 → `AUTH_TOKEN_INVALID`；
+KID 递增则是显式的"版本吊销"→ `AUTH_TOKEN_REVOKED`。两者都要求重启（secret/KID 都从启动配置读）。
 
 ## 3. 失效矩阵
 
 | 事件 | 结果 |
 |---|---|
 | KID 递增 | 全部旧 token 立刻 `401 AUTH_TOKEN_REVOKED`（无需重启） |
-| 只换 `TOKEN_SECRET` | 旧 token **仍然有效**（KID 未变、哈希未变） |
+| 只换 `TOKEN_SECRET` | 旧 token `401 AUTH_TOKEN_INVALID`（派生值变了；不是签名类） |
 | token 值不对/串了传输 | `401 AUTH_TOKEN_INVALID` |
 | 传输终结（撤回/过期/取完） | 上传接口 409/410（状态层） |
 

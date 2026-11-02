@@ -1127,7 +1127,7 @@ func TestTokenRotationMatrix(t *testing.T) {
 		spec.HeaderUploadToken: "not-a-real-token",
 	}), spec.ErrAuthTokenInvalid)
 
-	// ① 只换 secret（KID 不变）→ 旧 token 仍有效。
+	// ① 只换 secret（KID 不变）→ 旧 token 变成"凭据不匹配"。
 	rotatedTokens, err := auth.NewTokenIssuer([]byte("rotated-secret"))
 	if err != nil {
 		t.Fatal(err)
@@ -1142,11 +1142,10 @@ func TestTokenRotationMatrix(t *testing.T) {
 	e2.srv = httptest.NewServer(e2.api.Handler())
 	defer e2.srv.Close()
 
-	if got := e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
+	// 只换 secret → 派生值变了 → 凭据不匹配（AUTH_TOKEN_INVALID），不是签名类。
+	e2.wantError(e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
 		spec.HeaderUploadToken: tr.UploadToken,
-	}); got.status != http.StatusOK {
-		t.Fatalf("only-secret must keep token alive, got %d %s", got.status, got.body)
-	}
+	}), spec.ErrAuthTokenInvalid)
 
 	// ② KID 递增 → 旧 token 立刻 STALE。
 	if _, err := e.st.Pool().Exec(context.Background(),

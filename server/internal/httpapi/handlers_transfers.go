@@ -128,7 +128,7 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 			// 幂等重放要返回同一个 token；secret 轮换过就重建不出来，
 			// 这时不能把不可用的 token 发出去，让客户端重建传输。
 			if existing.UploadTokenKID != strconv.FormatInt(cur, 10) ||
-				!auth.ValidateHash(token, existing.UploadTokenSM3) {
+				!a.tokens.Derives(token, existing.ID, cur, existing.UploadTokenSM3) {
 				a.log.Warn("idempotency replay after token rotation", "transferId", existing.ID)
 				fail(w, r, spec.ErrTransferStateConflict)
 				return
@@ -566,8 +566,9 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 		writeError(w, r, apiError{code: spec.ErrAuthTokenRevoked})
 		return store.Transfer{}, false
 	}
-	// ② token 与库内哈希对不上 → AUTH_TOKEN_INVALID
-	if !auth.ValidateHash(token, t.UploadTokenSM3) {
+	// ② 凭据不匹配（伪造 / 串了传输 / 签发后 TOKEN_SECRET 被轮换）→ AUTH_TOKEN_INVALID
+	rowKID, _ := strconv.ParseInt(t.UploadTokenKID, 10, 64)
+	if !a.tokens.Derives(token, t.ID, rowKID, t.UploadTokenSM3) {
 		writeError(w, r, apiError{code: spec.ErrAuthTokenInvalid})
 		return store.Transfer{}, false
 	}

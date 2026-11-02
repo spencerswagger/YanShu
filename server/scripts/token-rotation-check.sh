@@ -107,9 +107,9 @@ check "baseline status" 200 "" "$(status_of "$PKG1" "$TOK1")"
 check "wrong token" 401 "AUTH_TOKEN_INVALID" "$(status_of "$PKG1" "not-a-real-token")"
 stop_server
 
-echo "== 2) 只换 TOKEN_SECRET（KID 不变）→ 旧 token 仍有效 =="
+echo "== 2) 只换 TOKEN_SECRET（KID 不变）→ 旧 token 凭据不匹配 =="
 start_server "rotation-secret-0002" "1"
-check "only-secret: 旧 token" 200 "" "$(status_of "$PKG1" "$TOK1")"
+check "only-secret: 旧 token" 401 "AUTH_TOKEN_INVALID" "$(status_of "$PKG1" "$TOK1")"
 set -- $(new_transfer); PKG2=$1; TOK2=$2
 check "only-secret: 新 token" 200 "" "$(status_of "$PKG2" "$TOK2")"
 stop_server
