@@ -38,7 +38,7 @@
 | R8 | token 生命周期与吊销缺口（旧实现：只比库内哈希，换 secret 后旧 token 仍 201） | **按实现对齐为 `KID`**：`KID` 是**唯一吊销开关**（正整数、严格单调递增；**只有调小拒绝启动**，未配置取默认 `1` 或沿用记录值；`YANSHU_TOKEN_KID` 为 `YANSHU_TOKEN_EPOCH` 的旧别名），**递增即刻生效、无需重启**；校验四类顺序（`KID` → 值 → 有效期 → 传输状态）；`KID` 进派生输入但**不进 wire**，`/v1/config.token_epoch` 与 `KID` 同义；`TOKEN_SECRET` 只作派生盐、**轮换不吊销**；凭据类三码 `STALE`/`INVALID`/`EXPIRED`（上传 6 h / 租约 30 min）；8 步用例含"只换 secret 仍有效"与"超期 = EXPIRED"对照 | API §1.5、§1.3、§1.7、§3、§7.4、§10.1、§11.1、§14 | 否 |
 | R9 | 重签发端点是否保留 | **保留但降级为可选**（API §1.7.5）：① 只认发件人 `PURPOSE 0x08` 签名，禁止凭 `transfer_id`/旧凭据换取；② 幂等（同 `(transfer_id, TOKEN_SECRET, KID)` 返回逐字节相同凭据）+ 双向限速；③ 新凭据用当前 `KID` 派生、与旧凭据逐字节不同，旧凭据永久 `AUTH_TOKEN_STALE`；④ 已传块不重传（先 `GET /status` 取 `missing`）；⑤ **v1 可选能力**，部署方可关闭（`501 FEATURE_DISABLED`） | API §1.7.5、§3、§10.1、§11.1 | 否 |
 
-| R10 | `SIG_INPUT` 缺长度上限（实现自设 512，契约无定义） | **补定义**：`SIG_INPUT_MAX = 109` 字节，由字段上限推导（前缀 7 + PURPOSE 1 + NONCE 32 + 最长字段串 69，最长是 `REGISTER` 的 `CODE‖PUBKEY`）；另设防御性硬上限 `SIG_INPUT_HARD_LIMIT = 512`，仅作 DoS 门、不是合法性边界——**该门在实际请求路径不可达**（昵称先被字段级校验拒、其余字段定长），且实现侧无专属"超长"错误码，若库层触发则回 `400 BAD_REQUEST`；服务端 MUST 逐字段校验（不得用字节上限代替），客户端 MUST 本地按字段上限校验 | API §1.3、§10.1 | 否 |
+| R10 | `SIG_INPUT` 缺长度上限（实现自设 512，契约无定义） | **补定义**：`SIG_INPUT_MAX = 109` 字节，由字段上限推导（前缀 7 + PURPOSE 1 + NONCE 32 + 最长字段串 69，最长是 `REGISTER` 的 `CODE‖PUBKEY`）；另设防御性硬上限 `SIG_INPUT_HARD_LIMIT = 512`，仅作 DoS 门、不是合法性边界，触发时 `400 SIG_INPUT_TOO_LONG`（**当前 HTTP 路径不可达**：昵称先被字段级校验拒、其余字段定长）；服务端 MUST 逐字段校验（不得用字节上限代替），客户端 MUST 本地按字段上限校验、不依赖该码 | API §1.3、§10.1 | 否 |
 
 | R11 | 凭据类错误名字面值反复变更 | **已定稿**：凭据类三码 —— `AUTH_TOKEN_STALE`（`KID` 轮换）/ `AUTH_TOKEN_INVALID`（值不匹配·格式错·不存在）/ `AUTH_TOKEN_EXPIRED`（上传 6 h / 租约 30 min）；签名类 `AUTH_SIGNATURE_INVALID` 仅用于签名本身；传输终结走 `410`。本期**不定义**任何"显式吊销"专用名（留给将来的显式吊销列表语义） | API §1.7.4、§10.1 | 否 |
 
