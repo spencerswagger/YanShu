@@ -4,6 +4,12 @@
     "pack_version": "YSPK/1.0",
     "byte_order": "所有整数与 hex 均为大端/网络序；hex 小写、无 0x 前缀",
     "sm3": { "standard": "GB/T 32905-2016", "digest_bytes": 32 },
+    "sm2": {
+      "user_id": "1234567812345678",
+      "entl": "0x0080（大端 00 80）",
+      "za": "SM3(ENTL ‖ ID ‖ a ‖ b ‖ Gx ‖ Gy ‖ Px ‖ Py)，P 为签名者公钥",
+      "signed_digest": "e = SM3(ZA ‖ msg)；msg 传原文，不要预哈希"
+    },
     "hmac_sm3": {
       "standard": "RFC 2104，PRF = SM3",
       "block_size": 64,

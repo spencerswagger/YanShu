@@ -165,8 +165,8 @@ expectRc(
   const vecPath = new URL("../../vectors/sm2-verify-vectors.json", import.meta.url);
   const vec = JSON.parse(fs.readFileSync(vecPath, "utf8"));
   for (const v of vec.verify_vectors) {
-    // ABI 固定默认 userID；不同 ID 的用例只用于验证 ZA 口径（应用层复算），不走 ABI
-    if (v.user_id !== "1234567812345678") continue;
+    // executable:false 表示该条依赖 ABI 不具备的能力（如 userID 入参），不计分
+    if (v.executable === false) continue;
     const pub = fromHex(v.pub65).slice(1); // ABI 64 字节 X‖Y
     const msg = fromHex(v.sig_input);
     const sig = fromHex(v.sig_der);

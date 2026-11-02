@@ -189,6 +189,7 @@ fn main() {
         sig: Vec<u8>,
         expect_verify: bool,
         expect_server: &'static str,
+        executable: bool,
         code_in_sig: &'static str,
         request_code: &'static str,
         note: &'static str,
@@ -208,6 +209,7 @@ fn main() {
             sig,
             expect_verify: true,
             expect_server: "OK",
+            executable: true,
             code_in_sig: "AWQW",
             request_code: "AWQW",
             note: "正例",
@@ -238,6 +240,7 @@ fn main() {
         sig: sig_p1.clone(),
         expect_verify: false,
         expect_server: "CRYPTO_SIGNATURE_INVALID",
+        executable: true,
         code_in_sig: "AWQW",
         request_code: "AWQW",
         note: "SIG_INPUT 改 1 字节（CODE 位），签名不变",
@@ -256,6 +259,7 @@ fn main() {
         sig: sig_flipped,
         expect_verify: false,
         expect_server: "CRYPTO_SIGNATURE_INVALID",
+        executable: true,
         code_in_sig: "AWQW",
         request_code: "AWQW",
         note: "DER 里 r 的第 3 字节取反",
@@ -272,6 +276,7 @@ fn main() {
         sig: sig_p1.clone(),
         expect_verify: false,
         expect_server: "CRYPTO_SIGNATURE_INVALID",
+        executable: true,
         code_in_sig: "AWQW",
         request_code: "AWQW",
         note: "公钥换成另一把（ZA 与验签都变）",
@@ -302,6 +307,7 @@ fn main() {
         sig: sig_p2,
         expect_verify: false,
         expect_server: "CRYPTO_SIGNATURE_INVALID",
+        executable: true,
         code_in_sig: "AWQW",
         request_code: "AWQW",
         note: "昵称 12 字节但 u16be 前缀写成 11 → 拼出的字节与签名时不同",
@@ -318,6 +324,7 @@ fn main() {
         sig: sig_p1.clone(),
         expect_verify: true,
         expect_server: "AUTH_CODE_MISMATCH",
+        executable: true,
         code_in_sig: "AWQW",
         request_code: "ZZZZ",
         note: "验签通过，但 X-YS-Code=ZZZZ ≠ SIG_INPUT 里的 CODE(AWQW)",
@@ -335,6 +342,7 @@ fn main() {
         sig: empty_sig,
         expect_verify: true,
         expect_server: "BAD_INPUT",
+        executable: true,
         code_in_sig: "",
         request_code: "AWQW",
         note: "空消息的签名能验过，但 SIG_INPUT 至少含前缀+用途+nonce，服务端应按 BAD_INPUT 拒",
@@ -353,6 +361,7 @@ fn main() {
         sig: long_sig,
         expect_verify: true,
         expect_server: "BAD_INPUT",
+        executable: true,
         code_in_sig: "",
         request_code: "AWQW",
         note:
@@ -368,11 +377,14 @@ fn main() {
         pub65: pk65,
         id: b"1234567812345679".to_vec(),
         sig: sig_p1,
-        expect_verify: false,
-        expect_server: "CRYPTO_SIGNATURE_INVALID",
+        // ABI 没有 userID 入参（固定国标默认串）→ 这份签名在 ABI 上必然通过；
+        // 本用例只说明"ZA 依赖 userID"，标不可执行、不计分。
+        expect_verify: true,
+        expect_server: "OK",
+        executable: false,
         code_in_sig: "AWQW",
         request_code: "AWQW",
-        note: "换 userID 后 ZA 变，验签必须失败",
+        note: "ABI 固定默认 userID、验签无 ID 入参：此签名在 ABI 上必然通过；换 ID 必拒在库层断言（tests/sig_conventions.rs），不计入验收集",
     });
 
     // ---- 自检 + 输出
@@ -389,7 +401,8 @@ fn main() {
     json.push_str("    \"sig_input_formula\": \"YSAUTH1(7) ‖ PURPOSE(1) ‖ NONCE(32) ‖ <该用途字段串>；整数一律大端：u16be/u32be/u64be；字符串带显式长度前缀\",\n");
     json.push_str("    \"abi_note\": \"ys_sm2_verify_der 固定默认 userID；different_user_id 用例需在应用层用该 ID 复算 ZA\",\n");
     json.push_str("    \"expect_verify\": \"密码学层面：签名与 pub/消息/userID 是否匹配\",\n");
-    json.push_str("    \"expect_server\": \"服务端策略层面：OK / AUTH_CODE_MISMATCH / CRYPTO_SIGNATURE_INVALID / BAD_INPUT\"\n");
+    json.push_str("    \"expect_server\": \"服务端策略层面：OK / AUTH_CODE_MISMATCH / CRYPTO_SIGNATURE_INVALID / BAD_INPUT\",\n");
+    json.push_str("    \"executable\": \"该条能否在冻结 ABI 上执行；false 表示依赖 ABI 不具备的能力（如 userID 入参），不计入通过/拒绝统计\"\n");
     json.push_str("  },\n");
 
     json.push_str("  \"sig_input_samples\": [\n");
@@ -423,7 +436,9 @@ fn main() {
         let za = sm2::z_a(&pub64, &v.id);
         let e = sm2::message_digest(&pub64, &v.msg, &v.id);
         let got = verify_raw(&v.pub65, &v.msg, &v.id, &v.sig);
-        assert_eq!(got, v.expect_verify, "vector {} 自检失败", v.name);
+        if v.executable {
+            assert_eq!(got, v.expect_verify, "vector {} 自检失败", v.name);
+        }
 
         let fields_json = match &v.fields {
             Some(fs) => {
@@ -444,7 +459,7 @@ fn main() {
         };
 
         json.push_str(&format!(
-            "    {{\"name\": \"{}\", \"purpose\": \"{}\", \"pub65\": \"{}\", \"user_id\": \"{}\", \"code_in_sig\": \"{}\", \"request_code\": \"{}\", \"sig_input\": \"{}\", \"sig_input_len\": {}, \"sig_input_fields\": {}, \"za\": \"{}\", \"digest_e\": \"{}\", \"sig_der\": \"{}\", \"sig_der_len\": {}, \"expect_verify\": {}, \"expect_server\": \"{}\", \"note\": \"{}\"}}{}\n",
+            "    {{\"name\": \"{}\", \"purpose\": \"{}\", \"pub65\": \"{}\", \"user_id\": \"{}\", \"code_in_sig\": \"{}\", \"request_code\": \"{}\", \"sig_input\": \"{}\", \"sig_input_len\": {}, \"sig_input_fields\": {}, \"za\": \"{}\", \"digest_e\": \"{}\", \"sig_der\": \"{}\", \"sig_der_len\": {}, \"expect_verify\": {}, \"expect_server\": \"{}\", \"executable\": {}, \"note\": \"{}\"}}{}\n",
             v.name,
             v.purpose,
             hex(&v.pub65),
@@ -460,6 +475,7 @@ fn main() {
             v.sig.len(),
             v.expect_verify,
             v.expect_server,
+            v.executable,
             v.note,
             if i + 1 == vectors.len() { "" } else { "," }
         ));
@@ -478,11 +494,11 @@ fn main() {
     let path = out_dir.join("sm2-verify-vectors.json");
     fs::write(&path, json).expect("write vectors");
     eprintln!(
-        "wrote {} ({} SIG_INPUT samples, {} verify vectors: {} positive / {} negative)",
+        "wrote {} ({} SIG_INPUT samples, {} verify vectors: {} positive / {} negative, executable only)",
         path.display(),
         purposes.len(),
         vectors.len(),
-        vectors.iter().filter(|v| v.expect_verify).count(),
-        vectors.iter().filter(|v| !v.expect_verify).count()
+        vectors.iter().filter(|v| v.executable && v.expect_verify).count(),
+        vectors.iter().filter(|v| v.executable && !v.expect_verify).count()
     );
 }

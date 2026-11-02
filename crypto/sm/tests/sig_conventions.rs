@@ -114,3 +114,27 @@ fn za_uses_signer_public_key() {
     // 签名者公钥就是私钥派生出来的那把
     assert_eq!(hex(&signer_pub), PB_S_HEX[2..]);
 }
+
+/// `different_user_id` 的意图（换 ID 必拒）只能在本层断言：ABI 没有 userID 入参，
+/// 那条向量在验收集里标 `executable:false`，不计分。
+#[test]
+fn different_user_id_must_fail_at_library_level() {
+    let sk: [u8; 32] = {
+        let mut a = [0u8; 32];
+        a.copy_from_slice(&unhex(D_S_HEX));
+        a
+    };
+    let pub64 = arr64(PB_S_HEX);
+    let msg = b"YSAUTH1\x01nonce...";
+    let k = U256::from_be_bytes(&[0x44; 32]);
+    let raw = sm2::sign_with_k(&sk, msg, sm2::DEFAULT_ID, &k)
+        .unwrap()
+        .unwrap();
+    let mut sig = [0u8; 64];
+    sig.copy_from_slice(&raw);
+
+    // 默认 ID：通过
+    assert!(sm2::verify(&pub64, msg, sm2::DEFAULT_ID, &sig).unwrap());
+    // 换 userID：ZA 变 → 必须失败
+    assert!(!sm2::verify(&pub64, msg, b"1234567812345679", &sig).unwrap());
+}
