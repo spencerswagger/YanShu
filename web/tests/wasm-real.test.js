@@ -15,6 +15,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 
@@ -32,6 +33,22 @@ const here = dirname(fileURLToPath(import.meta.url))
 const candidates = [process.env.YS_WASM, resolve(here, '../public/ys_kernel.wasm'), '/.cache/rust-web/wasm32-unknown-unknown/release/yanshu_sm.wasm'].filter(Boolean)
 const wasmPath = candidates.find((p) => existsSync(p))
 const skip = wasmPath ? false : `没找到内核产物（试过：${candidates.join(', ')}）`
+const buildMetaPath = resolve(here, '../public/ys_kernel.build.json')
+
+test('真内核：产物与构建溯源同源（sha256 + commit + 版本）', { skip }, async () => {
+  if (!existsSync(buildMetaPath)) {
+    console.log('[skip] 没有 ys_kernel.build.json（用 npm run wasm:rebuild 生成）')
+    return
+  }
+  const meta = JSON.parse(readFileSync(buildMetaPath, 'utf8'))
+  const digest = createHash('sha256').update(readFileSync(wasmPath)).digest('hex')
+  assert.equal(digest, meta.sha256, 'wasm 的 sha256 必须与构建溯源一致')
+  assert.match(meta.commit, /^[0-9a-f]{40}$/, '溯源里必须记 40 位 commit')
+  const kernel = await instantiateKernel(readFileSync(wasmPath))
+  assert.equal(`0x${kernel.version.toString(16)}`, meta.ysVersion)
+  assert.equal(kernel.headerLen, meta.headerLen)
+  console.log(`[provenance] commit=${meta.commit.slice(0, 7)} sha256=${digest.slice(0, 12)}…`)
+})
 
 test('真内核：0 import、导出齐全、版本/包头/块大小可读', { skip }, async () => {
   const kernel = await instantiateKernel(readFileSync(wasmPath))

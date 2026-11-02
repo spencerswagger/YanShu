@@ -72,29 +72,33 @@ web/
 └── tests/
 ```
 
-## 内核产物来源与校验（可复现）
-
-产物不入库（根 `.gitignore` 忽略 `*.wasm`），所以每次都要拿**具体 commit** 重建，并核对下列五项：
+## 重建内核与"产物 ↔ 源码同源"校验（一条命令）
 
 ```bash
-# 仓库根
-git fetch origin
-git archive origin/feat/endcrypto-wasm | tar -x -C /tmp/ys-kernel
-cd /tmp/ys-kernel/crypto
-CARGO_TARGET_DIR=/tmp/ys-kernel-target \
-  cargo build --release --target wasm32-unknown-unknown -p yanshu-sm
-cd web && YS_WASM=/tmp/ys-kernel-target/wasm32-unknown-unknown/release/yanshu_sm.wasm npm run wasm:sync
+cd web
+npm run wasm:rebuild        # 默认 origin/feat/endcrypto-wasm 的最新 commit
+# 指定某个 commit / 跳过 fetch：
+YS_KERNEL_REF=<sha> npm run wasm:rebuild
 ```
 
-| 校验项 | 期望（契约版） |
+`scripts/rebuild-wasm.mjs` 会依次做：`git fetch` → 解析 ref 的 commit → `git archive` 导出到临时目录（不动工作区、不建 worktree）
+→ `cargo build --release --target wasm32-unknown-unknown -p yanshu-sm`（独立 target 目录）→ 实例化核验 → 写产物与溯源。
+
+**核验不通过就不产出产物**（任一项失败直接非 0 退出）：
+
+| 校验项 | 期望 |
 |---|---|
-| 构建 commit | `feat/endcrypto-wasm` 的 head（本轮实测 `dbd66c4`） |
+| import | **0** |
 | `ys_version()` | `0x00010000` |
 | `ys_header_len()` | `112`（单一契约格式，无布局切换） |
-| 导出/导入 | 30 个函数导出、**0 import** |
 | `ys_unpack_v1` arity | `6`（只给私钥，来源由包内 `SENDER_PUB` 自证） |
+| `ys_sm2_sign_der` / `ys_pack_v1` | 必须存在 |
 
-`npm test` 会断言这些项（`tests/wasm-real.test.js` 第 1 例），产物不对就红。
+产物落在 `public/ys_kernel.wasm`，同时写 `public/ys_kernel.build.json`：
+`{commit, builtAt, sha256, bytes, imports, exports, ysVersion, headerLen, unpackV1Arity}`。
+**页面底部会显示当前内核的 commit/版本/导出数/产物 sha256**（读不到就显示"来源未记录"），
+`tests/wasm-real.test.js` 会断言"wasm 的 sha256 == 溯源里的 sha256、版本/包头一致"——所以"产物是不是从那个 commit 编的"是可核对的，不靠记忆。
+（`ys_kernel.build.json` 是产物级元数据，按 `.gitignore` 不入库。）
 
 ## 端侧内核绑定（`crypto/include/yanshu_sm.h`）
 

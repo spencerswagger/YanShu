@@ -29,6 +29,7 @@ const regBusy = ref(false)
 const regError = ref('')
 const regNotice = ref('')
 const serverConfig = ref(null)
+const kernelBuild = ref(null)
 const manualAttempts = ref(0)
 const inboxRef = ref(null)
 
@@ -88,6 +89,14 @@ onMounted(async () => {
     })
     await identityManager.value.loadOrCreate()
     syncSession()
+
+    // 内核构建溯源（由 `npm run wasm:rebuild` 写入 public/ys_kernel.build.json）
+    try {
+      const res = await fetch('/ys_kernel.build.json', { cache: 'no-cache' })
+      if (res.ok) kernelBuild.value = await res.json()
+    } catch {
+      kernelBuild.value = null
+    }
 
     const client = createClient({ baseUrl: config.apiBase })
     api.value = createApi({ client, kernel: kernel.value, session: identityManager.value.session })
@@ -259,6 +268,12 @@ async function doReceive({ transferId, onProgress }) {
   <LogPanel />
 
   <footer class="hint" style="margin-top: 18px">
+    <p v-if="kernelBuild">
+      端侧内核：commit {{ kernelBuild.commit.slice(0, 7) }} · {{ kernelBuild.ysVersion }} · HEADER
+      {{ kernelBuild.headerLen }} · {{ kernelBuild.exports }} 导出 / {{ kernelBuild.imports }} import ·
+      sha256 {{ kernelBuild.sha256.slice(0, 12) }}…
+    </p>
+    <p v-else-if="realCrypto">端侧内核来源未记录（未找到 ys_kernel.build.json）。</p>
     <p v-if="serverConfig">
       中转：{{ config.apiBase }} · 包版本 {{ serverConfig.crypto_pack_version }} · 块
       {{ serverConfig.chunk_size }} 字节

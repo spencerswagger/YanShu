@@ -1,7 +1,7 @@
 # 证据 B · **Core 真实服务 + 契约布局内核**（跨浏览器链路 + 契约布局）
 
 > **限定（写死在文件头）**
-> - 中转 = **Core 真实 HTTP 服务**（`feat/server-skeleton` @ `c3c2fc9`，`/v1` 路径，PG 持久化 + 磁盘密文块）。
+> - 中转 = **Core 真实 HTTP 服务**（`feat/server-skeleton` @ `9065eb8`，`/v1` 路径，PG 持久化 + 磁盘密文块）。
 >   服务端签名校验当前为 `YANSHU_VERIFIER=stub-allow`（不验签），因此本证据**只覆盖传输与端侧密码学**，
 >   不覆盖服务端验签；换真实 SM2 验签后需再跑一次同流程。
 > - 内核 = **契约布局** `YSPK/1.0`（`ys_header_len()` = 112、`SENDER_PUB` 入包、公钥 65 字节、DER 签名、
@@ -12,8 +12,8 @@
 | 运行标签 | `B-core-contract-kernel` |
 | 日期 | 2026-11-02 |
 | 前端 | `web/`（Vue 3 + Vite，dev server，`/v1` 反代到 Core） |
-| 中转 | Core `yanshu-server`（`127.0.0.1:8080`，`search_path=yanshu_web`，`YANSHU_BLOB_DIR` 独立目录） |
-| 内核 | 契约布局 wasm（HEADER 112），构建自 `feat/endcrypto-wasm` `dbd66c4`（`ys_version()=0x00010000`、30 导出、0 import、`ys_unpack_v1` 6 参自证） |
+| 中转 | Core `yanshu-server`（`9065eb8`，`127.0.0.1:8080`，`search_path=yanshu_web`，`YANSHU_BLOB_DIR` 独立目录，`YANSHU_LOG_FILE` 落盘） |
+| 内核 | 契约布局 wasm（HEADER 112），`npm run wasm:rebuild` 构建自 `feat/endcrypto-wasm` `e9f8254`（`ys_version()=0x00010000`、30 导出、0 import、`ys_unpack_v1` 6 参自证；构建溯源 `sha256=a657b33948b7…` 写在 `public/ys_kernel.build.json`，页面与测试都会显示/校验） |
 | 界面标签 | `真实加密 · 契约布局（YSPK/1.0）` |
 | 样本 | 与证据 A **同一份**：2 506 889 字节，sha256 `4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f` |
 | 客户端 | 两个独立 Chrome profile |
@@ -46,8 +46,10 @@ cd server && go build -o bin/yanshu-server ./cmd/yanshu-server
 set -a; . /.keys/pg.env; set +a
 YANSHU_DATABASE_URL="${PG_DEV_DSN}&search_path=yanshu_web" \
 YANSHU_BLOB_DIR=<blob 目录> YANSHU_ADDR=127.0.0.1:8080 \
-YANSHU_VERIFIER=stub-allow YANSHU_TOKEN_SECRET=dev-secret ./bin/yanshu-server
+YANSHU_LOG_FILE=<日志文件> \
+YANSHU_VERIFIER=stub-allow \
+YANSHU_TOKEN_SECRET=<≥16 字节> ./bin/yanshu-server   # 新版缺/短会直接 fatal 退出
 # Web
-cd web && npm run wasm:sync     # 放契约布局 wasm 到 public/ys_kernel.wasm
+cd web && npm run wasm:rebuild  # 一条命令：fetch → archive → cargo build → 核验 → 写 public/ys_kernel.wasm + build.json
 VITE_YS_RELAY_ORIGIN=http://127.0.0.1:8080 npx vite --port 5173
 ```
