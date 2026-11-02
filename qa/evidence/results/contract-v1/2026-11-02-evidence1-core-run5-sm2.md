@@ -1,7 +1,8 @@
 # 证据一 run #5：**真认证链路**（`YANSHU_VERIFIER=sm2`）
 
 - 日期：2026-11-02
-- 对象：服务端 `feat/server-skeleton` @ `08d40e7`（含 `deliver --sender-sk/--recipient-sk`），
+- 对象：服务端 `feat/server-skeleton` @ **`08d40e7`**，二进制
+  `yanshu-server-08d40e7`（sha256 `275fc463d5ed876c1dd5db720b0414b770e0f8d43aa51de65e68bcc819f6af55`）；
   端侧 `feat/endcrypto-wasm` @ `0f33a15` 打的真契约包
 - 库/schema：`yanshu_test`.`gate_ev1`（Gate 自己起实例，不碰宿主实例与 `yanshu_dev`）
 - 认证：**`YANSHU_VERIFIER=sm2`（真实 SM2 验签，非 stub）**

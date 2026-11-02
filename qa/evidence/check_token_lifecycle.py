@@ -43,11 +43,12 @@ def free_port() -> int:
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 
 
-def start(binary: str, dsn: str, work: Path, secret: str):
+def start(binary: str, dsn: str, work: Path, secret: str, extra: dict | None = None):
     port = free_port()
     env = dict(os.environ, YANSHU_DATABASE_URL=dsn, YANSHU_BLOB_DIR=str(work / "blobs"),
                YANSHU_ADDR=f"127.0.0.1:{port}", YANSHU_VERIFIER="stub-allow",
                YANSHU_TOKEN_SECRET=secret, YANSHU_LOG_DIR=str(work / "logs"))
+    env.update(extra or {})
     proc = subprocess.Popen([binary], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(60):
         try:
@@ -83,6 +84,8 @@ def main(argv=None) -> int:
     ap.add_argument("--dsn", required=True)
     ap.add_argument("--ys-tool", required=True, help="用于派生用户码与 SM3")
     ap.add_argument("--work", default="/tmp/ys-token")
+    ap.add_argument("--epoch-check", action="store_true",
+                    help="额外做一组：只改 YANSHU_TOKEN_EPOCH（secret 不变），验证是否真存在版本吊销")
     ap.add_argument("--json-out")
     args = ap.parse_args(argv)
 
@@ -141,6 +144,28 @@ def main(argv=None) -> int:
             return 2
     finally:
         proc.terminate(); proc.wait()
+
+    # ---- 对照组 B：只改"版本"变量（secret 不动），看是否真存在 epoch 机制 ----
+    if args.epoch_check:
+        ep1, ep2 = "1", "2"
+        proc, port = start(args.binary, args.dsn, work, "a" * 32, {"YANSHU_TOKEN_EPOCH": ep1})
+        try:
+            st, body = call(port, "PUT", f"/v1/transfers/{tid}/prelude", prelude,
+                            {"Content-Type": "application/octet-stream", "X-YS-Upload-Token": token})
+            print(f"[B-基线] secret 不变 + YANSHU_TOKEN_EPOCH={ep1} → HTTP {st}"
+                  + (f"（{err_code(body)}）" if st >= 300 else ""))
+        finally:
+            proc.terminate(); proc.wait()
+        proc, port = start(args.binary, args.dsn, work, "a" * 32, {"YANSHU_TOKEN_EPOCH": ep2})
+        try:
+            st, body = call(port, "PUT", f"/v1/transfers/{tid}/prelude", prelude,
+                            {"Content-Type": "application/octet-stream", "X-YS-Upload-Token": token})
+            print(f"[B-只改版本] secret 不变 + YANSHU_TOKEN_EPOCH={ep1}→{ep2} → HTTP {st}"
+                  + (f"（{err_code(body)}）" if st >= 300 else ""))
+            print("  B 结论：" + ("该变量生效（版本轮换可吊销）" if st in (401, 403)
+                                else "该变量被忽略（该 commit 上没有 epoch/kid 机制）"))
+        finally:
+            proc.terminate(); proc.wait()
 
     proc, port = start(args.binary, args.dsn, work, "b" * 32)
     try:
