@@ -66,7 +66,12 @@ export function describeKernel(kernel, selfTest) {
     return { mode: 'stub-fake', label: '开发桩（未加密）', contractOk: false, failed: ['stub'], note: '' }
   }
   const result = selfTest || kernel.selfTestResult || null
-  const failed = result ? Object.entries(result.checks).filter(([, ok]) => !ok).map(([k]) => k) : ['selfTest']
+  const NAMES = { version: '版本', header: '包头', v1Sample: 'V1 样例解包', versionGate: '版本闸门' }
+  const failed = result
+    ? Object.entries(result.checks)
+        .filter(([, ok]) => !ok)
+        .map(([k]) => NAMES[k] || k)
+    : ['自检未运行']
   const contractOk = Boolean(result?.ok)
   return {
     mode: contractOk ? 'wasm' : 'wasm-noncontract',

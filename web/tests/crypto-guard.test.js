@@ -76,12 +76,12 @@ test('标签判定收在一个薄函数：未就绪/桩/契约/非契约四态',
   assert.equal(describeKernel(null).label, '内核未就绪')
   assert.equal(describeKernel(new UnavailableKernel('x')).label, '内核未就绪')
   assert.equal(describeKernel(new DevStubKernel()).label, '开发桩（未加密）')
-  const okKernel = { mode: 'wasm', selfTestResult: { ok: true, checks: { version: true, header: true, roundtrip: true, versionGate: true } } }
+  const okKernel = { mode: 'wasm', selfTestResult: { ok: true, checks: { version: true, header: true, v1Sample: true, versionGate: true } } }
   assert.equal(describeKernel(okKernel).label, '真实加密 · 契约布局内核（YSPK/1.0）')
-  const badKernel = { mode: 'wasm', selfTestResult: { ok: false, checks: { version: true, header: true, roundtrip: false, versionGate: true } } }
+  const badKernel = { mode: 'wasm', selfTestResult: { ok: false, checks: { version: true, header: true, v1Sample: false, versionGate: true } } }
   const bad = describeKernel(badKernel)
   assert.equal(bad.label, '真实加密 · 非契约布局内核（待对齐）')
-  assert.deepEqual(bad.failed, ['roundtrip'])
+  assert.deepEqual(bad.failed, ['V1 样例解包'], '未通过项要给人话，不是内部键名')
 })
 
 test('生产构建拒绝开发桩', async () => {

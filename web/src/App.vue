@@ -269,7 +269,7 @@ async function doReceive({ transferId, onProgress }) {
 
   <footer class="hint" style="margin-top: 18px">
     <p v-if="kernelSelfTest">
-      内核自检：{{ kernelSelfTest.ok ? '四项判据全过（版本 / 包头 / 打包解包往返 / 版本闸门）' : '未通过 → ' + Object.entries(kernelSelfTest.checks).filter(([,v]) => !v).map(([k]) => k).join('、') }}
+      内核自检（契约 §2.3 四条）：{{ kernelSelfTest.ok ? '版本 / 包头 / V1 样例解包 / 版本闸门 全过' : '未通过 → ' + Object.entries(kernelSelfTest.checks).filter(([,v]) => !v).map(([k]) => k).join('、') }}
     </p>
     <p v-if="kernelBuild">
       端侧内核：commit {{ kernelBuild.commit.slice(0, 7) }} · {{ kernelBuild.ysVersion }} · HEADER

@@ -104,7 +104,7 @@ async function receiveOnce({ api, kernel, session, transferId, senderPublic, onP
   const blob = new Blob([plain], { type: finalMeta.mime || 'application/octet-stream' })
   if (save) {
     report({ phase: 'saving', done: plain.length, total: plain.length, message: '落盘' })
-    save(blob, safeFileName(finalMeta.name))
+    save(blob, safeFileName(finalMeta.name, finalMeta.ext))
   }
   if (ack) {
     report({ phase: 'acking', done: plain.length, total: plain.length, message: '确认取件（服务端随即删除密文）' })
@@ -123,10 +123,16 @@ async function receiveOnce({ api, kernel, session, transferId, senderPublic, onP
   }
 }
 
-/** 文件名只保留 basename（契约 §3.3），挡掉控制字符与路径分隔符。 */
-export function safeFileName(name) {
-  const base = String(name || 'file').split(/[\\/]/).pop()
+/**
+ * 落盘文件名（契约 §3.3 + 空名裁决）：
+ * - 只保留 basename，挡掉控制字符与路径分隔符；
+ * - **`NAME_LEN = 0` 合法**：显示"未命名"，并保留扩展名降级展示（如 `未命名.txt`）。
+ */
+export function safeFileName(name, ext) {
+  const base = String(name || '').split(/[\\/]/).pop()
   // eslint-disable-next-line no-control-regex
   const cleaned = base.replace(/[\u0000-\u001f]/g, '').slice(0, 255)
-  return cleaned || 'file'
+  if (cleaned) return cleaned
+  const suffix = String(ext || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16)
+  return suffix ? `未命名.${suffix}` : '未命名'
 }

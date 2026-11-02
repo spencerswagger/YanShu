@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { V1_SAMPLE_HEX, V1_RECIPIENT_PRIVATE_HEX, V1_EXPECTED } from '../src/crypto/fixtures.js'
 
 const webDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const wasmPath = join(webDir, 'public/ys_kernel.wasm')
@@ -175,7 +176,40 @@ if (pack && selfUnpack) {
   versionGate = e[selfUnpack](write(bad), bad.length, privB, out, data.length + 4096, outLen) === -5
 }
 
+// —— 6) 契约 §15 的 V1 样例：真解一次 + 改版本字节必须被拒（§2.3 第 3、4 条）
+let v1Sample = false
+let v1VersionGate = false
+try {
+  const sample = Uint8Array.from(Buffer.from(V1_SAMPLE_HEX, 'hex'))
+  const priv = Uint8Array.from(Buffer.from(V1_RECIPIENT_PRIVATE_HEX, 'hex'))
+  const out = e.ys_alloc(8192)
+  const outLen = e.ys_alloc(4)
+  const p = write(sample)
+  const privPtr = write(priv)
+  const meta =
+    selfMeta && e[selfMeta](p, sample.length, privPtr, out, 8192, outLen) === 0
+      ? JSON.parse(new TextDecoder().decode(read(out, u32(outLen))))
+      : null
+  const plainOut = e.ys_alloc(64)
+  const plainLen = e.ys_alloc(4)
+  const pr = selfUnpack ? e[selfUnpack](p, sample.length, privPtr, plainOut, 64, plainLen) : -99
+  const plainHex = pr === 0 ? Buffer.from(read(plainOut, u32(plainLen))).toString('hex') : ''
+  v1Sample = Boolean(meta && meta.name === V1_EXPECTED.name && meta.mime === V1_EXPECTED.mime && plainHex === V1_EXPECTED.plaintextHex)
+
+  const bad = new Uint8Array(sample)
+  bad[4] = 0x02
+  const out2 = e.ys_alloc(64)
+  const len2 = e.ys_alloc(4)
+  const rc = selfUnpack ? e[selfUnpack](write(bad), bad.length, privPtr, out2, 64, len2) : -99
+  v1VersionGate = rc === -5
+} catch (err) {
+  v1Sample = false
+  v1VersionGate = false
+}
+
 const signals = {
+  'V1 样例包解包成功（§2.3 第 3 条）': v1Sample,
+  'V1 样例改版本字节必拒（§2.3 第 4 条）': v1VersionGate,
   'HEADER=112': facts.headerLen === 112,
   '版本 0x10000': facts.ysVersion === '0x10000',
   '清单 sender_pub 为 65 字节含 0x04': Boolean(metaJson && /^04[0-9a-f]{128}$/.test(metaJson.sender_pub || '')),

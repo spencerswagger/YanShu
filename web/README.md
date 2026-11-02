@@ -100,15 +100,18 @@ npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局�
 | 6 参自证解包 | `ys_unpack_v1` / `ys_unpack_meta_v1`（arity 6；探测按 arity，改名 `_v2` 也能接） |
 | `ys_sm2_sign_der` / `ys_pack_v1` | 必须存在（`ys_pack_v1` 的公钥形态按"先 64 再 65"探测并记住） |
 
-**界面标签按"契约判据"判定，不是"不是桩就算合规"**。注意：当前 ABI **没有** `ys_layout_of()` / `ys_get_layout()`
-（单一格式后被删掉，`grep` 导出清单可证），所以判据取 `CRYPTO-PACK §2.3` 的四条，并在 `kernel.selfTest()` 里真跑一遍：
+**界面标签按契约 §2.3 的四条内核合规判据**（"不是桩 ≠ 合规"）。注意：当前 ABI **没有**
+`ys_layout_of()` / `ys_get_layout()`（单一格式后被删掉，导出清单可证），所以判据是：
 
 1. `ys_version() === 0x00010000`；
 2. `ys_header_len() === 112`；
-3. 用真产物打一个包再解开，明文逐字节一致；
-4. 把包内 `VERSION_MAJOR` 改成 `0x02`，解包必须报 `CRYPTO_VERSION_UNSUPPORTED`。
+3. **契约 §15 的 V1 样例包真解一次**（`web/src/crypto/fixtures.js` 存的就是 §15.2 的 522 字节整包 +
+   §15.1 的接收方私钥；解出的 `hi.txt` / `text/plain` / `hello` 必须逐项对上）；
+4. 把 V1 样例的 `VERSION_MAJOR` 改成 `0x02`，必须被拒为 `CRYPTO_VERSION_UNSUPPORTED`。
 
 四条全过才显示「真实加密 · 契约布局内核（YSPK/1.0）」；否则「真实加密 · 非契约布局内核（待对齐）」并在红条列出未通过项。
+空文件名按契约裁决处理：`NAME_LEN = 0` 合法，落盘显示「未命名」并保留扩展名（`未命名.txt`）；
+界面上不假设 `FLAGS.NAME_OBFUSCATED` 与 `NAME_MODE` 一致，名字语义只以 `ys_unpack_meta` 的 JSON 为准。
 另外 `tests/legacy-reject.test.js` 用旧布局产物（HEADER 40）产一个包喂给默认解包入口，断言必须被拒
 （实测 `CRYPTO_VERSION_UNSUPPORTED`）——**默认路径不会静默接受两种布局**。
 

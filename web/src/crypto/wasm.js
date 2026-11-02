@@ -18,6 +18,8 @@ import { CryptoError } from './errors.js'
 import { segmenterFor, splitPack, joinPack } from './layout.js'
 import { normalizeSignature, decodeSignature } from '../lib/der.js'
 import { PackSession, UnpackSession } from './session.js'
+import { V1_SAMPLE_HEX, V1_RECIPIENT_PRIVATE_HEX, V1_EXPECTED } from './fixtures.js'
+import { fromHex } from '../lib/bytes.js'
 
 /** 文件名 → 扩展名（契约 §3.3：ASCII 小写、不含点、≤16 字节；无扩展名给空串）。 */
 function extensionOf(name) {
@@ -594,42 +596,41 @@ export class WasmKernel {
   }
 
   /**
-   * 自检：用真产物做一次"打包 → 解包"并验证版本闸门（契约 §2.3 的合规判据）。
-   * 这是标签的**事实依据**：常量对而实现错，只有真跑一遍才看得出来。
+   * 自检：契约 `docs/contract-clarify §2.3` 的**四条内核合规判据**（"不是桩 ≠ 合规"）。
+   *
+   *   1. `ys_version() === 0x00010000`
+   *   2. `ys_header_len() === 112`
+   *   3. 用**契约 §15 的 V1 样例包**真解一次（明文/文件名/MIME 都要对上）
+   *   4. 把 V1 样例的版本字节改成 0x02，必须被拒为 `CRYPTO_VERSION_UNSUPPORTED`
+   *
+   * 第 3、4 条是"跑真数据"的判据：常量对而实现错，只有它们能抓出来。
    */
   selfTest() {
-    const checks = {
-      version: this.version === ABI_VERSION,
-      header: this.headerLen === 112,
-      roundtrip: false,
-      versionGate: false,
-    }
+    const checks = { version: this.version === ABI_VERSION, header: this.headerLen === 112, v1Sample: false, versionGate: false }
     try {
-      const alice = this.generateIdentity()
-      const bob = this.generateIdentity()
-      const data = new Uint8Array(64).map((_, i) => (i * 3) & 0xff)
-      const pack = this.pack({
-        data,
-        name: 'selftest.bin',
-        mime: 'application/octet-stream',
-        recipientPublic: bob.publicKey,
-        senderPrivate: alice.privateKey,
-        blockSize: 1024,
-      })
-      const plain = this.unpack({ pack, recipientPrivate: bob.privateKey })
-      checks.roundtrip = plain.length === data.length && plain.every((b, i) => b === data[i])
+      // 浏览器里没有 Buffer：统一用 lib/bytes 的 fromHex
+      const sample = fromHex(V1_SAMPLE_HEX)
+      const priv = fromHex(V1_RECIPIENT_PRIVATE_HEX)
+      const meta = this.unpackMeta({ pack: sample, recipientPrivate: priv })
+      const plain = this.unpack({ pack: sample, recipientPrivate: priv })
+      const expected = fromHex(V1_EXPECTED.plaintextHex)
+      checks.v1Sample =
+        meta.name === V1_EXPECTED.name &&
+        meta.mime === V1_EXPECTED.mime &&
+        Number(meta.size) === V1_EXPECTED.size &&
+        plain.length === expected.length &&
+        plain.every((b, i) => b === expected[i])
 
-      // 把 VERSION_MAJOR 改成 0x02：必须拒绝（CRYPTO_VERSION_UNSUPPORTED），不得按 v1 猜着读
-      const tampered = new Uint8Array(pack)
-      tampered[4] = 0x02
+      const tampered = new Uint8Array(sample)
+      tampered[4] = 0x02 // VERSION_MAJOR
       try {
-        this.unpack({ pack: tampered, recipientPrivate: bob.privateKey })
+        this.unpack({ pack: tampered, recipientPrivate: priv })
         checks.versionGate = false
       } catch (err) {
         checks.versionGate = err?.code === 'CRYPTO_VERSION_UNSUPPORTED'
       }
     } catch {
-      // 打包/解包直接失败：roundtrip 与 versionGate 都保持 false
+      // 样例解不动：第 3、4 条保持 false（标签会显示未通过）
     }
     const ok = Object.values(checks).every(Boolean)
     this.selfTestResult = { ok, checks }

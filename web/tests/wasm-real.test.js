@@ -69,7 +69,8 @@ test('真内核：0 import、导出齐全、版本/包头/块大小可读', { sk
   assert.equal(kernel.capabilities.selfUnpack, true)
   const selfTest = kernel.selfTest()
   assert.equal(selfTest.ok, true, `自检失败：${JSON.stringify(selfTest.checks)}`)
-  assert.deepEqual(selfTest.checks, { version: true, header: true, roundtrip: true, versionGate: true })
+  // 契约 §2.3 四条判据：版本 / HEADER / V1 样例真解 / 改版本字节必拒
+  assert.deepEqual(selfTest.checks, { version: true, header: true, v1Sample: true, versionGate: true })
   assert.equal(kernel.capabilities.signDer, true)
   assert.equal(kernel.capabilities.packV1, true)
   assert.ok([40, 112].includes(kernel.headerLen), `包头 ${kernel.headerLen}`)

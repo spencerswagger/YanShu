@@ -92,3 +92,11 @@ test('PUBKEY_TAKEN：清本地身份重来一次', async () => {
   assert.equal(result.ok, true)
   assert.equal(calls, 2)
 })
+
+test('空文件名：落盘显示“未命名”并保留扩展名（契约空名裁决）', async () => {
+  const { safeFileName } = await import('../src/net/download.js')
+  assert.equal(safeFileName('', 'txt'), '未命名.txt')
+  assert.equal(safeFileName('', ''), '未命名')
+  assert.equal(safeFileName('../evil.txt', 'txt'), 'evil.txt')
+  assert.equal(safeFileName('正常.txt'), '正常.txt')
+})
