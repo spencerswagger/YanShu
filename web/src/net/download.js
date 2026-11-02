@@ -28,7 +28,20 @@ export function terminalError(state, terminalReason) {
  * @param {object} p
  * @param {(code:string)=>Promise<Uint8Array>} p.senderPublic 由发送方码取 65 字节公钥（服务端可信）
  */
-export async function receiveTransfer({ api, kernel, session, transferId, senderPublic, onProgress, signal, save, ack = true }) {
+export async function receiveTransfer(params) {
+  try {
+    return await receiveOnce({ ...params, attempt: 1 })
+  } catch (err) {
+    const leaseLost = err?.status === 401 || err?.code === 'DOWNLOAD_NOT_STARTED'
+    if (!leaseLost || params.signal?.aborted) throw err
+    info('下载租约失效，重新开租约取一次')
+    params.onProgress?.({ phase: 'prelude', done: 0, total: 0, message: '租约失效，重新取包头…' })
+    return receiveOnce({ ...params, attempt: 2 })
+  }
+}
+
+async function receiveOnce({ api, kernel, session, transferId, senderPublic, onProgress, signal, save, ack = true, attempt }) {
+  void attempt
   const report = (patch) => onProgress?.(patch)
 
   const meta = (await api.getTransfer(transferId)) || {}

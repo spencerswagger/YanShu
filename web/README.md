@@ -153,6 +153,18 @@ npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局�
 - **建议**：v1 把上限登记为已知限制（移动端建议 16–32 MiB），或做流式（Ark 已把"流式分块 API"列入 §15 排期）。
 - **8 MiB 续传阈值**：`pack.length > config.maxPersistPack`（8 MiB）时本机不保存会话快照 → 刷新后不能续传（当前页面内仍可续）；超过则只能重发。
 
+## 服务端重启 / 凭证失效的自愈（为切 `sm2` 真认证准备）
+
+服务端切 `sm2` 会重启，`YANSHU_TOKEN_SECRET` 变化 → 旧 `upload_token` 立刻失效。客户端不把用户卡在错误页：
+
+- **上传侧**：遇到 `401 AUTH_MISSING`（凭证失效）→ 自动重建一次传输（新 idempotency key）→ 重传 prelude 与块；界面提示"凭证失效，正在重建传输…"。
+- **下载侧**：遇到 `409 DOWNLOAD_NOT_STARTED` / `401`（租约失效）→ 重新取 prelude 开新租约，再取一次。
+- 两条都有单测覆盖（`tests/loop.test.js`：上传凭证失效、下载租约失效）。
+- `AUTH_CODE_MISMATCH` 等鉴权错误按 `describeError` 显示明确文案，不吞掉。
+
+`SIG_INPUT` 自测：`npm run siginput:dump` 打印七种 PURPOSE 的逐字节 hex（固定 nonce/code/transfer_id），
+可直接与服务端/Rune 的样例 diff；字段顺序与宽度由 `src/net/auth.js` 一处定义，`tests/siginput.test.js` 断言。
+
 ## 安全与纪律
 
 - **私钥只在本机**：只写 IndexedDB（`store/identity.js`），不上传、不备份、不导出、不进日志；上 wire 的只有 65 字节公钥。

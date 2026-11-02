@@ -365,3 +365,75 @@ test('收件箱口径：ready 只给 READY/LEASED，all 加 UPLOADING，终结�
   const after = await bob.api.inbox({ state: 'all' })
   assert.equal(after.items.some((i) => i.transfer_id === sent.transferId), false, '终结态不得出现在收件箱')
 })
+
+test('上传凭证失效（401）→ 自动重建传输并重传，不把用户卡住', async () => {
+  const alice = await makePeer()
+  const bob = await makePeer()
+  const { file, data } = makeFile(160) // 5 块
+
+  // 模拟服务端重启：第一次 putPrelude 直接 401（token secret 变了）
+  const realPutPrelude = alice.api.putPrelude
+  let trips = 0
+  alice.api.putPrelude = async (args) => {
+    trips += 1
+    if (trips === 1) {
+      throw new ApiError({ code: 'AUTH_MISSING', status: 401, message: 'upload token 失效' })
+    }
+    return realPutPrelude(args)
+  }
+
+  const sent = await sendFile({
+    api: alice.api,
+    kernel: alice.kernel,
+    session: alice.session,
+    file,
+    recipient: { code: bob.session.code, nickname: bob.session.nickname, publicKey: bob.session.publicKey },
+    pendingStore: memoryBackend(),
+  })
+  assert.equal(sent.state, 'READY')
+  assert.ok(trips >= 2, '应当重建传输后重传（putPrelude 至少两次）')
+
+  let saved = null
+  await receiveTransfer({
+    api: bob.api,
+    kernel: bob.kernel,
+    session: bob.session,
+    transferId: sent.transferId,
+    senderPublic: bob.senderPublic,
+    save: (blob, name) => {
+      saved = { blob, name }
+    },
+  })
+  assert.deepEqual([...new Uint8Array(await saved.blob.arrayBuffer())], [...data])
+})
+
+test('下载租约失效（DOWNLOAD_NOT_STARTED）→ 重开租约再取一次', async () => {
+  const alice = await makePeer()
+  const bob = await makePeer()
+  const { file, data } = makeFile(96)
+  const sent = await send(alice, bob, file)
+
+  const realGetChunk = bob.api.getChunk
+  let calls = 0
+  bob.api.getChunk = async (args) => {
+    calls += 1
+    if (calls === 1) {
+      throw new ApiError({ code: 'DOWNLOAD_NOT_STARTED', status: 409, message: '租约失效' })
+    }
+    return realGetChunk(args)
+  }
+
+  let saved = null
+  await receiveTransfer({
+    api: bob.api,
+    kernel: bob.kernel,
+    session: bob.session,
+    transferId: sent.transferId,
+    senderPublic: bob.senderPublic,
+    save: (blob, name) => {
+      saved = { blob, name }
+    },
+  })
+  assert.ok(calls >= 2)
+  assert.deepEqual([...new Uint8Array(await saved.blob.arrayBuffer())], [...data])
+})

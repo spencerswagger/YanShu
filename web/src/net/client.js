@@ -24,7 +24,16 @@ export class ApiError extends Error {
   }
 
   get retryable() {
-    return this.status === 429 || [500, 502, 503, 504, 507].includes(this.status)
+    // 507 是配额类，不自动重试（API.md §10.2）
+    return this.status === 429 || [500, 502, 503, 504].includes(this.status)
+  }
+
+  /** 鉴权类失败：可自愈（重新申请挑战/重建会话），但不是简单的"退避重试"。 */
+  get authFailed() {
+    return (
+      this.status === 401 ||
+      ['AUTH_MISSING', 'AUTH_CHALLENGE_INVALID', 'AUTH_SIGNATURE_INVALID', 'AUTH_CODE_MISMATCH'].includes(this.code)
+    )
   }
 }
 

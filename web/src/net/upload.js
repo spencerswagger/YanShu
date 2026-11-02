@@ -33,7 +33,20 @@ const report = (onProgress, patch) => onProgress?.(patch)
  * @param {File|Blob} p.file        要发的文件
  * @param {{code:string, nickname:string, publicKey:Uint8Array}} p.recipient
  */
-export async function sendFile({ api, kernel, session, file, recipient, onProgress, signal, pendingStore, ttlSeconds, maxDownloads }) {
+export async function sendFile(params) {
+  // 服务端重启会让 upload_token 立即失效（token secret 变化）：401 时自动重建一次传输
+  try {
+    return await sendOnce({ ...params, attempt: 1 })
+  } catch (err) {
+    if (!err?.authFailed || params.signal?.aborted) throw err
+    info('上传凭证失效（服务端可能重启），自动重建传输', { status: err.status })
+    params.onProgress?.({ phase: 'creating', done: 0, total: 0, message: '凭证失效，正在重建传输…' })
+    return sendOnce({ ...params, attempt: 2 })
+  }
+}
+
+async function sendOnce({ api, kernel, session, file, recipient, onProgress, signal, pendingStore, ttlSeconds, maxDownloads, attempt }) {
+  void attempt
   const name = file.name || 'file'
   const mime = file.type || 'application/octet-stream'
 

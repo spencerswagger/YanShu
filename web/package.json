@@ -14,7 +14,8 @@
     "check": "node --test tests/*.test.js && vite build",
     "wasm:sync": "node scripts/sync-wasm.mjs",
     "wasm:rebuild": "node scripts/rebuild-wasm.mjs",
-    "wasm:check": "node scripts/check-wasm.mjs"
+    "wasm:check": "node scripts/check-wasm.mjs",
+    "siginput:dump": "node scripts/dump-siginput.mjs"
   },
   "dependencies": {
     "vue": "^3.5.0"
