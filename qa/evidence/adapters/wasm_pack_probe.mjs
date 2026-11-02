@@ -131,6 +131,21 @@ if (mode === "meta" || mode === "meta-prelude") {
     console.log(`ERR ${errName(err.code)}`);
     process.exit(1);
   }
+} else if (mode === "sign-der") {
+  // ys_sm2_sign_der(priv32, seed, seed_len, msg, msg_len, sig_out, sig_cap, sig_len_out) —— 8 参
+  const priv = Buffer.from((rest[1] || "").trim(), "hex");
+  const msg = Buffer.from((rest[2] || "").trim(), "hex");
+  const fn = e.ys_sm2_sign_der;
+  if (typeof fn !== "function") die("内核没有导出 ys_sm2_sign_der");
+  if (fn.length !== 8) die(`ys_sm2_sign_der arity=${fn.length}，期望 8`);
+  const seedHex = (rest[3] || "").trim();
+  const seed = seedHex ? Buffer.from(seedHex, "hex") : Buffer.alloc(32, 0x01);
+  const pk = alloc(32), sp = alloc(seed.length), mp = alloc(msg.length || 1), out = alloc(256), lenp = alloc(4);
+  write(pk, priv); write(sp, seed); write(mp, msg);
+  const rc = fn(pk, sp, seed.length, mp, msg.length, out, 256, lenp);
+  if (rc !== 0) { console.log(`ERR ${errName(rc)}`); process.exit(1); }
+  const n = Buffer.from(read(lenp, 4)).readUInt32BE(0);
+  console.log(Buffer.from(read(out, n)).toString("hex"));
 } else if (mode === "verify-der") {
   // ys_sm2_verify_der(pub64, msg, msg_len, sig_der, sig_len) → 1 通过 / 0 不通过 / 负数错误
   const pub = Buffer.from((rest[1] || "").trim(), "hex");

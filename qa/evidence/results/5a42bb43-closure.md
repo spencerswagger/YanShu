@@ -166,6 +166,35 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 
 （宿主上另有一次 2,506,889 B 与一次 12,000 B 投递同样通过，`ack` 后均 410。）
 
+
+## ④d · 三条前端专属行为的 **API 等价**验证（非浏览器，Gate 代跑）
+
+> 说明：浏览器端到端由前端负责但**未交付**，以下用 API 直接执行等价动作，强度＝协议层；
+> **真实 SM2 签名**由内核 `ys_sm2_sign_der` 产生（DER 70–72B，默认 userID），服务端 `sm2` 实例真验签。
+
+**执行环境**：宿主 `http://127.0.0.1:18080`（`4eda665` / `cc117070…`、内核 `c1b87d0a…`、真 `sm2`）。
+
+| # | 行为 | 构造 | 实测 |
+|---|---|---|---|
+| ① | 注册（真签名） | `YSAUTH1‖0x01‖NONCE32‖CODE(4)‖PUBKEY(65)`，内核签名 | **201**（真验签通过） |
+| ② | 昵称签名 | `YSAUTH1‖0x02‖NONCE32‖CODE(4)‖u16be‖NICK` | **200** |
+| ③ | 改 `SIG_INPUT` 一字节（签名对改前内容） | 同 ②，昵称末字节 `k→K` | **401 `AUTH_SIGNATURE_INVALID`** |
+| ④ | `路径码 ≠ 头码`（签名对头码有效） | `PATCH /v1/codes/AWQW`，头 `X-YS-Code: PAWW` | **401 `AUTH_CODE_MISMATCH`** |
+
+> ④ 在宿主 `4eda665` 上返回的是 **`AUTH_CODE_MISMATCH`**（与契约一致），
+> 不是 Web 报告的 `AUTH_SIGNATURE_INVALID` —— 说明该分支**取决于构造方式**，服务端按头码重建 `SIG_INPUT` 后再比对，
+> 契约口径“`SIG_INPUT` 用头码构造、路径码仅寻址”与实测一致。
+
+**⑤ 凭据失效后的重取流程（API 层模拟客户端自愈）**（在 `[本地]` `06c9f56` 实例上做，宿主不便改 KID）：
+
+| 步 | 结果 |
+|---|---|
+| 首次投递（挑战→签名→建传输）→ 用 token 打 status | **200** |
+| `UPDATE token_kid_state SET kid = kid + 1`（不重启） | 旧 token → **401**（`AUTH_TOKEN_STALE`） |
+| 客户端**重新挑战 → 再签名 → 建新传输 → 取新 token** | 新 token → **200**（可继续投递） |
+
+即：收到 `AUTH_TOKEN_STALE`/`INVALID` 后，"重新挑战→签名→取新凭据"这条恢复路径在 API 层是通的。
+
 ## 三、KID 矩阵（逐字错误名与 message）
 
 | 步 | 场景 | 状态 | 错误名 / message |
@@ -285,8 +314,10 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 **① 协议层闭环**：由 `[本地]` 三份产物（`5a42bb43` / `db58ae47` / `a302dccf`，**均非宿主实例**）与 `[宿主]` 实测共同支撑——
 加密→上传→凭码取回→真解密→逐字节一致→`ack` 后 410 全部成立（宿主两端 sha256 `5ccada48…1db6d7`；
 本地 `06c9f56` 上为 `0fd76c0f…2ead12`）。
-**② 浏览器端到端未交付**：前端未响应，由 Gate **以 API 等价代跑**（见「④b」「④c」），**未覆盖前端实现**
-（UI、浏览器内 WASM 加载、IndexedDB 私钥、跨端 UI 流程）。
+**② 两路并行验证**：`[宿主]` API 等价端到端（「④b」「④c」）＋ **浏览器双端端到端**（由前端交付：
+`results/web/c1b87d0a-closure-web.md`，2,506,889 B、落盘 sha256 `4b0c533a…482f`、`ack` 后 410）。
+两条独立路径**互相印证**；API 路径覆盖协议层，浏览器路径覆盖前端实现（UI/WASM 加载/IndexedDB 私钥）。
+若以最新状态为准：**浏览器端到端已交付**，"未覆盖前端实现"这一条**不再成立**。
 
 已知偏差（如实，不美化）：
 
