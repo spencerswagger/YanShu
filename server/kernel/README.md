@@ -26,8 +26,13 @@ sha256sum <repo>/server/kernel/yanshu_sm.wasm   # 与上表不一致就更新本
 `[profile.release]`（`opt-level=3`/`lto`/`codegen-units=1`），产物 130 653 B / `8b89dd7f…`，
 与冻结产物不同字节（行为和版本一致，但**不能**拿它当"同源"证据）。
 
-## 更新流程
+## 更新流程（用冻结 head 的产物覆盖，不要用自己重建的）
 
-换内核时：按上面命令重建 → 更新本文件三处（commit、大小、sha256）→ 跑
-`go test ./internal/auth/`（会加载本文件跑端侧验签向量与双向对账）→ 跑
-`scripts/token-rotation-check.sh` 之外的 `sm2` 全链路。
+1. 取端侧**冻结 head** 的 `yanshu_sm.wasm`（验收组公布的那份），覆盖本目录同名文件；
+2. `sha256sum kernel/yanshu_sm.wasm` 必须等于验收公布值（当前
+   `c1b87d0a…7259f`），否则**不提交**；
+3. 更新本文件三处：来源 commit、字节数、sha256；
+4. 跑 `go test ./internal/auth/`（加载本文件跑验签向量 + 双向对账）与 `sm2` 全链路。
+
+> 本文件被根目录 `.gitignore` 的 `*.wasm` 规则命中，靠 `server/.gitignore` 的
+> `!kernel/yanshu_sm.wasm` 例外才进仓库；新增内核文件时记得同样放行。
