@@ -53,7 +53,8 @@ pub fn from_public_key(public_key: &[u8; PUBLIC_KEY_LEN]) -> String {
     String::from_utf8(code.to_vec()).expect("alphabet is ascii")
 }
 
-/// 由未压缩公钥派生校验字符（第 5 位，仅本地纠错用）。
+/// 校验字符（第 5 位）。**它不是用户码的一部分**：用户码就是 4 位（`AWQW`），
+/// 第 5 位只是给 UI 做"输入防误"提示（展示为 `AWQW-X`），不上 wire、不进码。
 pub fn check_symbol(public_key: &[u8; PUBLIC_KEY_LEN]) -> char {
     let digest = sm3(public_key);
     CHECK_ALPHABET[(first20_value(&digest) % 37) as usize] as char

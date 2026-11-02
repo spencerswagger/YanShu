@@ -325,13 +325,47 @@ pub struct Manifest {
     pub digests: Vec<[u8; 32]>,
 }
 
+/// 契约 §3.3：文件名只允许 basename（不含 `/`、`\`、NUL、0x00–0x1F），≤255 字节。
+pub fn valid_name(s: &str) -> bool {
+    s.len() <= 255 && !s.bytes().any(|b| b < 0x20 || b == b'/' || b == b'\\')
+}
+
+/// 契约 §3.3：MIME 为 ASCII 小写，字符集 `[a-z0-9!#$&^_.+-]` 与单个 `/`，1..=127 字节。
+pub fn valid_mime(s: &str) -> bool {
+    if s.is_empty() || s.len() > 127 {
+        return false;
+    }
+    let mut slashes = 0usize;
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'!'
+            | b'#'
+            | b'$'
+            | b'&'
+            | b'^'
+            | b'_'
+            | b'.'
+            | b'+'
+            | b'-' => {}
+            b'/' => slashes += 1,
+            _ => return false,
+        }
+    }
+    slashes == 1
+}
+
+/// 契约 §3.3：扩展名为 ASCII 小写字母/数字，≤16 字节，不含点。
+pub fn valid_ext(s: &str) -> bool {
+    s.len() <= 16
+        && s.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+}
+
 impl Manifest {
     pub fn encode(&self) -> Result<Vec<u8>> {
-        if self.name.len() > 255
-            || self.mime.is_empty()
-            || self.mime.len() > 127
-            || self.ext.len() > 16
-        {
+        if !valid_name(&self.name) || !valid_mime(&self.mime) || !valid_ext(&self.ext) {
             return Err(Error::BadArgument);
         }
         let mut out = Vec::with_capacity(
@@ -415,6 +449,9 @@ impl Manifest {
             .map_err(|_| Error::ManifestInvalid)?
             .to_string();
         pos += ext_len;
+        if !valid_name(&name) || !valid_mime(&mime) || !valid_ext(&ext) {
+            return Err(Error::ManifestInvalid);
+        }
 
         if pos + 4 > buf.len() {
             return Err(Error::ManifestInvalid);
@@ -787,6 +824,10 @@ fn open(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
     sig_input.extend_from_slice(&sender_public);
     sig_input.extend_from_slice(manifest_sec);
 
+    // §13 #11：SIG_LEN 必须等于 DER 自述长度，否则 HEADER_INVALID（先于验签）
+    if sig_sec.len() < 2 || sig_sec[0] != 0x30 || sig_sec[1] as usize + 2 != sig_sec.len() {
+        return Err(Error::HeaderInvalid);
+    }
     let (r, s) = der::decode_signature(sig_sec)?;
     let mut raw = [0u8; 64];
     raw[..32].copy_from_slice(&r);

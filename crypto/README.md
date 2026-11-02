@@ -51,7 +51,7 @@ let out = pack::unpack(&bytes, &bob.private_key, &alice.public_key).unwrap();
 
 ```sh
 cd crypto
-cargo test                      # 28 个单元测试 + 6 个篡改矩阵测试
+cargo test                      # 25 单元 + 7 契约样例 + 5 篡改矩阵 + 23 §13 检验
 cargo test --release            # 同上（快）
 cargo run --release --bin bench-sm4 -- 32
 cargo run --release --bin gen-vectors -- ../testdata/vectors.json
@@ -70,13 +70,14 @@ cargo build --release --target wasm32-unknown-unknown
 node scripts/wasm-smoke/smoke.mjs <上面那个 wasm>
 ```
 
-实测：**108 KB，25 个导出，0 个 import**（没有 JS 胶水依赖）。
+实测：**约 118 KB，27 个导出，0 个 import**（没有 JS 胶水依赖）。
 导出清单见 `include/yanshu_sm.h`，核心是：
 
-`ys_alloc/ys_free/ys_version/ys_error_name` · `ys_sm3/ys_hmac_sm3/ys_hkdf_sm3` ·
+`ys_alloc/ys_free/ys_version/ys_error_name` · `ys_default_chunk_size`（+ 别名 `ys_default_block_size`）· `ys_header_len` ·
+`ys_sm3/ys_hmac_sm3/ys_hkdf_sm3` ·
 `ys_sm4_encrypt_block/ys_sm4_decrypt_block/ys_sm4_gcm_encrypt/ys_sm4_gcm_decrypt` ·
 `ys_sm2_keygen/ys_sm2_pubkey/ys_sm2_encrypt/ys_sm2_decrypt/ys_sm2_sign/ys_sm2_verify` ·
-`ys_user_code/ys_normalize_code` · `ys_pack/ys_unpack/ys_unpack_meta`
+`ys_user_code/ys_check_symbol/ys_normalize_code` · `ys_pack/ys_unpack/ys_unpack_meta`
 
 约定：长度用 `size_t`（wasm32 = 4 字节）；返回 0 成功、负数为错误码；`out_len` 在缓冲区
 不足时也会写入所需长度（返回 -2），JS 可以"先问大小再分配"。

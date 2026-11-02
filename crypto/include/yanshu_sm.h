@@ -34,6 +34,7 @@ uint8_t *ys_alloc(size_t len);
 void ys_free(uint8_t *ptr, size_t len);
 uint32_t ys_version(void);              /* 0x0001_0000 = 1.0 */
 uint32_t ys_default_chunk_size(void);   /* 1 MiB */
+uint32_t ys_default_block_size(void);   /* 同上，兼容早期命名的别名 */
 uint32_t ys_header_len(void);           /* 112（YSPK/1.0 HEADER） */
 int32_t ys_error_name(int32_t code, uint8_t *out, size_t cap, size_t *out_len);
 
@@ -99,6 +100,9 @@ int32_t ys_normalize_code(const uint8_t *input, size_t input_len, uint8_t *out /
  * 打包：
  *   recipient_pub 65 | sender_priv 32 | name(UTF-8) | mime(ASCII) | ext(ASCII) |
  *   created_at_ms(u64) | chunk_size(0 = 默认 1 MiB) | seed | data
+ *
+ * 注意：DER 签名长度 70..72 随随机 k 浮动，`out_len` 在缓冲区不足时返回的是**上界**
+ * （实际长度 + 2）。按返回值分配内存在重试时一定成功。
  */
 int32_t ys_pack(const uint8_t *recipient_public, const uint8_t *sender_private, const uint8_t *name,
                 size_t name_len, const uint8_t *mime, size_t mime_len, const uint8_t *ext,

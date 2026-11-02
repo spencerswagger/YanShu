@@ -119,8 +119,15 @@ pub extern "C" fn ys_version() -> u32 {
     VERSION
 }
 
+/// 默认块大小（1 MiB）。`ys_default_block_size` 是同一值的兼容别名（老名字不删）。
 #[no_mangle]
 pub extern "C" fn ys_default_chunk_size() -> u32 {
+    pack::v1::DEFAULT_CHUNK_SIZE
+}
+
+/// 兼容别名：与 [`ys_default_chunk_size`] 同值（早期 ABI 用 `block` 命名）。
+#[no_mangle]
+pub extern "C" fn ys_default_block_size() -> u32 {
     pack::v1::DEFAULT_CHUNK_SIZE
 }
 
@@ -537,7 +544,15 @@ pub unsafe extern "C" fn ys_pack(
             data,
         };
         let envelope = pack::pack(&input, &mut rng)?;
-        write_out(&envelope, out, out_cap, out_len)
+        // DER 签名长度 70..72 会随 k 浮动，一次"先问大小再分配"可能差 1~2 字节；
+        // 这里在缓冲区不足时返回上界（+2），保证按返回值分配后重试一定成功。
+        match write_out(&envelope, out, out_cap, out_len) {
+            Err(Error::BufferTooSmall) => {
+                core::ptr::write(out_len, envelope.len() + 2);
+                Err(Error::BufferTooSmall)
+            }
+            r => r,
+        }
     })())
 }
 

@@ -187,9 +187,14 @@ fn crypto_sections_map_to_errors() {
     p[f.manifest_off] ^= 0x01;
     assert_eq!(err(&f, &p), Error::ManifestAuthFailed);
 
-    // 签名改 1 字节 → 签名非法
+    // 签名段首字节（DER 的 0x30）被改 → 先命中 SIG_LEN 与 DER 自述长度校验（§13 #11）
     let mut p = f.pack.clone();
     p[f.sig_off] ^= 0x01;
+    assert_eq!(err(&f, &p), Error::HeaderInvalid);
+
+    // 改 DER 里的 r/s（结构仍合法）→ 验签失败
+    let mut p = f.pack.clone();
+    p[f.sig_off + 10] ^= 0x01;
     assert_eq!(err(&f, &p), Error::SignatureInvalid);
 
     // 块密文改 1 字节 → 块认证失败（tag 覆盖）

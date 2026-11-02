@@ -72,3 +72,67 @@
 - 流式接口（`prelude` 与块切片分批处理）未做，当前 `ys_pack/ys_unpack` 是整包内存 API。
 - `FLAGS.NAME_OBFUSCATED`（`NAME_MODE=0x01`）只做解析接受，未做产品侧交互。
 - 不做性能极致优化（SM4-GCM ≈56 MB/s，见 `crypto/README.md`）。
+
+
+## 6. §13 的 22 条校验与反例测试
+
+`crypto/sm/tests/section13_matrix.rs` 里 **每条一个测试**（`check_01_…` … `check_22_…`），
+都是"构造一个违反该项的包 → 断言具体错误名"，没有任何"尽力恢复"路径。
+
+| # | 校验 | 错误名 | 测试 |
+|---:|---|---|---|
+| 1 | 总长度 ≥ 最小包 | `CRYPTO_LENGTH_INCONSISTENT` | `check_01_minimum_length` |
+| 2 | `MAGIC == YSPK` | `CRYPTO_MAGIC_MISMATCH` | `check_02_magic` |
+| 3 | 版本 1.0 | `CRYPTO_VERSION_UNSUPPORTED` | `check_03_version` |
+| 4 | `HEADER_LEN == 112` | `CRYPTO_HEADER_INVALID` | `check_04_header_len` |
+| 5 | 四个算法 ID | `CRYPTO_ALG_UNSUPPORTED` | `check_05_algorithm_ids` |
+| 6 | FLAGS 保留位 / `SENDER_SIGNED=1` | `CRYPTO_FLAGS_UNKNOWN` / `CRYPTO_UNSIGNED` | `check_06_flags` |
+| 7 | `RESERVED[80..112)` 全 0 | `CRYPTO_HEADER_INVALID` | `check_07_reserved` |
+| 8 | `16 ≤ CHUNK_SIZE ≤ 1048576` | `CRYPTO_HEADER_INVALID` | `check_08_chunk_size_range` |
+| 9 | `CHUNK_COUNT == ceil(S/C)` | `CRYPTO_LENGTH_INCONSISTENT` | `check_09_chunk_count` |
+| 10 | `WRAPPED_KEY_LEN/SENDER_PUB_LEN/MANIFEST_LEN` | `CRYPTO_LENGTH_INCONSISTENT` | `check_10_length_fields` |
+| 11 | `SIG_LEN == DER 自述长度` | `CRYPTO_HEADER_INVALID` | `check_11_sig_len_vs_der` |
+| 12 | `ENVELOPE_LEN` 无尾随 | `CRYPTO_LENGTH_INCONSISTENT` | `check_12_envelope_length` |
+| 13 | SM2 解封 | `CRYPTO_KEY_UNWRAP_FAILED` | `check_13_key_unwrap` |
+| 14 | 清单 GCM | `CRYPTO_MANIFEST_AUTH_FAILED` | `check_14_manifest_auth` |
+| 15 | 清单头字段（YSM1/版本/算法） | `CRYPTO_MANIFEST_INVALID` | `check_15_manifest_header` |
+| 16 | 清单↔包头 / 摘要表长度 | `CRYPTO_LENGTH_INCONSISTENT` | `check_16_manifest_cross_check` |
+| 17 | 签名 | `CRYPTO_SIGNATURE_INVALID` | `check_17_signature` |
+| 18 | 发送方码 | `CRYPTO_SENDER_MISMATCH` | `check_18_sender_code` |
+| 19 | 块头自洽 | `CRYPTO_CHUNK_ORDER` / `CRYPTO_LENGTH_INCONSISTENT` / `CRYPTO_HEADER_INVALID` | `check_19_chunk_header` |
+| 20 | 块 GCM | `CRYPTO_CHUNK_AUTH_FAILED` | `check_20_chunk_auth` |
+| 21 | 明文摘要 | `CRYPTO_DIGEST_MISMATCH` | `check_21_digest_mismatch` |
+| 22 | 末块标志唯一且 `INDEX == COUNT-1` | `CRYPTO_CHUNK_MISSING` / `CRYPTO_CHUNK_ORDER` | `check_22_missing_chunk` |
+
+补充：
+- §3.3 的 **NFC 归一化由调用方保证**：本实现不引 unicode 归一化依赖，只校验 UTF-8、
+  字符集与长度（文件名禁止 `/`、`\`、控制字符；MIME 必须 ASCII 小写且含单个 `/`；
+  扩展名 ASCII 小写）。Web 侧应在传文件名前做 `String.prototype.normalize("NFC")`。
+- **§3.3 字符串规则**（文件名 basename、MIME 小写字符集、扩展名小写）在打包侧返回
+  `CRYPTO_BAD_ARGUMENT`、解包侧返回 `CRYPTO_MANIFEST_INVALID`，测试 `section_3_3_string_rules`。
+- §13 #16 与 #21 需要在"签名仍然有效"的前提下构造（否则先被 #17 拦下）；测试里用
+  `resign()` 用同一 `k_sig` 重签，专门验证"签名有效但内容不一致"的路径。
+- §13 #11 的判定放在验签之前：先比 `SIG_LEN` 与 DER 自述长度，再解 DER、再验签。
+
+## 7. C ABI 与首版 25 个导出的差异（本轮已上报）
+
+出于契约要求（65 字节未压缩公钥、DER 签名、清单含 `created_at`/`ext`、发送方码校验），
+以下导出**签名发生了破坏性变更**（不是静默改，已在上报里逐条列出）：
+
+| 导出 | 首版 | 现在 | 契约依据 |
+|---|---|---|---|
+| `ys_sm2_keygen` / `ys_sm2_pubkey` | 公钥 64 字节 | 公钥 65 字节（`0x04‖X‖Y`） | §3.4 / §10.3 |
+| `ys_sm2_encrypt` | 入参公钥 64；输出无前缀 | 入参 65；输出 `0x04‖C1C3C2` | §9.1 |
+| `ys_sm2_decrypt` | 输入无前缀 | 输入 `0x04‖C1C3C2` | §9.1 |
+| `ys_sm2_sign` | 输出裸 `R‖S`(64) | 输出 DER + `(cap, len)` | §10.4 |
+| `ys_sm2_verify` | 裸 `R‖S`(64) | DER + `len` | §10.4 |
+| `ys_user_code` | 公钥 64 | 公钥 65（SM3 覆盖 65 字节） | §3.4 |
+| `ys_pack` | `(…, block_size, seed, …)` | `(…, ext, created_at_ms, chunk_size, seed, …)` | §8.2 |
+| `ys_unpack` / `ys_unpack_meta` | 传发送方公钥 | 传**期望发送方码**（包内已带 `SENDER_PUB`） | §10.3 / §13 #18 |
+| `ys_default_block_size` | 存在 | **保留**（新增 `ys_default_chunk_size` 同值别名） | — |
+
+新增导出：`ys_check_symbol`（校验字符，仅供 UI 防误输入）、`ys_default_chunk_size`（别名）。
+当前 wasm 导出 **27 个**、0 import。
+
+> 若 Web/Gate 需要"零破坏"，我可以再加一层 `*_legacy64` 兼容导出（旧签名转调新实现）；
+> 但两套 API 并存会增加用错的风险，默认只保留契约口径这一套。
