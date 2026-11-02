@@ -103,6 +103,49 @@ func TestWASMVerifyVectors(t *testing.T) {
 	}
 }
 
+// 服务端固定默认 userID，因此 5 组向量的"服务端口径期望"是：
+//
+//	ok_register               通过
+//	sig_flipped_1byte         拒绝
+//	msg_changed               拒绝
+//	wrong_public_key          拒绝
+//	different_user_id         通过（它就是默认 ID 签的；"换 ID 必须拒"只在带 ID 入参时成立）
+//
+// 这条测试把该映射钉死，避免下游误以为 4 条都该拒。
+func TestServerPolicyOnVerifyVectors(t *testing.T) {
+	v := newTestVerifier(t)
+	vectors := loadWASMVectors(t)
+
+	want := map[string]bool{
+		"ok_register":       true,
+		"sig_flipped_1byte": false,
+		"msg_changed":       false,
+		"wrong_public_key":  false,
+		"different_user_id": true,
+	}
+	seen := map[string]bool{}
+	for _, vec := range vectors {
+		expect, ok := want[vec.Name]
+		if !ok {
+			t.Fatalf("unexpected vector %q", vec.Name)
+		}
+		seen[vec.Name] = true
+		pub, _ := hex.DecodeString(vec.Pub65)
+		msg, _ := hex.DecodeString(vec.Msg)
+		sig, _ := hex.DecodeString(vec.SigDER)
+		err := v.Verify(pub, msg, sig)
+		if expect && err != nil {
+			t.Fatalf("%s: want accept, got %v", vec.Name, err)
+		}
+		if !expect && err == nil {
+			t.Fatalf("%s: want reject, got accept", vec.Name)
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("expected 5 vectors, saw %d", len(seen))
+	}
+}
+
 func TestWASMRejectsMalformedInput(t *testing.T) {
 	v := newTestVerifier(t)
 	vectors := loadWASMVectors(t)
