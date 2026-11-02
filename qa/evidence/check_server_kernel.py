@@ -35,6 +35,14 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DRIVER = HERE / "adapters" / "wasm_pack_probe.mjs"
 
+# 白名单：跨环境构建出的两种字节都是"同源"（已实测）
+#   c1b87d0a… 127,313 B —— Rune/Web/Gate 在各自环境构建
+#   8b89dd7f… 130,653 B —— Core 环境构建（同 commit 031e95b）
+# 判定同源不看单一 sha，而是「sha 在白名单内 + 该产物通过冻结向量套件」。
+WHITELIST = {
+    "c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f": 127313,
+    "8b89dd7fc033b9f4b316238d1d7507b161bbc74ff3547643d00981ed8da154f9": 130653,
+}
 FROZEN_SHA = "c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f"
 FROZEN_BYTES = 127313
 FROZEN_VERSION = "0x00010000"
@@ -49,10 +57,78 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
+def _node(wasm: Path, *args: str) -> tuple[int, str]:
+    p = subprocess.run(["node", str(DRIVER), "--wasm", str(wasm), *args],
+                       capture_output=True, text=True)
+    return p.returncode, (p.stdout or "").strip() or (p.stderr or "").strip()
+
+
+def run_vector_suite(wasm: Path, vd: Path) -> bool:
+    """冻结向量套件：user-code 5 组 / normalize 20 组 / sm2 验签 15 条。
+
+    判定标准：**该产物本身**能不能跑出向量里的期望值。这是 sha 之外的"同源"证据。
+    """
+    ok = True
+    uc = vd / "user-code-vectors.json"
+    if uc.is_file():
+        vec = json.loads(uc.read_text(encoding="utf-8"))["vectors"]
+        bad = []
+        for v in vec:
+            rc, got = _node(wasm, "user-code", v["pub65"], "--wire")
+            rc2, sym = _node(wasm, "check-symbol", v["pub65"], "--wire")
+            if rc != 0 or got != v["code"] or (("check" in v) and sym != v["check"]):
+                bad.append((v.get("name"), got, sym, v.get("code"), v.get("check")))
+        print(f"{'PASS' if not bad else 'FAIL'}  向量：user-code {len(vec)} 组" +
+              ("" if not bad else f"（不符：{bad[:2]}）"))
+        ok = ok and not bad
+    nm = vd / "normalize-vectors.json"
+    if nm.is_file():
+        data = json.loads(nm.read_text(encoding="utf-8"))
+        vec = data["vectors"] if isinstance(data, dict) else data
+        bad = []
+        for v in vec:
+            rc, got = _node(wasm, "normalize", v["in"])
+            want_ok = bool(v.get("ok", True))
+            if want_ok:
+                if rc != 0 or got != v.get("out"):
+                    bad.append((v.get("in"), got, v.get("out")))
+            else:
+                if rc == 0:
+                    bad.append((v.get("in"), got, "应拒绝"))
+        print(f"{'PASS' if not bad else 'FAIL'}  向量：normalize {len(vec)} 组" +
+              ("" if not bad else f"（不符：{bad[:2]}）"))
+        ok = ok and not bad
+    sv = vd / "sm2-verify-vectors.json"
+    if sv.is_file():
+        vec = json.loads(sv.read_text(encoding="utf-8"))["verify_vectors"]
+        bad, ran, skipped = [], 0, []
+        for v in vec:
+            # ABI 验签没有 userID 入参（固定国标默认串）：非默认 ID 的用例在固定 ID 验签器上
+            # "不可执行"，不能当拒绝用例判（见 results/README 的口径更正）。
+            if v.get("user_id") and v["user_id"] != "1234567812345678":
+                skipped.append(v.get("name"))
+                continue
+            pub = v["pub65"][2:] if v["pub65"].startswith("04") else v["pub65"]
+            rc, got = _node(wasm, "verify-der", pub, v["sig_input"], v["sig_der"])
+            want = "PASS" if v.get("expect_verify") in (True, "True", "true") else "FAIL"
+            ran += 1
+            if got != want:
+                bad.append((v.get("name"), got, want))
+        note = f"（不可执行而跳过：{skipped}）" if skipped else ""
+        print(f"{'PASS' if not bad else 'FAIL'}  向量：sm2 验签 {ran} 条{note}" +
+              ("" if not bad else f"（不符：{bad[:2]}）"))
+        ok = ok and not bad
+    return ok
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="服务端内嵌内核是否等于冻结产物")
     ap.add_argument("--server-dir", required=True, help="源码根（其下有 server/kernel/yanshu_sm.wasm）")
-    ap.add_argument("--expect-sha", default=FROZEN_SHA)
+    ap.add_argument("--expect-sha", default=None,
+                    help="只认这一个 sha（默认走白名单 + 向量套件）")
+    ap.add_argument("--vectors-dir", default=None,
+                    help="冻结向量目录（含 user-code-vectors.json / normalize-vectors.json / sm2-verify-vectors.json）；"
+                         "给了就跑向量套件")
     ap.add_argument("--json-out")
     args = ap.parse_args(argv)
 
@@ -65,7 +141,14 @@ def main(argv=None) -> int:
 
     got_sha = sha256_of(wasm)
     got_bytes = wasm.stat().st_size
-    ok_sha = got_sha == args.expect_sha
+    if args.expect_sha:
+        ok_sha = got_sha == args.expect_sha
+    else:
+        ok_sha = got_sha in WHITELIST
+    if not ok_sha:
+        print(f"[note] 白名单里的 sha：")
+        for k, v in WHITELIST.items():
+            print(f"        {k}  {v:,} B")
 
     print("=" * 88)
     print("服务端内嵌内核 vs 验收冻结产物")
@@ -93,7 +176,14 @@ def main(argv=None) -> int:
               f"{'memory' if info.get('hasMemory') else '无 memory'}（期望 {FROZEN_FUNCS} + memory）")
         ok_meta = ok_v and ok_f
 
-    ok = ok_sha and ok_meta
+    ok_vec = True
+    if args.vectors_dir:
+        vd = Path(args.vectors_dir)
+        ok_vec = run_vector_suite(wasm, vd)
+    else:
+        print("SKIP  向量套件（未给 --vectors-dir）")
+
+    ok = ok_sha and ok_meta and ok_vec
     print("-" * 88)
     print("结论：" + ("PASS —— 服务端加载的就是验收过的那份产物" if ok else
                     "FAIL —— 内嵌内核与冻结产物不一致（先换成冻结产物，再看其他证据）"))

@@ -72,9 +72,12 @@ prelude-only 元数据语义、证据一（存储/DB/日志零命中 + 三组阳
 token 轮换（kid → `AUTH_TOKEN_REVOKED`）。
 
 **仍 BLOCKED / 待跟进**：
-1. **服务端内嵌内核 sha ≠ 冻结产物**（130,653B / `8b89dd7f…` vs 127,313B / `c1b87d0a…`）；
-2. **已有 schema 升级缺 `upload_token_kid` 列**（迁移只有 `CREATE TABLE IF NOT EXISTS`，无 ALTER）；
-3. **`只改 secret` 的 401 仍报 `AUTH_SIGNATURE_INVALID`**（应为凭据类 `AUTH_TOKEN_INVALID`）。
+1. ~~服务端内嵌内核 sha ≠ 冻结产物~~ → **已闭合**：Core 换成 `c1b87d0a…`，
+   `sha 白名单 + 向量套件（user-code 5 / normalize 20 / sm2 14，`different_user_id` 不可执行跳过）` 全 PASS；
+2. **已有 schema 升级缺 `upload_token_kid` 列**（迁移只有 `CREATE TABLE IF NOT EXISTS`，无 ALTER）——
+   宿主已有库仍会踩，等 Core 补幂等 ALTER；
+3. `只改 secret` 的 401 在 `ab4279a` 报 `AUTH_SIGNATURE_INVALID`、`9bce5bb` 报 `AUTH_TOKEN_STALE`——
+   名字已收敛到 STALE（凭据类），**与契约 §10.1 补条目同步即可**。
 
 规矩：同一结论只留一份；重跑加新文件不覆盖；非契约/旧 head 的必须写明"不作验收"；
 文件名 + head + sha256 三者齐了才算可追溯。

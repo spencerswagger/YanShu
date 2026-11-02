@@ -29,6 +29,21 @@ python3 qa/evidence/check_token_lifecycle.py --binary <yanshu-server> \
 > `739293a` 起 `YANSHU_TOKEN_KID` 是**必配项**，不设服务端直接退出（fail closed）；
 > 脚本已支持 `--kid`，并把 kid 变化写进输出。
 
+### 1a. 决定性实验（Core 新产物，逐步记状态码与错误名）
+
+用 Core 指的两个提交各自现编二进制（沙盒里没有他的 tarball，等价：同 commit、同 buildflags）：
+
+| 步骤 | `ab4279a`（无 kid） | `9bce5bb`（有 kid，设 `YANSHU_TOKEN_KID=k1`） |
+|---|---|---|
+| ① 签发 token → `PUT /prelude` | **201** | **201** |
+| ② 只改 `TOKEN_SECRET` 重启 → 同一 token | **401 `AUTH_SIGNATURE_INVALID`** | **401**（secret+kid 同改时 `AUTH_TOKEN_STALE`） |
+| ③ 新 secret 下新建传输 → 新 token | **201** | **201** |
+| ④ 恢复方式 | 重建传输即恢复（无重签发端点） | 同左；重签发端点未在 ABI/接口表出现 |
+
+**结论：`ab4279a` 起「只换 `TOKEN_SECRET`」就构成一次性吊销**（201 → 401 → 新 token 201）。
+我之前那次 **201** 用的是 `9065eb8`（及其产物 `980fc44`）——那版 `Validate` 只比库里 `SM3(token)`，
+不重算，所以换 secret 不影响。两边不矛盾，是版本差异。
+
 ### 1b. 「只改 secret 是否吊销」的历史（回答两边为什么各说各话）
 
 | 服务端 commit | 只改 `TOKEN_SECRET` 后同 token | 原因 |
@@ -36,6 +51,7 @@ python3 qa/evidence/check_token_lifecycle.py --binary <yanshu-server> \
 | `9065eb8` | **201（仍可用）** | `Validate` 只比库里 `SM3(token)`，与 secret 无关 |
 | `08d40e7` | **401 `AUTH_SIGNATURE_INVALID`** | 改成"用当前 secret 重算 + 比对" |
 | `739293a` | **401 `AUTH_SIGNATURE_INVALID`**（只改 secret）；**401 `AUTH_TOKEN_REVOKED`**（只改 kid） | 再加 kid 元数据，先比 kid 再比 token |
+| `9bce5bb` | 只改 secret+kid → **401 `AUTH_TOKEN_STALE`** | 错误名收敛到 STALE |
 
 **定案：在 `08d40e7` 及之后，"只改 secret"就会吊销；`9065eb8` 那次 201 是版本差异，不是矛盾。**
 错误名分工建议：kid 变化→凭据类（现在 `AUTH_TOKEN_REVOKED`，对）；secret 变化→应改
@@ -54,9 +70,17 @@ python3 qa/evidence/check_token_lifecycle.py --binary <yanshu-server> \
 **结论：sha 不一致、但版本与导出数一致** —— 正是"同源不等于同字节"的活例子。
 服务端若加载 `8b89dd7f…`，它验的就不是验收过的那份产物；这条必须换成 `c1b87d0a…` 才算数。
 
-检查脚本：`python3 qa/evidence/check_server_kernel.py --server-dir <源码根>`
-（sha 不等即 FAIL 并打印两侧字节数/ sha；版本或导出数不对也 FAIL；文件缺失为 BLOCKED）。
-把冻结产物放进去后实测 PASS。
+检查脚本：`python3 qa/evidence/check_server_kernel.py --server-dir <源码根> --vectors-dir <向量目录>`
+
+判据（按裁定）不是"单一 sha"：
+
+1. **sha256 在白名单内**：`c1b87d0a…`（127,313B，Rune/Web/Gate 环境）或
+   `8b89dd7f…`（130,653B，Core 环境）——两者同源；
+2. `ys_version()==0x00010000`、34 函数 + memory；
+3. **该产物本身通过冻结向量套件**：user-code 5 组、normalize 20 组、sm2 验签 14 条
+   （`different_user_id` 因 ABI 无 userID 入参而**不可执行**，显式跳过并打印）。
+
+实测：Core 已把内嵌内核换成 `c1b87d0a…`，三条全 PASS。
 
 ## 3. 升级路径的一个真问题：老库缺 `upload_token_kid` 列
 

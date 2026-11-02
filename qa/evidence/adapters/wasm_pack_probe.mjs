@@ -131,6 +131,19 @@ if (mode === "meta" || mode === "meta-prelude") {
     console.log(`ERR ${errName(err.code)}`);
     process.exit(1);
   }
+} else if (mode === "verify-der") {
+  // ys_sm2_verify_der(pub64, msg, msg_len, sig_der, sig_len) → 1 通过 / 0 不通过 / 负数错误
+  const pub = Buffer.from((rest[1] || "").trim(), "hex");
+  const msg = Buffer.from((rest[2] || "").trim(), "hex");
+  const sig = Buffer.from((rest[3] || "").trim(), "hex");
+  const fn = e.ys_sm2_verify_der;
+  if (typeof fn !== "function") die("内核没有导出 ys_sm2_verify_der");
+  if (fn.length !== 5) die(`ys_sm2_verify_der arity=${fn.length}，期望 5`);
+  const pp = alloc(pub.length || 1), mp = alloc(msg.length || 1), sp2 = alloc(sig.length || 1);
+  write(pp, pub); write(mp, msg); write(sp2, sig);
+  const rc = fn(pp, mp, msg.length, sp2, sig.length);
+  // 语义：1 = 验签通过、0 = 不通过、负数 = 错误（不是 0/非 0！）
+  console.log(rc === 1 ? "PASS" : rc === 0 ? "FAIL" : `ERR ${errName(rc)}`);
 } else if (mode === "exports") {
   // 打印导出清单：函数数 + 是否有 memory + 名称（供内核同源/完整性二级校验）
   const names = Object.keys(e).sort();
