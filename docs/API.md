@@ -114,6 +114,31 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 
 > **`ZA` / userID 口径（与包签名完全相同，别抄两套）**：`ID = "1234567812345678"`（16 字节 ASCII）、`ENTL = 0x0080`，`ZA` 按 `CRYPTO-PACK.md` §10.2 构造；`SIG_INPUT` 是 `ZA` 之后的**消息 M**，两者不互相包含。挑战域前缀 `YSAUTH1` 与包签名域前缀 `YSSIG1` 是两套拼接，**M 不同但 SM2 与 ZA 完全一致**。
 
+**`SIG_INPUT` 长度上限（由字段上限推导，不是拍脑袋）**
+
+```
+SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段串)
+```
+
+| PURPOSE | 字段串构成 | 字段串上限 |
+|---|---|---:|
+| `0x01 REGISTER` | `CODE(4) ‖ PUBKEY(65)` | **69** |
+| `0x02 NICKNAME_UPDATE` | `CODE(4) ‖ u16be(2) ‖ NICKNAME(≤32)` | 38 |
+| `0x03 TRANSFER_CREATE` | `4+4+8+4+4+4+32` | 60 |
+| `0x04 TRANSFER_REVOKE` | `CODE(4) ‖ TRANSFER_ID(32)` | 36 |
+| `0x05 INBOX_LIST` | `CODE(4)` | 4 |
+| `0x06 WS_HELLO` | `CODE(4)` | 4 |
+| `0x07 TRANSFER_ACK` | `CODE(4) ‖ TRANSFER_ID(32)` | 36 |
+| `0x08 UPLOAD_TOKEN_ISSUE` | `CODE(4) ‖ TRANSFER_ID(32)` | 36 |
+
+**结论（写死）**：
+
+- **`SIG_INPUT_MAX = 40 + 69 = 109 字节`**（`REGISTER` 最长）。`nickname ≤ 32 字节`（§1.1）、`transfer_id` 固定 32 字符、`CODE` 固定 4 字符——因此**任何合法请求拼接后的长度必然 ≤ 109**，不存在"字段各自合法、拼起来超限"的组合。
+- 服务端 MUST 对 `SIG_INPUT` **按 PURPOSE 解析并逐字段校验**（字段越界报各自错误名，如 `NICKNAME_INVALID` / `CODE_FORMAT_INVALID`）；**MUST NOT** 用一个笼统的字节上限代替字段校验。
+- **防御性硬上限 `SIG_INPUT_HARD_LIMIT = 512` 字节**：长度超过它时，服务端 MUST 在解析前直接拒绝（`400 SIG_INPUT_TOO_LONG`），这是防 DoS 的最廉价一道门（避免为超长输入分配/解析）。512 只作"安全门"，**不是**合法性边界——合法上限是 109。
+- **客户端义务**：发请求前 MUST 在本地按字段上限校验（昵称 ≤32 字节、码 4 位、`transfer_id` 32 字符），**不要依赖服务端兜底**；否则用户会看到"签名无效"这类误导性错误。
+- 未来若新增 PURPOSE 或放宽某字段上限而使 `SIG_INPUT_MAX` 超过 109，必须同步更新本表与常数（走 ADR），并保证 `SIG_INPUT_HARD_LIMIT ≥ SIG_INPUT_MAX`。
+
 | PURPOSE | 名称 | 字段串（按序拼接） |
 |---:|---|---|
 | `0x01` | `REGISTER` | `CODE(4 ASCII) ‖ PUBKEY(65)` |
@@ -887,6 +912,7 @@ v1 的信令与在线表**未实现**（排期见 §15），所以"WS 不可用"
 | `RANGE_UNSUPPORTED` | 400 | 多区间或非法 Range | 改成单区间或整块重传 |
 | `SIZE_LIMIT_EXCEEDED` | 400 | **声明值**超上限：`plaintext_size > 4 GiB`、`chunk_count > 1048576`、`prelude_len > 4 MiB` | 提示用户拆分文件 |
 | `AUTH_MISSING` | 401 | 缺 `X-YS-*` 鉴权头 | 补签名后重试 |
+| `SIG_INPUT_TOO_LONG` | 400 | `SIG_INPUT` 超过防御性硬上限 512 字节（合法上限是 109，见 §1.3） | 客户端本地按字段上限校验后重算签名；不要靠服务端兜底 |
 | `AUTH_SIGNATURE_INVALID` | 401 | 验签失败或签名与字段不匹配 | 用同一挑战重算签名；**不要**无限重试（挑战已作废，需重新申请） |
 | `AUTH_CHALLENGE_INVALID` | 401 | 挑战过期/已用/用途不符 | 重新 `POST /challenges` 后重试一次 |
 | `AUTH_CODE_MISMATCH` | 401 | `X-YS-Code` 与 `SIG_INPUT` 里被签名的 `CODE(4)` 不一致 | 修 bug；用同一码重算签名 |
