@@ -31,6 +31,10 @@ B：待收 → `GET /v1/inbox` → 取 prelude（开租约）→ **`ys_unpack_me
   整包 `ys_unpack_meta(_v1)` 对 prelude-only 返回 `CRYPTO_TRUNCATED`（有测试钉住，两个入口不混用）。
 - 截图：`outbound/screenshots/C-host-instance-contract-kernel-*.png`（工作区，不入库）
 
+## 后续
+
+真认证版本见 `2026-11-02-D-core-sm2-real-auth.md`（服务端切 `YANSHU_VERIFIER=sm2` 后同一套流程复跑）。
+
 ## 能说明 / 不能说明
 
 **能**：契约布局内核 + 真实服务端（契约 `/v1` 路径、1 MiB 分块、租约、ack 终结）在浏览器两端跑通，落盘逐字节一致。
