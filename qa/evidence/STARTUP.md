@@ -6,6 +6,9 @@
 > 口令与 DSN 只从密钥文件读取，**任何一步都不打印它们**。
 
 
+> **想要一条命令搞定的版本**：直接用可执行脚本 `qa/evidence/STARTUP.sh`
+> （`sh STARTUP.sh build|start|status|stop`，配置区四个变量改完即用，已实测跑通）。
+
 ## TL;DR · 可直接粘走（整段）
 
 ```sh

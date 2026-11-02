@@ -41,6 +41,13 @@ qa/evidence/run_evidence1_core.sh <core-src> <rune-crate> /tmp/ys-ev1
 
 > 这条也回答了"收到即删"到底做实没有：**做实了**（该笔目录整体消失，不是只删块）。
 
+## 追加：按 Core 给的完整命令形态复跑
+
+Core 确认 `deliver` 支持 `--dsn "${PG_DSN}&search_path=<schema>"`（pgx 侧已能解析），
+脚本默认参数随即补上 `--dsn {dsn}`，并新增**存储落点断言**（驱动报的 `storage_path`
+必须落在本次 `blob_dir` 下且非空）。复跑结果：存储 3 文件 / 2242B、日志 1 份 / 3119B、
+DB 8 表 / 474 行，**三处零命中**，阳性对照 1/1/1/0，退出码 0。
+
 ## 边界（仍然有效）
 
 1. **认证仍是 `stub-allow`**：本证据只覆盖"存储/DB/日志不落明文"，不构成认证验收。

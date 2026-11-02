@@ -161,7 +161,7 @@ if [ -n "${YS_DELIVER_BIN:-}" ]; then
             echo "[BLOCKED] 编译 Core 的 deliver 失败" >&2; exit 2; }
         DELIVER_BIN="$work/bin/deliver"
         if [ -z "${YS_DELIVER_ARGS:-}" ]; then
-            YS_DELIVER_ARGS='--base-url http://127.0.0.1:{port} --yspk {pack} --no-ack --blob-dir {blob} --json-out {json}'
+            YS_DELIVER_ARGS='--base-url http://127.0.0.1:{port} --yspk {pack} --no-ack --blob-dir {blob} --dsn {dsn} --json-out {json}'
         fi
     else
         DELIVER_BIN="$YS_DELIVER_BIN"
@@ -207,12 +207,41 @@ print(json.dumps(parse_deliver_output(sys.stdin.read()), ensure_ascii=False))
     SCAN_DSN=$(printf '%s' "$IDS_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("db_url",""))')
     SCAN_LOG=$(printf '%s' "$IDS_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("log_path",""))')
     SCHEMA_FROM_DRIVER=$(printf '%s' "$IDS_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("schema",""))')
+    # storage_path 不在 parse_deliver_output 的键集里，直接从驱动的 JSON 文件取
+    if [ -f "$DJ" ]; then
+        STORAGE_PATH=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1], encoding="utf-8")).get("storage_path",""))' "$DJ")
+    else
+        STORAGE_PATH=""
+    fi
+    # 硬检查：本次密文必须落在**本次** blob 根下，且非空 —— 防"扫了别的目录还判 PASS"
+    if [ -n "$STORAGE_PATH" ]; then
+        case "$STORAGE_PATH" in
+            "$work"/blobs/*) : ;;
+            *) echo "[BLOCKED] 驱动报的存储路径（$STORAGE_PATH）不在本次 blob 根（$work/blobs）下" >&2
+               exit 2 ;;
+        esac
+        if [ -z "$(find "$STORAGE_PATH" -type f 2>/dev/null | head -1)" ]; then
+            echo "[BLOCKED] 驱动报的存储路径里没有文件：$STORAGE_PATH（投递没落盘？）" >&2
+            exit 2
+        fi
+    else
+        echo "[BLOCKED] 驱动没报 storage_path：无法断言本次密文落在哪个目录，拒绝出结论" >&2
+        exit 2
+    fi
     if [ -n "$SCHEMA_FROM_DRIVER" ] && [ "$SCHEMA_FROM_DRIVER" != "$schema" ]; then
         echo "[BLOCKED] 驱动报的 schema（$SCHEMA_FROM_DRIVER）与本轮用的（$schema）不一致" >&2
         exit 2
     fi
     SCAN_BLOB=${SCAN_BLOB:-$work/blobs}
     SCAN_DSN=${SCAN_DSN:-$base_dsn}
+    # 驱动报的 db_url 可能带 search_path=（psql 的 URI 不认这个参数），去掉它，
+    # schema 由 --pg-schema 单独传
+    SCAN_DSN=$(python3 -c '
+import sys, urllib.parse as u
+p = u.urlsplit(sys.argv[1])
+q = [(k, v) for k, v in u.parse_qsl(p.query, keep_blank_values=True) if k != "search_path"]
+print(u.urlunsplit((p.scheme, p.netloc, p.path, u.urlencode(q), p.fragment)))
+' "$SCAN_DSN")
     SCAN_LOG=${SCAN_LOG:-$work/logs}
     echo "  驱动报出的扫描目标：blob=$SCAN_BLOB db=$(python3 -c 'import sys,urllib.parse as u;print(u.urlparse(sys.argv[1]).path.lstrip("/") or "(none)")' "$SCAN_DSN") log=$SCAN_LOG"
 else
