@@ -102,7 +102,10 @@ func (v *WASMVerifier) Verify(pubKey, message, signature []byte) error {
 	if len(pub) == 65 && pub[0] == 0x04 {
 		pub = pub[1:]
 	}
-	if len(pub) != 64 || len(message) == 0 || len(message) > MaxSIGInputLen || len(signature) == 0 {
+	if len(message) > MaxSIGInputLen {
+		return ErrSIGInputTooLong
+	}
+	if len(pub) != 64 || len(message) == 0 || len(signature) == 0 {
 		return ErrBadInput
 	}
 

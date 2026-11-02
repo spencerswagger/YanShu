@@ -1108,6 +1108,16 @@ func newSM2Identity(t *testing.T) (priv, pub []byte, code string) {
 	return priv, pub, gm.DeriveCode(pub)
 }
 
+// 字段级错误不能被字节上限顶替：昵称 33 字节 → NICKNAME_INVALID（不是 SIG_INPUT_TOO_LONG）。
+func TestNicknameTooLongIsFieldError(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("sender")
+	body := map[string]any{"nickname": strings.Repeat("a", 33)}
+	hdrs := e.authHeaders(spec.PurposeNicknameUpdate, sender)
+	resp := e.do(http.MethodPatch, spec.CodePath(sender), body, hdrs)
+	e.wantError(resp, spec.ErrNicknameInvalid)
+}
+
 // token 轮换矩阵（KID 是唯一吊销开关）：
 //
 //	只换 TOKEN_SECRET（KID 不变）→ 旧 token 仍然有效（200）；

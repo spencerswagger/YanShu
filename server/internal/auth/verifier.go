@@ -12,7 +12,9 @@ var (
 	ErrSignature = errors.New("auth: signature invalid")
 	// ErrUnavailable 表示服务端当前没有可用的验签实现。
 	ErrUnavailable = errors.New("auth: verifier unavailable")
-	// ErrBadInput 表示验签入参本身不合法（空消息、超长消息、空签名、公钥长度不对）。
+	// ErrSIGInputTooLong 表示 SIG_INPUT 超过 512 字节的防御性上限（DoS 门）。
+	ErrSIGInputTooLong = errors.New("auth: sig input too long")
+	// ErrBadInput 表示验签入参本身不合法（空消息、空签名、公钥长度不对）。
 	// 与"签名不被接受"区分：这是 400 BAD_REQUEST，不是 401。
 	ErrBadInput = errors.New("auth: invalid verifier input")
 )
@@ -27,11 +29,14 @@ type Verifier interface {
 	Verify(pubKey, message, signature []byte) error
 }
 
-// MaxSIGInputLen 是 SIG_INPUT 的长度上限。
-//
-// 契约里七种 PURPOSE 的字段串都是定长小消息（最长 REGISTER 109 字节）；
-// 超过这个界说明调用方拼错了（例如把整个请求体当消息），按 BAD_INPUT 拒绝。
+// MaxSIGInputLen 是 SIG_INPUT 的**防御性上限**（DoS 门），不是业务校验：
+// 七种 PURPOSE 的合法输入最长 109 字节（7+1+32+69），越界到 512 才按 SIG_INPUT_TOO_LONG 拒。
+// 109 以内的字段问题必须由**字段级**校验报（NICKNAME_INVALID / CODE_FORMAT_INVALID …），
+// 不允许用字节上限代替字段校验。
 const MaxSIGInputLen = 512
+
+// MaxLegitSIGInputLen 是最长合法 SIG_INPUT（REGISTER：7+1+32+4+65）。
+const MaxLegitSIGInputLen = 109
 
 // 验签模式。
 const (
@@ -86,7 +91,10 @@ func (allowVerifier) Verify(pubKey, message, signature []byte) error {
 	if len(pubKey) != 65 || pubKey[0] != 0x04 {
 		return ErrBadInput
 	}
-	if len(message) == 0 || len(message) > MaxSIGInputLen || len(signature) == 0 {
+	if len(message) > MaxSIGInputLen {
+		return ErrSIGInputTooLong
+	}
+	if len(message) == 0 || len(signature) == 0 {
 		return ErrBadInput
 	}
 	return nil

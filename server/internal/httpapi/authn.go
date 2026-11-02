@@ -98,6 +98,8 @@ func (a *API) verifySignature(
 		switch {
 		case errors.Is(err, auth.ErrUnavailable):
 			fail(w, r, spec.ErrServiceUnavailable)
+		case errors.Is(err, auth.ErrSIGInputTooLong):
+			fail(w, r, spec.ErrSIGInputTooLong)
 		case errors.Is(err, auth.ErrBadInput):
 			// 入参本身不合法（空/超长消息等）→ 400，不是"签名不被接受"。
 			fail(w, r, spec.ErrBadRequest)

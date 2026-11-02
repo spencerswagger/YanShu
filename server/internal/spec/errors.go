@@ -28,6 +28,8 @@ const (
 	ErrAuthCodeMismatch     ErrorCode = "AUTH_CODE_MISMATCH"
 	// ErrAuthTokenStale：upload_token 因 KID 轮换而失效（旧 token）。
 	ErrAuthTokenStale ErrorCode = "AUTH_TOKEN_STALE"
+	// ErrSIGInputTooLong：SIG_INPUT 超过防御性上限（512 字节），仅作 DoS 门。
+	ErrSIGInputTooLong ErrorCode = "SIG_INPUT_TOO_LONG"
 	// ErrAuthTokenInvalid：token 值不对（伪造/不属于该传输），与"签名不被接受"分开。
 	ErrAuthTokenInvalid ErrorCode = "AUTH_TOKEN_INVALID"
 
@@ -92,6 +94,7 @@ var errStatus = map[ErrorCode]int{
 	ErrAuthCodeMismatch:     http.StatusUnauthorized,
 	ErrAuthTokenStale:       http.StatusUnauthorized,
 	ErrAuthTokenInvalid:     http.StatusUnauthorized,
+	ErrSIGInputTooLong:      http.StatusBadRequest,
 
 	ErrSignalPeerMismatch: http.StatusForbidden,
 	ErrNotTransferParty:   http.StatusForbidden,
@@ -145,6 +148,7 @@ var errMessage = map[ErrorCode]string{
 	ErrAuthCodeMismatch:     "X-YS-Code does not match the signed code",
 	ErrAuthTokenStale:       "upload token was revoked by a key version rotation; create a new transfer",
 	ErrAuthTokenInvalid:     "upload token is invalid for this transfer",
+	ErrSIGInputTooLong:      "SIG_INPUT exceeds the defensive limit (512 bytes)",
 
 	ErrSignalPeerMismatch: "signal peers do not match the transfer",
 	ErrNotTransferParty:   "authenticated credential is not a party of this transfer",
