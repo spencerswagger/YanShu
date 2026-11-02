@@ -103,9 +103,13 @@ def run_vector_suite(wasm: Path, vd: Path) -> bool:
         vec = json.loads(sv.read_text(encoding="utf-8"))["verify_vectors"]
         bad, ran, skipped = [], 0, []
         for v in vec:
-            # ABI 验签没有 userID 入参（固定国标默认串）：非默认 ID 的用例在固定 ID 验签器上
-            # "不可执行"，不能当拒绝用例判（见 results/README 的口径更正）。
-            if v.get("user_id") and v["user_id"] != "1234567812345678":
+            # 口径（Rune 221c300 起）：向量自带 `executable` 字段，
+            # false = 该条需要的能力超出已验证 ABI（例如验签没有 userID 入参），不计入统计。
+            if v.get("executable") is False:
+                skipped.append(v.get("name"))
+                continue
+            # 兜底：老向量没有 executable 字段时，用 userID 判断（固定默认串才可执行）
+            if "executable" not in v and v.get("user_id") and v["user_id"] != "1234567812345678":
                 skipped.append(v.get("name"))
                 continue
             pub = v["pub65"][2:] if v["pub65"].startswith("04") else v["pub65"]
@@ -114,7 +118,8 @@ def run_vector_suite(wasm: Path, vd: Path) -> bool:
             ran += 1
             if got != want:
                 bad.append((v.get("name"), got, want))
-        note = f"（不可执行而跳过：{skipped}）" if skipped else ""
+        note = (f"（{len(vec)} 条中 {ran} 条可执行；不可执行而跳过：{skipped}"
+                f"——ABI 无 userID 入参，对应库层断言另行覆盖）") if skipped else ""
         print(f"{'PASS' if not bad else 'FAIL'}  向量：sm2 验签 {ran} 条{note}" +
               ("" if not bad else f"（不符：{bad[:2]}）"))
         ok = ok and not bad
