@@ -1,0 +1,86 @@
+# 证据一实测结果：服务端存储 / 数据库 / 日志三处都查不到文件名与明文
+
+- 日期：2026-11-02
+- 对象：服务端 `feat/server-skeleton` @ `c3c2fc9`（PR #3），配端侧 `feat/endcrypto-wasm`
+  @ `de6d6e1` 打出的**真契约包**（`YSPK/1.0`，2 块，2272B，prelude 548B）
+- 结论：**三处全部 PASS，零命中**；退出码 0
+- 并且做了 **3 组阳性对照**：分别把明文塞进存储、把文件名写进日志、把文件名写进 DB，
+  三处都能被抓出来（退出码 1）——说明"没命中"不是因为检测器瞎了
+
+## 跑的是哪个 commit、怎么起的
+
+```sh
+# 服务端（c3c2fc9），独立 schema + 独立 blob 目录 + stdout 重定向当日志
+YANSHU_DATABASE_URL="$PG_TEST_DSN&search_path=gate_ev1" \
+YANSHU_BLOB_DIR=<work>/blobs \
+YANSHU_ADDR=127.0.0.1:18080 \
+YANSHU_VERIFIER=stub-allow \
+YANSHU_TOKEN_SECRET=<随机> \
+<work>/bin/yanshu-server > <work>/logs/server.log 2>&1
+```
+
+一键复跑：`qa/evidence/run_evidence1_core.sh <core-src> <rune-crate> <work>`（内部含
+建 schema、起服务、打包、完整投递、三处检索、杀进程）。
+
+## 投递样本（有辨识度，便于命中定位）
+
+| 项 | 值 |
+|---|---|
+| 文件名 | `验收样本-首夜.txt`（主干 `验收样本-首夜`，扩展名 `.txt`） |
+| 高熵片段 | 48 字符 base64url 随机串（每次生成） |
+| 中文片段 | `鸿雁传书，一声便至，过而不留。` |
+| 包 | 2261–2272B，`BLOCK_COUNT=2`，`CHUNK_SIZE=1024` |
+
+## 投递过程（按 API.md 走完整流程）
+
+`挑战 → 注册码 ×2（服务端按公钥重算码并比对）→ 建传输 → prelude → 2 块 → complete
+→ GET prelude（开租约）→ GET 2 块 → 逐字节比对`
+
+- 上传/下载的 prelude 与两块切片**逐字节一致**；`complete` 后状态 `READY`。
+- **未 ack**（`--no-ack`）：ack 会按策略删密文，删掉之后扫"无明文"就成了空语料，
+  所以本证据在 LEASED 状态下扫；"ack 后密文真删"属生命周期证据，另行验证。
+
+## 三处扫描结果
+
+| 目标 | 语料量 | 强信号命中 | 结论 |
+|---|---|---|---|
+| 存储目录 `<BLOB_DIR>/<id[0:2]>/<id>/{prelude,chunks/00000000,00000001}` | 3 文件 / 2241B | 0 | PASS |
+| PostgreSQL `gate_ev1`（8 表 / 97 行） | 全表文本列逐行 | 0 | PASS |
+| 服务端日志（stdout 重定向） | 2 份 / 2919B | 0 | PASS |
+
+- 检索项 6 个（文件名、主干、扩展名带点、扩展名裸串、高熵片段、中文片段），
+  每个展开 1–8 种形态（raw / base64×4 / hex×2 / percent），共 31 种字节串。
+- 数据库侧额外做了**表/列白名单断言**：`codes`、`auth_challenges`、`transfers`、
+  `transfer_chunks`、`transfer_downloads`、`idempotency_keys`、`audit_events`、
+  `schema_migrations`；**零白名单外列**。
+- 存储侧文件名只有 `prelude` 与 8 位块序号，无任何用户可控字符串。
+
+## 阳性对照（证明检测器真的在工作）
+
+| 注入 | 结果 | 命中位置 |
+|---|---|---|
+| 把明文样本 `cp` 进 blob 目录 | **FAIL / 退出码 1** | `blobs/leak-canary.bin offset=… form=raw`（高熵片段 + 中文片段） |
+| 往 `server.log` 追加一行 `upload name=验收样本-首夜.txt` | **FAIL / 退出码 1** | `log 文件 offset=…`（文件名 + 主干） |
+| `update codes set nickname='验收样本-首夜.txt'` | **FAIL / 退出码 1** | `db:pg/gate_ev1.codes row#… col=nickname`（文件名 + 主干） |
+
+三处复原后复扫恢复 PASS（退出码 0），说明命中来自注入本身，不是噪声。
+**这三组对照已脚本化**（`run_evidence1_core.sh` 的 5b 步，`YS_EV1_CONTROLS=0` 可关），
+复跑时会自动断言「注入 → 1、复原 → 0」，任一条不成立就判本轮证据不可信并以退出码 2 结束。
+
+## 结论与边界
+
+1. **服务端没有把文件名/明文写进存储、数据库或日志**：三处零命中，且三处都能被阳性对照触发
+   （对照组由脚本自动跑，不等我手工补）。
+2. **验签是桩**：本轮 `YANSHU_VERIFIER=stub-allow`，签名只做形状检查。这不影响"无明文"结论
+   （与密码学无关），但**不能**用于证明鉴权强度。
+3. **schema 隔离**：用独立 schema `gate_ev1`，不碰别人的 `public`；库里另有两条历史
+   transfer（同一 workdir 里重复投递所致），不影响结论。
+4. **日志是 stdout 重定向**：服务端没有独立日志文件机制；`YANSHU_LOG_DIR` 未被服务端使用，
+   本证据按"部署方重定向到哪就扫哪"处理。
+5. **未覆盖**：ack 后删除、TTL 到期清理、撤回删密文（生命周期证据另做）；抓包层无明文
+   （HTTPS 之外还有 SM4 密文）未在本次范围内。
+
+## 附：本次没做的
+
+- 未启动常驻实例（沙盒进程不跨调用存活），每次都是"起→投递→扫→杀"一遍过。
+- 未接真实 SM2 验签；Core 侧 `internal/auth/verifier.go` 仍是挂载点。

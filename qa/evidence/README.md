@@ -9,9 +9,10 @@
 >   补充变体 18/18，全部被明确拒绝，基线明文逐字节一致。入口是 Rust 原生 API
 >   （`--entry-kind native-api`），**需在 wasm 生产导出路径上复跑后才算最终验收**。
 > * 旧布局（`rune-v1`）的历史结果留在 `results/rune-v1-noncontract/`，仅作对照。
-> * 证据一仍是骨架：检索逻辑、投递钩子、存储/日志/数据库三路扫描、表列白名单都已可用
->   且自测通过，但**服务端还没跑起来**；`--profile core-skeleton` 缺参时打印
->   「待 Core 合入 + 参数确认」并以退出码 4 结束 —— 既不伪装 PASS，也不误报 FAIL。
+> * 证据一**已跑出真结果**（`results/contract-v1/`）：对服务端 `c3c2fc9` 起真服务、
+>   走完整投递，存储 / 数据库 / 日志三处零命中；并自动跑 3 组阳性对照
+>   （往存储塞明文、往日志写文件名、往 DB 写文件名）证明检测器不是瞎的。
+>   `--profile core-skeleton` 缺参时仍以退出码 4 结束，不伪装 PASS。
 
 只依赖 **python3 ≥ 3.10 标准库**（PostgreSQL 检索额外用 `psql`；SQLite 用内置 `sqlite3`）。
 不实现、不调用任何加解密；不读密钥与凭据文件；不修改被检对象。
@@ -189,6 +190,7 @@ PostgreSQL 走 `row_to_json`：`TEXT` 列明文原样、`BYTEA` 列以 `\x<hex>`
 qa/evidence/
 ├─ scan_plaintext.py            证据一
 ├─ tamper_probe.py              证据二
+├─ run_evidence1_core.sh        证据一一键复跑（起真服务 → 投递 → 三处扫 → 阳性对照）
 ├─ run_evidence2_contract.sh    证据二一键复跑（契约布局，默认）
 ├─ run_evidence2_rune.sh        证据二一键复跑（旧布局，仅对照）
 ├─ adapters/
@@ -221,8 +223,8 @@ core 表/列白名单核对、`--strict` 强度升级。
 
 | # | 缺的东西 | 挡住哪一步 |
 |---|---|---|
-| 1 | Core 的服务端**跑起来**（合入 main + migrations + `YANSHU_BLOB_DIR`/`YANSHU_DATABASE_URL` 落地） | 证据一的真实检索（现在只能 PENDING） |
-| 2 | 端到端投递（A 加密上传 → B 解密落盘） | 证据一没有真实投递产物 |
+| 1 | ~~Core 服务端跑起来~~ | 已完成：`c3c2fc9` 起真服务 + 完整投递（见 results） |
+| 2 | 真实 SM2 验签（Core 侧仍是桩） | 鉴权强度不在本轮证据范围；接了真验签后再复跑一次 |
 | 3 | `docs/API.md` 落盘 | 内置 HTTP 投递 / 从服务端拉包重组（见 TODO） |
 | 4 | 契约与实现**布局对齐**（`CRYPTO-PACK` vs `pack.rs::layout`） | 证据二现在按 `rune-v1` 跑；对齐后固定一套 |
 | 5 | Web 侧 wasm 适配层 | 证据二改用浏览器/Node 侧解密入口再跑一遍 |

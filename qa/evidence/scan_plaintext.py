@@ -137,20 +137,24 @@ CORE_DSN_ENV = "YANSHU_DATABASE_URL"
 CORE_LOG_DIR_ENV = "YANSHU_LOG_DIR"
 
 CORE_SCHEMA = {
-    "codes": {"code", "pubkey", "nickname", "created_at", "updated_at",
-              "last_seen_at", "expires_at"},
-    "auth_challenges": {"id", "purpose", "code", "pubkey", "message",
-                        "expires_at", "used_at", "created_at"},
-    "sessions": {"token_hash", "code", "created_at", "expires_at"},
-    "packages": {"id", "sender_code", "recipient_code", "state", "chunk_count",
-                 "chunk_size", "plaintext_size", "prelude_len", "prelude_digest",
-                 "received_count", "max_downloads", "downloads_used", "delete_on_ack",
-                 "created_at", "expires_at", "committed_at", "terminal_at",
-                 "terminal_reason"},
-    "package_chunks": {"package_id", "chunk_index", "ct_len", "ct_digest", "received_at"},
-    "package_tombstones": {"id", "state", "sender_code", "recipient_code",
-                           "created_at", "terminal_at", "purged_at"},
-    "audit_events": {"id", "at", "kind", "code", "package_id", "bytes", "outcome", "ip"},
+    # 对齐 feat/server-skeleton @ c3c2fc9（server/internal/store/migrations/0001_init.sql）
+    "codes": {"code", "public_key", "nickname", "registered_at", "updated_at"},
+    "auth_challenges": {"challenge_id", "purpose", "nonce", "expires_at", "used"},
+    "transfers": {"transfer_id", "sender_code", "recipient_code", "plaintext_size",
+                  "chunk_size", "chunk_count", "prelude_len", "prelude_received",
+                  "prelude_sm3", "received_chunks", "total_ciphertext_bytes",
+                  "download_count", "max_downloads", "state", "terminal_reason",
+                  "terminal_at", "created_at", "updated_at", "expires_at",
+                  "upload_token_sm3", "uploader_ip"},
+    "transfer_chunks": {"transfer_id", "chunk_index", "length", "ciphertext_sm3",
+                        "stored_at"},
+    "transfer_downloads": {"download_id", "transfer_id", "created_at",
+                           "lease_expires_at", "acked_at"},
+    "idempotency_keys": {"key_hash", "sender_code", "request_fingerprint",
+                         "transfer_id", "created_at", "expires_at"},
+    "audit_events": {"id", "ts", "method", "path", "status", "bytes", "ip", "request_id"},
+    # 迁移记账表（server/internal/store/store.go 里建），只有版本号与时间
+    "schema_migrations": {"version", "applied_at"},
 }
 
 
@@ -463,21 +467,31 @@ SQL_LIST_TABLES = (
     "select format('%I.%I', table_schema, table_name) "
     "from information_schema.tables "
     "where table_type='BASE TABLE' "
-    "and table_schema not in ('pg_catalog','information_schema') "
+    "and table_schema = current_schema() "
     "order by 1"
 )
 
 
-def _psql(dsn: str, sql: str, timeout: float) -> subprocess.CompletedProcess:
+def _psql_env(schema: str | None) -> dict:
+    env = dict(os.environ)
+    if schema:
+        # psql 的 URI 不认 search_path 参数；用 PGOPTIONS 指定，等价且不污染 DSN
+        env["PGOPTIONS"] = (env.get("PGOPTIONS", "") + f" -c search_path={schema}").strip()
+    return env
+
+
+def _psql(dsn: str, sql: str, timeout: float,
+          schema: str | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         [os.environ.get("YS_PSQL", "psql"), "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
          "-d", dsn, "-c", sql],
-        capture_output=True, timeout=timeout,
+        capture_output=True, timeout=timeout, env=_psql_env(schema),
     )
 
 
 def scan_postgres(dsn: str, patterns: Sequence[Pattern], stats: Stats,
-                  max_hits_per_form: int = 5, timeout: float = 120.0) -> list[Hit]:
+                  max_hits_per_form: int = 5, timeout: float = 120.0,
+                  schema: str | None = None) -> list[Hit]:
     """把每张表的每行渲染成一行 JSON 再扫。
 
     * TEXT/VARCHAR 列：明文原样出现 → 直接命中
@@ -486,7 +500,7 @@ def scan_postgres(dsn: str, patterns: Sequence[Pattern], stats: Stats,
     * 定位：表名 + 行号 + ctid，够人去复核，不打印整行内容
     """
     hits: list[Hit] = []
-    proc = _psql(dsn, SQL_LIST_TABLES, timeout)
+    proc = _psql(dsn, SQL_LIST_TABLES, timeout, schema)
     if proc.returncode != 0:
         raise RuntimeError(f"psql 列表失败：{proc.stderr.decode('utf-8', 'replace').strip()}")
     tables = [t for t in proc.stdout.decode("utf-8", "replace").splitlines() if t.strip()]
@@ -499,7 +513,7 @@ def scan_postgres(dsn: str, patterns: Sequence[Pattern], stats: Stats,
         p = subprocess.Popen(
             [os.environ.get("YS_PSQL", "psql"), "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1",
              "-d", dsn, "-c", sql],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_psql_env(schema),
         )
         try:
             for lineno, line in enumerate(p.stdout, 1):
@@ -521,16 +535,17 @@ def scan_postgres(dsn: str, patterns: Sequence[Pattern], stats: Stats,
 SQL_LIST_COLUMNS = (
     "select table_name || '.' || column_name "
     "from information_schema.columns "
-    "where table_schema = 'public' order by 1"
+    "where table_schema = current_schema() order by 1"
 )
 
 
-def core_schema_check(dsn: str, timeout: float) -> tuple[list[str], list[str]]:
+def core_schema_check(dsn: str, timeout: float,
+                      schema: str | None = None) -> tuple[list[str], list[str]]:
     """核对库里的表/列是否都落在服务端骨架的白名单内。
 
     返回 (缺表, 白名单外的表/列)。缺表通常意味着 migrations 还没跑（骨架未起）。
     """
-    proc = _psql(dsn, SQL_LIST_COLUMNS, timeout)
+    proc = _psql(dsn, SQL_LIST_COLUMNS, timeout, schema)
     if proc.returncode != 0:
         raise RuntimeError(f"psql 读 schema 失败：{proc.stderr.decode('utf-8', 'replace').strip()}")
     seen: dict[str, set[str]] = {}
@@ -834,13 +849,13 @@ def _selftest() -> int:
         import unittest.mock as mock
         fake = subprocess.CompletedProcess(
             args=[], returncode=0,
-            stdout=("codes.code\ncodes.nickname\npackages.id\n"
-                    "packages.leaky_filename\nweird_table.x\n").encode(),
+            stdout=("codes.code\ncodes.nickname\ntransfers.transfer_id\n"
+                    "transfers.leaky_filename\nweird_table.x\n").encode(),
             stderr=b"")
         with mock.patch.object(sys.modules[__name__], "_psql", return_value=fake):
             missing, extra = core_schema_check("postgres://x", 1.0)
-        assert "package_chunks" in missing and "codes" not in missing, missing
-        assert any("packages.leaky_filename" in e for e in extra), extra
+        assert "transfer_downloads" in missing and "codes" not in missing, missing
+        assert any("transfers.leaky_filename" in e for e in extra), extra
         assert any("weird_table" in e for e in extra), extra
         return f"缺表 {len(missing)} 张、白名单外 {len(extra)} 项均被点出"
 
@@ -931,6 +946,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--max-hits-per-form", type=int, default=5,
                     help="每个形态最多记几条命中（默认 5，避免刷屏）")
     ap.add_argument("--psql-timeout", type=float, default=120.0)
+    ap.add_argument("--pg-schema", default=os.environ.get("YS_PG_SCHEMA"),
+                    help="PG schema（默认按 DSN；用 PGOPTIONS 传 search_path，不污染 DSN）")
     ap.add_argument("--log-path", default=os.environ.get("YS_LOG_PATH"),
                     help="服务端日志（文件或目录，递归扫）。第三个容易漏的泄露面")
     ap.add_argument("--log-cmd", default=os.environ.get("YS_LOG_CMD"),
@@ -1076,7 +1093,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     missing_tables: list[str] = []
     if core and "postgres" in targets:
         try:
-            missing_tables, extra = core_schema_check(args.dsn, args.psql_timeout)
+            missing_tables, extra = core_schema_check(args.dsn, args.psql_timeout,
+                                                      args.pg_schema)
         except (RuntimeError, subprocess.TimeoutExpired) as exc:
             print(f"[PENDING] 待 Core 合入 + 参数确认 —— 库连上了但读不到 schema：{exc}",
                   file=sys.stderr)
@@ -1104,7 +1122,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             hits += scan_storage(args.storage_root, patterns, stats, args.max_hits_per_form)
         if "postgres" in targets:
             hits += scan_postgres(args.dsn, patterns, stats, args.max_hits_per_form,
-                                  args.psql_timeout)
+                                  args.psql_timeout, args.pg_schema)
         if "sqlite" in targets:
             hits += scan_sqlite(args.db_file, patterns, stats, args.max_hits_per_form)
     except (RuntimeError, subprocess.TimeoutExpired, sqlite3.Error) as exc:

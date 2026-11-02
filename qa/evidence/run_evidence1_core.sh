@@ -1,0 +1,155 @@
+#!/bin/sh
+# 一键复跑「证据一：服务端存储 / 数据库 / 日志三处都查不到文件名与明文」。
+#
+# 用法：
+#   YS_BASE_DSN='postgres://…' ./run_evidence1_core.sh <core-src-dir> <rune-crate-dir> [workdir]
+#
+#   <core-src-dir>  服务端源码根（含 server/），例如 git archive origin/feat/server-skeleton
+#   <rune-crate-dir> 端侧 crate（crypto/sm），用来打包真密文 + 派生用户码
+#   YS_BASE_DSN     PostgreSQL 基础连接串（默认取 $PG_TEST_DSN）；口令不落任何文件
+#
+# 做的事：
+#   1. 编译服务端、端侧工具（ys-tool / ys_pack_probe）——产物全在 workdir，isolated target
+#   2. 建独立 schema（默认 gate_ev1），起服务（stub-allow 验签 + 独立 blob 目录 + 日志重定向）
+#   3. 生成投递样本（高熵串 + 中文短句 + 有辨识度的文件名/主干/扩展名）
+#   4. 用端侧内核把样本打成**真 .yspk**，按 API 走完整投递（注册→建包→prelude→块→complete→取件）
+#   5. 对存储目录 / PG / 日志三处跑检索
+#   6. 收工杀服务
+#
+# 判定：三处都无强信号命中 → 退出码 0；命中 → 1；参数缺失 → 4；空语料 → 3。
+set -eu
+
+core="${1:-}"
+rune="${2:-}"
+if [ -z "$core" ] || [ -z "$rune" ]; then
+    echo "usage: YS_BASE_DSN=… $0 <core-src-dir> <rune-crate-dir> [workdir]" >&2
+    exit 2
+fi
+work="${3:-/tmp/ys-ev1}"
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$here/../.." && pwd)
+
+base_dsn="${YS_BASE_DSN:-${PG_TEST_DSN:-}}"
+if [ -z "$base_dsn" ]; then
+    echo "[PENDING] 没有 YS_BASE_DSN / PG_TEST_DSN —— 缺数据库连接串，不跑，也不伪造 PASS" >&2
+    exit 4
+fi
+schema="${YS_EV1_SCHEMA:-gate_ev1}"
+port="${YS_EV1_PORT:-18080}"
+dsn="$base_dsn&search_path=$schema"
+
+rm -rf "$work"
+mkdir -p "$work/bin" "$work/blobs" "$work/logs" "$work/sample"
+
+echo "== 1/6 编译 =="
+(cd "$core/server" && go build -o "$work/bin/yanshu-server" ./cmd/yanshu-server)
+cp -R "$rune/." "$work/crate/"
+mkdir -p "$work/crate/src/bin"
+cp "$here/adapters/ys_pack_probe.rs" "$work/crate/src/bin/ys_pack_probe.rs"
+# 有些精简环境只有 gcc 没有 cc（rustc 默认调 cc）
+if ! command -v cc >/dev/null 2>&1 && command -v gcc >/dev/null 2>&1; then
+    RUSTFLAGS="${RUSTFLAGS:-} -C linker=gcc"; export RUSTFLAGS
+fi
+(cd "$work/crate" && CARGO_TARGET_DIR="$work/target" cargo build --release \
+    --bin ys-tool --bin ys_pack_probe >"$work/logs/build.log" 2>&1) || {
+    echo "[BLOCKED] 端侧工具编译失败，日志尾部：" >&2; tail -15 "$work/logs/build.log" >&2; exit 2; }
+BIN="$work/target/release"
+echo "server: $work/bin/yanshu-server"
+echo "tool:   $BIN/ys-tool"
+
+echo "== 2/6 建 schema 并起服务 =="
+psql -X -q "$base_dsn" -c "create schema if not exists $schema" >/dev/null
+YANSHU_DATABASE_URL="$dsn" YANSHU_BLOB_DIR="$work/blobs" YANSHU_ADDR="127.0.0.1:$port" \
+    YANSHU_VERIFIER=stub-allow \
+    YANSHU_TOKEN_SECRET="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
+    "$work/bin/yanshu-server" >"$work/logs/server.log" 2>&1 &
+SRV=$!
+trap 'kill "$SRV" 2>/dev/null || true' EXIT INT TERM
+
+i=0
+while [ $i -lt 60 ]; do
+    if curl -fsS --max-time 2 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then break; fi
+    i=$((i+1)); sleep 0.2
+done
+if ! curl -fsS --max-time 2 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+    echo "[BLOCKED] 服务没起来，日志尾部：" >&2
+    tail -20 "$work/logs/server.log" >&2
+    exit 2
+fi
+echo "healthz OK"
+
+echo "== 3/6 投递样本 =="
+python3 "$here/scan_plaintext.py" --emit-sample "$work/sample" | sed 's/^/  /'
+
+echo "== 4/6 打包 + 投递 =="
+"$BIN/ys_pack_probe" keygen "$work/alice.sk" "$work/alice.pk" >/dev/null
+"$BIN/ys_pack_probe" keygen "$work/bob.sk" "$work/bob.pk" >/dev/null
+ALICE_PUB65="04$(od -An -tx1 -v "$work/alice.pk" | tr -d ' \n')"
+BOB_PUB65="04$(od -An -tx1 -v "$work/bob.pk" | tr -d ' \n')"
+ALICE_CODE=$("$BIN/ys-tool" user-code "$ALICE_PUB65")
+BOB_CODE=$("$BIN/ys-tool" user-code "$BOB_PUB65")
+SAMPLE_NAME=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["file_name"])' "$work/sample/sample.json")
+"$BIN/ys_pack_probe" pack "$work/sample/sample.bin" "$work/sample.yspk" \
+    --recipient-pk "$work/bob.pk" --sender-sk "$work/alice.sk" \
+    --name "$SAMPLE_NAME" --mime application/octet-stream --ext txt --chunk-size 1024
+
+b64() { python3 -c 'import base64,sys;print(base64.urlsafe_b64encode(bytes.fromhex(sys.argv[1])).decode().rstrip("="))' "$1"; }
+python3 "$here/adapters/core_delivery.py" --base-url "http://127.0.0.1:$port" \
+    --yspk "$work/sample.yspk" \
+    --sender-code "$ALICE_CODE" --sender-pk-b64 "$(b64 "$ALICE_PUB65")" --sender-nickname 甲 \
+    --recipient-code "$BOB_CODE" --recipient-pk-b64 "$(b64 "$BOB_PUB65")" --recipient-nickname 乙 \
+    --sm3-cmd "$BIN/ys-tool sm3" --no-ack \
+    --json-out "$work/delivery.json" | sed 's/^/  /'
+
+echo "== 5/6 三处检索 =="
+set +e
+python3 "$here/scan_plaintext.py" --profile core-skeleton \
+    --storage-root "$work/blobs" --dsn "$base_dsn" --pg-schema "$schema" --log-path "$work/logs" \
+    --sample "$work/sample/sample.json" \
+    --json-out "$work/scan.json"
+SCAN_RC=$?
+set -e
+echo "  scan exit=$SCAN_RC"
+
+if [ "${YS_EV1_CONTROLS:-1}" = "1" ]; then
+    echo "== 5b/6 阳性对照（证明检测器不是瞎的）=="
+    NAME=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["file_name"])' "$work/sample/sample.json")
+    scan() {
+        python3 "$here/scan_plaintext.py" --profile core-skeleton \
+            --storage-root "$work/blobs" --dsn "$base_dsn" --pg-schema "$schema" \
+            --log-path "$work/logs" --sample "$work/sample/sample.json" >/dev/null 2>&1
+    }
+    # ① 存储：把明文样本塞进 blob 目录
+    cp "$work/sample/sample.bin" "$work/blobs/_control_plaintext.bin"
+    set +e; scan; rc_store=$?; set -e
+    rm -f "$work/blobs/_control_plaintext.bin"
+    # ② 日志：追加一行带文件名的请求日志
+    cp "$work/logs/server.log" "$work/logs/server.log.bak"
+    printf '%s\n' "2026-01-01T00:00:00Z level=INFO msg=\"upload name=$NAME\"" >> "$work/logs/server.log"
+    set +e; scan; rc_log=$?; set -e
+    mv "$work/logs/server.log.bak" "$work/logs/server.log"
+    # ③ 数据库：把文件名写进 nickname 列
+    psql -X -q "$base_dsn" -c "set search_path=$schema; update codes set nickname='$NAME' where code=(select code from codes limit 1)" >/dev/null
+    set +e; scan; rc_db=$?; set -e
+    psql -X -q "$base_dsn" -c "set search_path=$schema; update codes set nickname='gate'" >/dev/null
+
+    echo "  存储注入 → exit=$rc_store（期望 1）"
+    echo "  日志注入 → exit=$rc_log（期望 1）"
+    echo "  DB 注入  → exit=$rc_db（期望 1）"
+    set +e; scan; rc_clean=$?; set -e
+    echo "  复原后   → exit=$rc_clean（期望 0）"
+    if [ "$rc_store" -ne 1 ] || [ "$rc_log" -ne 1 ] || [ "$rc_db" -ne 1 ] || [ "$rc_clean" -ne 0 ]; then
+        echo "[BLOCKED] 阳性对照不成立：检测器可能失效，本轮 PASS 不可信" >&2
+        kill "$SRV" 2>/dev/null || true
+        exit 2
+    fi
+    echo "  阳性对照全部成立"
+fi
+
+echo "== 6/6 收工 =="
+kill "$SRV" 2>/dev/null || true
+wait "$SRV" 2>/dev/null || true
+trap - EXIT INT TERM
+echo "服务端日志：$work/logs/server.log"
+echo "扫描明细：$work/scan.json"
+exit "$SCAN_RC"
