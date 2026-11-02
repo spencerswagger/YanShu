@@ -60,14 +60,18 @@
 
 判据：第 3 步必须 401（不许 201/410），第 5 步不许要求重传已完成块，第 6 步必须逐字节相同；任一步不符即 FAIL。
 
-## 实现现状与偏离登记
+## 实现现状与已知陷阱（登记，非协议要求）
 
-契约不因实现现状改口，但把"已知偏离"记在这里，避免被当成"契约允许"。
+本表记录**实现侧/交付侧**的现状与踩过的坑，**不是对客户端或服务端的协议约束**，也不因现状改口契约；记在这里是为了避免被误当成"契约允许"。
 
 | # | 现状 | 契约要求 | 状态 |
 |---:|---|---|---|
 | K1 | 内嵌内核曾用错构建入口产出 `8b89dd7f…`（130,653 B），与冻结产物 `c1b87d0a…`（127,313 B）不同字节 | 根因已查明（从成员 crate 目录构建会绕过 workspace 锁文件与 release profile），**已从偏离登记升级为契约硬规则**：`CRYPTO-PACK` §18 规定唯一构建命令、冻结 sha256、以及"只比 sha256"的判定方式 | **已升级为契约规则（§18），结案** |
 | K2 | 凭据级过期码 `AUTH_TOKEN_EXPIRED` **本期不实现** | 契约不设该码：上传凭据有效期 = 传输 `expires_at`，到期走 `410 TRANSFER_EXPIRED`；下载租约到期归 `AUTH_TOKEN_INVALID` | 登记保留（本期不做） |
+| K4 | 内核二进制曾**未被 git 跟踪**：根 `.gitignore` 的 `*.wasm` 让 `git add -A` 静默跳过 `server/kernel/yanshu_sm.wasm`，仓库里从来没有这份内核，别人 clone 下来拿不到 | 内核资产 MUST 以 **git blob** 形式存在于仓库：`git cat-file blob HEAD:server/kernel/yanshu_sm.wasm` 的 sha256 == 冻结值 `c1b87d0a…7259f`（127,313 B）。**仅工作区有文件不算交付**（修法：`server/.gitignore` 加 `!kernel/yanshu_sm.wasm`） | 已修复，陷阱登记保留 |
+| K5 | **构建入口决定字节**：从成员目录 `crypto/sm` 构建会绕过 workspace 的 `Cargo.lock` 与 `[profile.release]`（`opt-level=3`/`lto=true`/`codegen-units=1`），得 130,653 B / `8b89dd7f…`；从 `crypto/` 用 `-p yanshu-sm` 才是 127,313 B / `c1b87d0a…` | 唯一正确命令：`cd crypto && cargo build --release --target wasm32-unknown-unknown -p yanshu-sm`；**不要**从成员 crate 目录构建。规范条文见 `CRYPTO-PACK` §18 | 已固化，陷阱登记保留 |
+
+> 编号说明：`K3` 已撤销（KID 机制已落地，不存在"版本机制缺失"这类偏离），因此本表编号在 K3 处留空，其余连续。
 
 ## 易错点（自查清单）
 
