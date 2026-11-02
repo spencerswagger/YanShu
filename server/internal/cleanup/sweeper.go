@@ -1,7 +1,7 @@
 // Package cleanup 是 TTL / 终结态的清道夫。
 //
-// 三件事：把到期包置终结 → **真删**磁盘密文与元数据 → 清理过期的挑战/会话/码。
-// 删除是真删（RemoveAll + DELETE），不是软删、不是改状态了事。
+// 三条终结路径（ack 达上限、revoke、TTL）都必须**物理删除**密文（API.md §2.3）；
+// 本包是兜底重试：即使请求路径里删除失败，也会被周期任务补上。
 package cleanup
 
 import (
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spencerswagger/YanShu/server/internal/blob"
+	"github.com/spencerswagger/YanShu/server/internal/spec"
 	"github.com/spencerswagger/YanShu/server/internal/store"
 )
 
@@ -21,11 +22,11 @@ type Sweeper struct {
 	log      *slog.Logger
 	interval time.Duration
 	batch    int
-	// CodeGrace 是码过期后仍保留多久（保留期内查询返回 code_expired，之后是 code_not_found）。
-	CodeGrace time.Duration
-	// TombstoneTTL 是墓碑保留时长（只留终结原因，便于排障）。
-	TombstoneTTL time.Duration
-	// Now 可被测试替换，生产用 time.Now。
+	// Retention 是终结元数据保留时长（API.md §5.2：7 天）。
+	Retention time.Duration
+	// ChallengeRetention 是挑战记录保留时长（API.md §1.2：10 分钟）。
+	ChallengeRetention time.Duration
+	// Now 可被测试替换。
 	Now func() time.Time
 }
 
@@ -35,29 +36,28 @@ func New(st *store.Store, blobs blob.Store, interval time.Duration, log *slog.Lo
 		log = slog.Default()
 	}
 	return &Sweeper{
-		store:        st,
-		blobs:        blobs,
-		log:          log,
-		interval:     interval,
-		batch:        200,
-		CodeGrace:    7 * 24 * time.Hour,
-		TombstoneTTL: 30 * 24 * time.Hour,
-		Now:          func() time.Time { return time.Now().UTC() },
+		store:              st,
+		blobs:              blobs,
+		log:                log,
+		interval:           interval,
+		batch:              200,
+		Retention:          spec.TombstoneTTL,
+		ChallengeRetention: spec.ChallengeRetention,
+		Now:                func() time.Time { return time.Now().UTC() },
 	}
 }
 
 // Stats 是一轮清理的结果。
 type Stats struct {
-	Terminalized int64
-	Purged       int
-	PurgeErrors  int
-	Challenges   int64
-	Sessions     int64
-	Codes        int64
-	Tombstones   int64
+	Expired     int
+	Purged      int
+	PurgeErrors int
+	Challenges  int64
+	Idempotency int64
+	OldRecords  int64
 }
 
-// Run 阻塞运行，直到 ctx 取消。启动立即跑一轮，之后按 interval 跑。
+// Run 阻塞运行，直到 ctx 取消。
 func (s *Sweeper) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -78,71 +78,60 @@ func (s *Sweeper) Once(ctx context.Context) (Stats, error) {
 	now := s.Now()
 	var stats Stats
 
-	n, err := s.store.TerminalizeExpired(ctx, now)
+	// 1) TTL 到期 → EXPIRED。
+	expired, err := s.store.TerminalizeExpired(ctx, now)
 	if err != nil {
 		return stats, err
 	}
-	stats.Terminalized = n
+	stats.Expired = len(expired)
+	for _, id := range expired {
+		if err := s.blobs.Purge(id); err != nil {
+			s.log.Error("purge expired ciphertext failed", "transferId", id, "err", err.Error())
+			stats.PurgeErrors++
+		}
+	}
 
-	for i := 0; i < s.batch; i++ {
-		list, err := s.store.ListPurgeable(ctx, now, 1)
-		if err != nil {
-			return stats, err
-		}
-		if len(list) == 0 {
-			break
-		}
-		p := list[0]
-		// 先删密文再删元数据：即使元数据删除失败，下一轮还能重试，不会留下"可下载但已标记删除"的窗口。
-		if err := s.blobs.Purge(p.ID); err != nil {
-			s.log.Error("purge blobs failed", "packageId", p.ID, "err", err.Error())
+	// 2) 所有终结态再兜底删一次密文（删除幂等）。
+	terminal, err := s.store.ListTerminal(ctx, s.batch)
+	if err != nil {
+		return stats, err
+	}
+	for _, t := range terminal {
+		if err := s.blobs.Purge(t.ID); err != nil {
+			s.log.Error("purge terminal ciphertext failed", "transferId", t.ID, "err", err.Error())
 			stats.PurgeErrors++
-			break
+			continue
 		}
-		if err := s.store.PurgePackage(ctx, p.ID, now); err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				continue
-			}
-			s.log.Error("purge package failed", "packageId", p.ID, "err", err.Error())
-			stats.PurgeErrors++
-			break
-		}
-		_ = s.store.Audit(ctx, store.AuditEvent{
-			At: now, Kind: store.AuditPackagePurge, PackageID: p.ID,
-			Outcome: p.State, Bytes: int64(p.PreludeLen),
-		})
 		stats.Purged++
 	}
 
-	if n, err := s.store.DeleteExpiredChallenges(ctx, now); err == nil {
+	// 3) 过期挑战（10 分钟）。
+	if n, err := s.store.DeleteExpiredChallenges(ctx, now.Add(-s.ChallengeRetention)); err == nil {
 		stats.Challenges = n
 	} else {
 		s.log.Warn("delete challenges failed", "err", err.Error())
 	}
-	if n, err := s.store.DeleteExpiredSessions(ctx, now); err == nil {
-		stats.Sessions = n
+
+	// 4) 幂等记录。
+	if n, err := s.store.DeleteExpiredIdempotency(ctx, now); err == nil {
+		stats.Idempotency = n
 	} else {
-		s.log.Warn("delete sessions failed", "err", err.Error())
-	}
-	if n, err := s.store.DeleteExpiredCodes(ctx, now.Add(-s.CodeGrace)); err == nil {
-		stats.Codes = n
-	} else {
-		s.log.Warn("delete codes failed", "err", err.Error())
-	}
-	if n, err := s.store.DeleteOldTombstones(ctx, now.Add(-s.TombstoneTTL)); err == nil {
-		stats.Tombstones = n
-	} else {
-		s.log.Warn("delete tombstones failed", "err", err.Error())
+		s.log.Warn("delete idempotency failed", "err", err.Error())
 	}
 
-	if stats.Purged > 0 || stats.Terminalized > 0 {
+	// 5) 终结元数据保留 7 天后物理删除（墓碑）。
+	if n, err := s.store.DeleteOldTerminal(ctx, now.Add(-s.Retention)); err == nil {
+		stats.OldRecords = n
+	} else {
+		s.log.Warn("delete terminal transfers failed", "err", err.Error())
+	}
+
+	if stats.Expired > 0 || stats.Purged > 0 || stats.OldRecords > 0 {
 		s.log.Info("sweep",
-			"terminalized", stats.Terminalized,
+			"expired", stats.Expired,
 			"purged", stats.Purged,
 			"purgeErrors", stats.PurgeErrors,
-			"challenges", stats.Challenges,
-			"sessions", stats.Sessions,
-			"codes", stats.Codes,
+			"oldRecords", stats.OldRecords,
 		)
 	}
 	return stats, nil

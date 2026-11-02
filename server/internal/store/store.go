@@ -24,12 +24,8 @@ var migrationFS embed.FS
 
 // 语义化错误，handler 据此映射对外错误码。
 var (
-	ErrNotFound        = errors.New("store: not found")
-	ErrCodeTaken       = errors.New("store: code taken")
-	ErrConflict        = errors.New("store: conflict")
-	ErrPackageLocked   = errors.New("store: package locked")
-	ErrChunkConflict   = errors.New("store: chunk conflict")
-	ErrPreludeConflict = errors.New("store: prelude conflict")
+	ErrNotFound = errors.New("store: not found")
+	ErrConflict = errors.New("store: conflict")
 )
 
 // Store 持有连接池。

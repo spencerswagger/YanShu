@@ -1,201 +1,231 @@
 package spec
 
-import "time"
+// 本文件是全部 HTTP 请求/响应体（JSON）的字段名唯一来源，逐字对齐 docs/API.md。
+// 字段命名 snake_case、大小写敏感；二进制一律 base64url 无填充。
+// 所有时间字段用 string，值由 FormatTime 生成（RFC 3339 UTC 秒级 Z）。
 
-// 本文件是全部 HTTP 请求/响应体（JSON）的字段名唯一来源。
-// 字段名一律 camelCase；二进制一律 base64url（无填充，RFC 4648 §5），
-// 与 docs/CRYPTO-PACK.md §3.2 的外部表示保持一致。
-// DRAFT(API.md): 全部字段名待对齐；对齐时只改这里。
-
-// ErrorResponse 是全部非 2xx 响应的统一外壳。
+// ErrorResponse 是全部非 2xx 响应的统一外壳（API.md §0.2）。
+//
+// Missing 是 CHUNKS_MISSING 的附加信息（API.md §6.6 要求带 missing 数组）；
+// 契约的信封没有 details 槽位，这里暂放顶层，已在 DRAFT-FIELDS 记为待确认项。
 type ErrorResponse struct {
-	Error ErrorBody `json:"error"`
+	Error   ErrorBody      `json:"error"`
+	Missing []MissingRange `json:"missing,omitempty"`
 }
 
-// ErrorBody 是错误详情。Code 取值见 spec/errors.go。
+// ErrorBody 是错误详情。
 type ErrorBody struct {
-	Code         string `json:"code"`
-	Message      string `json:"message"`
-	RetryAfterMs int64  `json:"retryAfterMs,omitempty"`
-	RequestID    string `json:"requestId,omitempty"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	Scope      string `json:"scope,omitempty"`
+	RetryAfter *int   `json:"retry_after,omitempty"`
+	RequestID  string `json:"request_id,omitempty"`
 }
 
-// ---------- 挑战与会话 ----------
+// ---------- /v1/config ----------
 
-// ChallengeRequest 申请一个一次性 nonce。
+// ConfigResponse 是客户端启动配置（API.md §4.1）。
+type ConfigResponse struct {
+	APIVersion        string       `json:"api_version"`
+	CryptoPackVersion string       `json:"crypto_pack_version"`
+	ChunkSize         uint32       `json:"chunk_size"`
+	MaxPlaintextSize  uint64       `json:"max_plaintext_size"`
+	MaxTTLSeconds     uint32       `json:"max_ttl_seconds"`
+	STUNURLs          []string     `json:"stun_urls"`
+	WSURL             string       `json:"ws_url"`
+	Limits            ConfigLimits `json:"limits"`
+}
+
+// ConfigLimits 是 /v1/config 里暴露的限速额度（API.md §4.1）。
+type ConfigLimits struct {
+	CodeLookupPerMin      int `json:"code_lookup_per_min"`
+	ChallengePerMin       int `json:"challenge_per_min"`
+	TransferCreatePerHour int `json:"transfer_create_per_hour"`
+	ChunkPutPerMin        int `json:"chunk_put_per_min"`
+}
+
+// ---------- /v1/challenges ----------
+
+// ChallengeRequest 只有 purpose（API.md §4.2：没有 code 字段）。
 type ChallengeRequest struct {
-	// Purpose 取 PurposeRegister / PurposeNickname / PurposeSession。
 	Purpose string `json:"purpose"`
-	// Code 4 位用户码。PurposeSession/Nickname 必填。
-	Code string `json:"code,omitempty"`
-	// PubKey 未压缩 SM2 公钥（65 字节）的 base64url。PurposeRegister 必填。
-	PubKey string `json:"pubKey,omitempty"`
-	// Nickname 仅 PurposeNickname 使用，参与签名消息构造。
-	Nickname string `json:"nickname,omitempty"`
 }
 
-// ChallengeResponse 下发 nonce 与「待签名消息」。
-// Message 是服务端拼好的规范字节串（base64url），客户端直接对它签名，
-// 避免两端各自拼串导致验签失败。
+// ChallengeResponse 下发挑战。
 type ChallengeResponse struct {
-	ChallengeID     string    `json:"challengeId"`
-	Purpose         string    `json:"purpose"`
-	Nonce           string    `json:"nonce"`
-	Message         string    `json:"message"`
-	MessageEncoding string    `json:"messageEncoding"`
-	ExpiresAt       time.Time `json:"expiresAt"`
+	ChallengeID string `json:"challenge_id"`
+	Nonce       string `json:"nonce"`
+	Purpose     string `json:"purpose"`
+	ExpiresAt   string `json:"expires_at"`
 }
 
-// MessageEncodingB64URL 是 ChallengeResponse.MessageEncoding 的固定值。
-const MessageEncodingB64URL = "base64url"
+// ---------- 码 ----------
 
-// SessionRequest 用签名换会话令牌。
-type SessionRequest struct {
-	ChallengeID string `json:"challengeId"`
-	Code        string `json:"code"`
-	Signature   string `json:"signature"`
-}
-
-// SessionResponse 返回不透明会话令牌（Bearer）。
-// 令牌只在本响应里出现一次，服务端只存它的 SHA-256。
-type SessionResponse struct {
-	SessionToken string    `json:"sessionToken"`
-	Code         string    `json:"code"`
-	ExpiresAt    time.Time `json:"expiresAt"`
-}
-
-// ---------- 用户码 ----------
-
-// RegisterCodeRequest 注册用户码。服务端不存任何私钥相关物。
+// RegisterCodeRequest 注册码（API.md §4.3）。
 type RegisterCodeRequest struct {
-	// PubKey 未压缩 SM2 公钥（65 字节）base64url。
-	PubKey string `json:"pubKey"`
-	// Nickname 展示名（≤64 字节 UTF-8，去控制字符）。
-	Nickname string `json:"nickname"`
-	// ChallengeID / Signature 是对 PurposeRegister 挑战消息的应答。
-	ChallengeID string `json:"challengeId"`
-	Signature   string `json:"signature"`
-	// Code 客户端本地派生的码，仅作一致性校验（服务端会自行从公钥派生）。
-	// DRAFT(API.md): 该字段是否需要存在待对齐。
-	Code string `json:"code,omitempty"`
+	Code      string `json:"code"`
+	PublicKey string `json:"public_key"`
+	Nickname  string `json:"nickname"`
 }
 
-// CodeInfo 是码查询/注册的返回体。
-type CodeInfo struct {
-	Code         string    `json:"code"`
-	PubKey       string    `json:"pubKey"`
-	Nickname     string    `json:"nickname"`
-	Status       string    `json:"status"`
-	RegisteredAt time.Time `json:"registeredAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
-	ExpiresAt    time.Time `json:"expiresAt"`
+// CodeResponse 是注册响应（API.md §4.3）。
+type CodeResponse struct {
+	Code         string `json:"code"`
+	PublicKey    string `json:"public_key"`
+	Nickname     string `json:"nickname"`
+	RegisteredAt string `json:"registered_at"`
 }
 
-// UpdateNicknameRequest 改昵称走签名挑战（无账号体系）。
+// CodeLookupResponse 是查码响应，只有 4 个字段（API.md §4.4）。
+type CodeLookupResponse struct {
+	Code         string `json:"code"`
+	PublicKey    string `json:"public_key"`
+	Nickname     string `json:"nickname"`
+	RegisteredAt string `json:"registered_at"`
+}
+
+// UpdateNicknameRequest 改昵称（API.md §4.5）。
 type UpdateNicknameRequest struct {
-	Nickname    string `json:"nickname"`
-	ChallengeID string `json:"challengeId"`
-	Signature   string `json:"signature"`
+	Nickname string `json:"nickname"`
 }
 
-// ---------- 包 ----------
-
-// CreatePackageRequest 创建一次传输。
-// 服务端只收「尺寸类元数据 + 码」，文件名/MIME 都在端侧加密清单里，从不上行。
-type CreatePackageRequest struct {
-	RecipientCode string `json:"recipientCode"`
-	ChunkCount    uint32 `json:"chunkCount"`
-	ChunkSize     uint32 `json:"chunkSize"`
-	PlaintextSize uint64 `json:"plaintextSize"`
-	PreludeLen    uint32 `json:"preludeLen"`
-	// MaxDownloads 缺省由服务端策略给定；0 视为不合法。
-	MaxDownloads *uint32 `json:"maxDownloads,omitempty"`
-	// TTLSeconds 缺省由服务端策略给定；超过上限会被夹到上限。
-	TTLSeconds *uint32 `json:"ttlSeconds,omitempty"`
-	// DeleteOnAck 接收方确认后立刻删密文（默认 true）。
-	DeleteOnAck *bool `json:"deleteOnAck,omitempty"`
+// UpdateNicknameResponse 是改昵称响应（API.md §4.5）。
+type UpdateNicknameResponse struct {
+	Code      string `json:"code"`
+	Nickname  string `json:"nickname"`
+	UpdatedAt string `json:"updated_at"`
 }
 
-// PackageInfo 是包的对外元信息。
-// 注意：这里**没有**文件名字段，也没有 MIME —— 这是设计要求，不是漏了。
-type PackageInfo struct {
-	PackageID      string     `json:"packageId"`
-	SenderCode     string     `json:"senderCode"`
-	RecipientCode  string     `json:"recipientCode"`
-	State          string     `json:"state"`
-	ChunkCount     uint32     `json:"chunkCount"`
-	ChunkSize      uint32     `json:"chunkSize"`
-	PlaintextSize  uint64     `json:"plaintextSize"`
-	PreludeLen     uint32     `json:"preludeLen"`
-	MaxDownloads   uint32     `json:"maxDownloads"`
-	DownloadsUsed  uint32     `json:"downloadsUsed"`
-	ReceivedChunks uint32     `json:"receivedChunks"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	ExpiresAt      time.Time  `json:"expiresAt"`
-	CommittedAt    *time.Time `json:"committedAt,omitempty"`
-	TerminalReason string     `json:"terminalReason,omitempty"`
+// ---------- 传输 ----------
+
+// CreateTransferRequest 创建传输（API.md §6.1）。
+type CreateTransferRequest struct {
+	RecipientCode string  `json:"recipient_code"`
+	PlaintextSize uint64  `json:"plaintext_size"`
+	ChunkSize     uint32  `json:"chunk_size"`
+	ChunkCount    uint32  `json:"chunk_count"`
+	PreludeLen    uint32  `json:"prelude_len"`
+	PreludeSM3    string  `json:"prelude_sm3"`
+	TTLSeconds    *uint32 `json:"ttl_seconds,omitempty"`
+	MaxDownloads  *uint32 `json:"max_downloads,omitempty"`
 }
 
-// InboxResponse 是收件列表。
-type InboxResponse struct {
-	Packages []PackageInfo `json:"packages"`
+// CreateTransferResponse 是创建响应（API.md §6.1）。
+type CreateTransferResponse struct {
+	TransferID    string `json:"transfer_id"`
+	State         string `json:"state"`
+	UploadToken   string `json:"upload_token"`
+	ChunkSize     uint32 `json:"chunk_size"`
+	ChunkCount    uint32 `json:"chunk_count"`
+	PreludeLen    uint32 `json:"prelude_len"`
+	DownloadCount uint32 `json:"download_count"`
+	MaxDownloads  uint32 `json:"max_downloads"`
+	CreatedAt     string `json:"created_at"`
+	ExpiresAt     string `json:"expires_at"`
 }
 
-// PreludePutResponse 是 prelude 上传结果。
+// PreludePutResponse 是 prelude 首次上传响应（API.md §6.3）。
 type PreludePutResponse struct {
-	PackageID  string `json:"packageId"`
-	PreludeLen uint32 `json:"preludeLen"`
-	Duplicate  bool   `json:"duplicate"`
+	PreludeLen uint32 `json:"prelude_len"`
+	PreludeSM3 string `json:"prelude_sm3"`
 }
 
-// ChunkPutResponse 是块上传结果。Duplicate=true 表示同序号同内容的幂等重传。
+// ChunkPutResponse 是块上传响应（API.md §6.4）。
 type ChunkPutResponse struct {
-	PackageID      string `json:"packageId"`
 	Index          uint32 `json:"index"`
-	CiphertextLen  uint32 `json:"ciphertextLen"`
-	ReceivedChunks uint32 `json:"receivedChunks"`
-	Duplicate      bool   `json:"duplicate"`
+	Length         uint32 `json:"length"`
+	ReceivedChunks uint32 `json:"received_chunks"`
+	ChunkCount     uint32 `json:"chunk_count"`
 }
 
-// ChunkMeta 是单块的元信息（不含内容）。
-type ChunkMeta struct {
-	Index         uint32    `json:"index"`
-	CiphertextLen uint32    `json:"ciphertextLen"`
-	ReceivedAt    time.Time `json:"receivedAt"`
+// MissingRange 是连续缺失区间（API.md §6.5）。
+type MissingRange struct {
+	Start uint32 `json:"start"`
+	Count uint32 `json:"count"`
 }
 
-// ProgressResponse 是续传进度：已收块的位图 + 缺失块列表。
-type ProgressResponse struct {
-	PackageID          string      `json:"packageId"`
-	State              string      `json:"state"`
-	PreludeReceived    bool        `json:"preludeReceived"`
-	PreludeLen         uint32      `json:"preludeLen"`
-	ChunkCount         uint32      `json:"chunkCount"`
-	ReceivedChunks     uint32      `json:"receivedChunks"`
-	ReceivedBitmap     string      `json:"receivedBitmap"`
-	ReceivedIndexes    []uint32    `json:"receivedIndexes,omitempty"`
-	MissingIndexes     []uint32    `json:"missingIndexes,omitempty"`
-	MissingTruncated   bool        `json:"missingTruncated,omitempty"`
-	DownloadsRemaining uint32      `json:"downloadsRemaining"`
-	ExpiresAt          time.Time   `json:"expiresAt"`
-	Chunks             []ChunkMeta `json:"chunks,omitempty"`
+// StatusResponse 是断点续传进度（API.md §6.5）。
+type StatusResponse struct {
+	TransferID      string         `json:"transfer_id"`
+	State           string         `json:"state"`
+	ChunkCount      uint32         `json:"chunk_count"`
+	ChunkSize       uint32         `json:"chunk_size"`
+	PreludeReceived bool           `json:"prelude_received"`
+	ReceivedChunks  uint32         `json:"received_chunks"`
+	Bitmap          string         `json:"bitmap"`
+	Missing         []MissingRange `json:"missing"`
+	UploadedBytes   int64          `json:"uploaded_bytes"`
+	UpdatedAt       string         `json:"updated_at"`
 }
 
-// AckRequest 是接收方确认。CountsAsDownload 缺省 true。
-type AckRequest struct {
-	CountsAsDownload *bool `json:"countsAsDownload,omitempty"`
+// CompleteResponse 是完成标记响应（API.md §6.6）。
+type CompleteResponse struct {
+	State     string `json:"state"`
+	ExpiresAt string `json:"expires_at"`
 }
 
-// StateResponse 用于撤回/确认这类只改状态的操作。
-type StateResponse struct {
-	PackageID string    `json:"packageId"`
-	State     string    `json:"state"`
-	UpdatedAt time.Time `json:"updatedAt"`
+// InboxItem 是收件列表项（API.md §7.1）。注意：没有文件名/MIME。
+type InboxItem struct {
+	TransferID     string `json:"transfer_id"`
+	SenderCode     string `json:"sender_code"`
+	SenderNickname string `json:"sender_nickname"`
+	RecipientCode  string `json:"recipient_code"`
+	PlaintextSize  uint64 `json:"plaintext_size"`
+	ChunkSize      uint32 `json:"chunk_size"`
+	ChunkCount     uint32 `json:"chunk_count"`
+	PreludeLen     uint32 `json:"prelude_len"`
+	CreatedAt      string `json:"created_at"`
+	ExpiresAt      string `json:"expires_at"`
+	State          string `json:"state"`
 }
 
-// HealthResponse 是 /healthz 返回。
+// InboxResponse 是收件列表（API.md §7.1）。
+type InboxResponse struct {
+	Items      []InboxItem `json:"items"`
+	NextCursor *string     `json:"next_cursor"`
+}
+
+// TransferResponse 是传输元数据（API.md §7.2）。
+type TransferResponse struct {
+	TransferID           string  `json:"transfer_id"`
+	SenderCode           string  `json:"sender_code"`
+	SenderNickname       string  `json:"sender_nickname,omitempty"`
+	RecipientCode        string  `json:"recipient_code"`
+	PlaintextSize        uint64  `json:"plaintext_size"`
+	ChunkSize            uint32  `json:"chunk_size"`
+	ChunkCount           uint32  `json:"chunk_count"`
+	PreludeLen           uint32  `json:"prelude_len"`
+	PreludeSM3           *string `json:"prelude_sm3,omitempty"`
+	TotalCiphertextBytes int64   `json:"total_ciphertext_bytes,omitempty"`
+	DownloadCount        uint32  `json:"download_count"`
+	MaxDownloads         uint32  `json:"max_downloads"`
+	CreatedAt            string  `json:"created_at"`
+	ExpiresAt            string  `json:"expires_at"`
+	State                string  `json:"state"`
+	LeaseExpiresAt       *string `json:"lease_expires_at,omitempty"`
+	TerminalReason       *string `json:"terminal_reason,omitempty"`
+	TerminalAt           *string `json:"terminal_at,omitempty"`
+}
+
+// AckResponse 是取件确认响应（API.md §7.5）。
+type AckResponse struct {
+	State              string  `json:"state"`
+	TerminalReason     *string `json:"terminal_reason,omitempty"`
+	TerminalAt         *string `json:"terminal_at,omitempty"`
+	DownloadCount      uint32  `json:"download_count"`
+	RemainingDownloads *uint32 `json:"remaining_downloads,omitempty"`
+}
+
+// RevokeResponse 是撤回响应（API.md §6.7）。
+type RevokeResponse struct {
+	State          string `json:"state"`
+	TerminalReason string `json:"terminal_reason"`
+	TerminalAt     string `json:"terminal_at"`
+}
+
+// HealthResponse 是 /healthz（运维，不在契约内）。
 type HealthResponse struct {
 	Status     string `json:"status"`
-	APIVersion string `json:"apiVersion"`
+	APIVersion string `json:"api_version"`
 	Contract   string `json:"contract"`
 }

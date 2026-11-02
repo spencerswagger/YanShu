@@ -11,34 +11,24 @@ import (
 
 // expectedColumns 是**白名单**：库里允许出现的全部列。
 //
-// 加列必须同时改这里和迁移文件，并在 PR 里说明"为什么这条元数据不违反
-// 不存文件名/不存明文的约束"。这条断言是 Gate「库里 grep 不到文件名」的结构性保证。
+// 依据 docs/API.md §2.1 的元数据白名单，加上迁移文件里逐条注明理由的
+// 「派生/内部」列（prelude_received / received_chunks / updated_at /
+// upload_token_sm3 / uploader_ip / 租约与幂等表）。
+// 加列必须同时改这里与迁移文件，并在 PR 里说明为什么不违反「不落明文」。
 var expectedColumns = map[string][]string{
-	"codes": {
-		"code", "created_at", "expires_at", "last_seen_at",
-		"nickname", "pubkey", "updated_at",
+	"codes":           {"code", "nickname", "public_key", "registered_at", "updated_at"},
+	"auth_challenges": {"challenge_id", "expires_at", "nonce", "purpose", "used"},
+	"transfers": {
+		"chunk_count", "chunk_size", "created_at", "download_count", "expires_at",
+		"max_downloads", "plaintext_size", "prelude_len", "prelude_received",
+		"prelude_sm3", "received_chunks", "recipient_code", "sender_code", "state",
+		"terminal_at", "terminal_reason", "total_ciphertext_bytes", "transfer_id",
+		"updated_at", "upload_token_sm3", "uploader_ip",
 	},
-	"auth_challenges": {
-		"code", "created_at", "expires_at", "id", "message", "pubkey", "purpose", "used_at",
-	},
-	"sessions": {
-		"code", "created_at", "expires_at", "token_hash",
-	},
-	"packages": {
-		"chunk_count", "chunk_size", "committed_at", "created_at", "delete_on_ack",
-		"downloads_used", "expires_at", "id", "max_downloads", "plaintext_size",
-		"prelude_digest", "prelude_len", "received_count", "recipient_code",
-		"sender_code", "state", "terminal_at", "terminal_reason",
-	},
-	"package_chunks": {
-		"chunk_index", "ct_digest", "ct_len", "package_id", "received_at",
-	},
-	"package_tombstones": {
-		"created_at", "id", "purged_at", "recipient_code", "sender_code", "state", "terminal_at",
-	},
-	"audit_events": {
-		"at", "bytes", "code", "id", "ip", "kind", "outcome", "package_id",
-	},
+	"transfer_chunks":    {"chunk_index", "ciphertext_sm3", "length", "stored_at", "transfer_id"},
+	"transfer_downloads": {"acked_at", "created_at", "download_id", "lease_expires_at", "transfer_id"},
+	"idempotency_keys":   {"created_at", "expires_at", "key_hash", "request_fingerprint", "sender_code", "transfer_id"},
+	"audit_events":       {"bytes", "id", "ip", "method", "path", "request_id", "status", "ts"},
 }
 
 func TestSchemaColumnWhitelist(t *testing.T) {
@@ -87,13 +77,12 @@ func TestSchemaColumnWhitelist(t *testing.T) {
 	}
 }
 
-// TestNoContentBearingColumns 是白名单之外的第二道闸：
-// 列名里不允许出现"内容/明文/文件名"这类语义，防止有人"顺手"加个大字段。
+// 白名单之外的第二道闸：列名里不允许出现「内容/明文/文件名」这类语义。
 func TestNoContentBearingColumns(t *testing.T) {
 	for table, cols := range expectedColumns {
 		for _, c := range cols {
 			name := strings.ToLower(c)
-			for _, forbidden := range []string{"filename", "file_name", "mime", "content", "body", "blob", "plaintext_data"} {
+			for _, forbidden := range []string{"filename", "file_name", "mime", "content", "body", "blob", "plaintext_data", "extension"} {
 				if strings.Contains(name, forbidden) {
 					t.Fatalf("column %s.%s looks content-bearing (%q)", table, c, forbidden)
 				}

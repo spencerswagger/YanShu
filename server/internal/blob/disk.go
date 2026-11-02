@@ -26,7 +26,7 @@ var (
 	ErrNotFound = errors.New("blob: not found")
 	ErrConflict = errors.New("blob: conflict")
 	ErrTooLarge = errors.New("blob: too large")
-	ErrBadID    = errors.New("blob: bad package id")
+	ErrBadID    = errors.New("blob: bad transfer id")
 )
 
 var pkgIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -38,14 +38,21 @@ type PutResult struct {
 	Duplicate bool
 }
 
+// ReadSeekCloser 让 handler 能用 http.ServeContent 处理单区间 Range（API.md §8.1）。
+type ReadSeekCloser interface {
+	io.Reader
+	io.Seeker
+	io.Closer
+}
+
 // Store 是密文块存储接口；换成对象存储时只换实现。
 type Store interface {
-	PutPrelude(pkgID string, data []byte) (PutResult, error)
-	PutChunk(pkgID string, index uint32, data []byte) (PutResult, error)
-	OpenPrelude(pkgID string) (io.ReadCloser, int64, error)
-	OpenChunk(pkgID string, index uint32) (io.ReadCloser, int64, error)
-	Purge(pkgID string) error
-	Usage(pkgID string) (int64, error)
+	PutPrelude(transferID string, data []byte) (PutResult, error)
+	PutChunk(transferID string, index uint32, data []byte) (PutResult, error)
+	OpenPrelude(transferID string) (ReadSeekCloser, int64, error)
+	OpenChunk(transferID string, index uint32) (ReadSeekCloser, int64, error)
+	Purge(transferID string) error
+	Usage(transferID string) (int64, error)
 }
 
 // Disk 是本地磁盘实现。
@@ -64,11 +71,11 @@ func NewDisk(root string) (*Disk, error) {
 	return &Disk{root: root}, nil
 }
 
-func (d *Disk) pkgDir(pkgID string) (string, error) {
-	if !pkgIDPattern.MatchString(pkgID) {
+func (d *Disk) pkgDir(transferID string) (string, error) {
+	if !pkgIDPattern.MatchString(transferID) {
 		return "", ErrBadID
 	}
-	return filepath.Join(d.root, pkgID[:2], pkgID), nil
+	return filepath.Join(d.root, transferID[:2], transferID), nil
 }
 
 func (d *Disk) put(dir, name string, data []byte) (PutResult, error) {
@@ -128,8 +135,8 @@ func (d *Disk) put(dir, name string, data []byte) (PutResult, error) {
 }
 
 // PutPrelude 写 prelude。
-func (d *Disk) PutPrelude(pkgID string, data []byte) (PutResult, error) {
-	dir, err := d.pkgDir(pkgID)
+func (d *Disk) PutPrelude(transferID string, data []byte) (PutResult, error) {
+	dir, err := d.pkgDir(transferID)
 	if err != nil {
 		return PutResult{}, err
 	}
@@ -137,8 +144,8 @@ func (d *Disk) PutPrelude(pkgID string, data []byte) (PutResult, error) {
 }
 
 // PutChunk 写单块切片。
-func (d *Disk) PutChunk(pkgID string, index uint32, data []byte) (PutResult, error) {
-	dir, err := d.pkgDir(pkgID)
+func (d *Disk) PutChunk(transferID string, index uint32, data []byte) (PutResult, error) {
+	dir, err := d.pkgDir(transferID)
 	if err != nil {
 		return PutResult{}, err
 	}
@@ -146,8 +153,8 @@ func (d *Disk) PutChunk(pkgID string, index uint32, data []byte) (PutResult, err
 }
 
 // OpenPrelude 读 prelude。
-func (d *Disk) OpenPrelude(pkgID string) (io.ReadCloser, int64, error) {
-	dir, err := d.pkgDir(pkgID)
+func (d *Disk) OpenPrelude(transferID string) (ReadSeekCloser, int64, error) {
+	dir, err := d.pkgDir(transferID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -155,8 +162,8 @@ func (d *Disk) OpenPrelude(pkgID string) (io.ReadCloser, int64, error) {
 }
 
 // OpenChunk 读单块。
-func (d *Disk) OpenChunk(pkgID string, index uint32) (io.ReadCloser, int64, error) {
-	dir, err := d.pkgDir(pkgID)
+func (d *Disk) OpenChunk(transferID string, index uint32) (ReadSeekCloser, int64, error) {
+	dir, err := d.pkgDir(transferID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -164,8 +171,8 @@ func (d *Disk) OpenChunk(pkgID string, index uint32) (io.ReadCloser, int64, erro
 }
 
 // Purge 真删：整包目录物理移除（不是软删、不是改名）。
-func (d *Disk) Purge(pkgID string) error {
-	dir, err := d.pkgDir(pkgID)
+func (d *Disk) Purge(transferID string) error {
+	dir, err := d.pkgDir(transferID)
 	if err != nil {
 		return err
 	}
@@ -181,8 +188,8 @@ func (d *Disk) Purge(pkgID string) error {
 }
 
 // Usage 返回该包占用字节数。
-func (d *Disk) Usage(pkgID string) (int64, error) {
-	dir, err := d.pkgDir(pkgID)
+func (d *Disk) Usage(transferID string) (int64, error) {
+	dir, err := d.pkgDir(transferID)
 	if err != nil {
 		return 0, err
 	}
@@ -202,7 +209,7 @@ func (d *Disk) Usage(pkgID string) (int64, error) {
 	return total, err
 }
 
-func openFile(path string) (io.ReadCloser, int64, error) {
+func openFile(path string) (ReadSeekCloser, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

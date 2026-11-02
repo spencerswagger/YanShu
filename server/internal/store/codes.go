@@ -6,34 +6,38 @@ import (
 	"time"
 )
 
-// Code 是一条用户码记录。服务端只存公钥与昵称，不存任何私钥相关物。
+// Code 是一条用户码记录（API.md §2.1 白名单字段）。
 type Code struct {
-	Code       string
-	PubKey     []byte
-	Nickname   string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	LastSeenAt time.Time
-	ExpiresAt  time.Time
+	Code         string
+	PublicKey    []byte
+	Nickname     string
+	RegisteredAt time.Time
+	UpdatedAt    time.Time
 }
 
-const codeColumns = `code, pubkey, nickname, created_at, updated_at, last_seen_at, expires_at`
+const codeColumns = `code, public_key, nickname, registered_at, updated_at`
 
 func scanCode(row interface{ Scan(...any) error }) (Code, error) {
 	var c Code
-	err := row.Scan(&c.Code, &c.PubKey, &c.Nickname, &c.CreatedAt, &c.UpdatedAt, &c.LastSeenAt, &c.ExpiresAt)
+	err := row.Scan(&c.Code, &c.PublicKey, &c.Nickname, &c.RegisteredAt, &c.UpdatedAt)
 	return c, err
 }
 
-// InsertCode 注册新码。码已被占用 → ErrCodeTaken（不自动改码）。
-func (s *Store) InsertCode(ctx context.Context, code string, pubKey []byte, nickname string, now, expiresAt time.Time) (Code, error) {
+// InsertCode 注册新码：码被占 → ErrCodeTaken；公钥已在别的码下 → ErrPubkeyTaken。
+func (s *Store) InsertCode(ctx context.Context, code string, publicKey []byte, nickname string, now time.Time) (Code, error) {
 	row := s.pool.QueryRow(ctx, `INSERT INTO codes (`+codeColumns+`)
-		VALUES ($1, $2, $3, $4, $4, $4, $5)
-		RETURNING `+codeColumns,
-		code, pubKey, nickname, now, expiresAt)
+		VALUES ($1, $2, $3, $4, $4)
+		RETURNING `+codeColumns, code, publicKey, nickname, now)
 	c, err := scanCode(row)
 	if err != nil {
 		if isUniqueViolation(err) {
+			// 区分是码冲突还是公钥冲突：契约给了两个不同的 409。
+			if existing, gerr := s.GetCode(ctx, code); gerr == nil && !equalBytes(existing.PublicKey, publicKey) {
+				return Code{}, ErrCodeTaken
+			}
+			if _, gerr := s.GetCodeByPublicKey(ctx, publicKey); gerr == nil {
+				return Code{}, ErrPubkeyTaken
+			}
 			return Code{}, ErrCodeTaken
 		}
 		return Code{}, fmt.Errorf("store: insert code: %w", err)
@@ -41,7 +45,7 @@ func (s *Store) InsertCode(ctx context.Context, code string, pubKey []byte, nick
 	return c, nil
 }
 
-// GetCode 按码取记录（过期与否由调用方判断，保证「不存在」与「已过期」可区分）。
+// GetCode 按码取记录。
 func (s *Store) GetCode(ctx context.Context, code string) (Code, error) {
 	row := s.pool.QueryRow(ctx, `SELECT `+codeColumns+` FROM codes WHERE code = $1`, code)
 	c, err := scanCode(row)
@@ -54,20 +58,20 @@ func (s *Store) GetCode(ctx context.Context, code string) (Code, error) {
 	return c, nil
 }
 
-// TouchCode 刷新 last_seen_at，并按需续期（expires_at 只前推不后退）。
-func (s *Store) TouchCode(ctx context.Context, code string, now, expiresAt time.Time) error {
-	_, err := s.pool.Exec(ctx, `UPDATE codes
-		SET last_seen_at = $2,
-		    expires_at = GREATEST(expires_at, $3),
-		    updated_at = CASE WHEN expires_at < $3 THEN $2 ELSE updated_at END
-		WHERE code = $1`, code, now, expiresAt)
+// GetCodeByPublicKey 按公钥取记录（PUBKEY_TAKEN 判定用）。
+func (s *Store) GetCodeByPublicKey(ctx context.Context, publicKey []byte) (Code, error) {
+	row := s.pool.QueryRow(ctx, `SELECT `+codeColumns+` FROM codes WHERE public_key = $1`, publicKey)
+	c, err := scanCode(row)
 	if err != nil {
-		return fmt.Errorf("store: touch code: %w", err)
+		if isNoRows(err) {
+			return Code{}, ErrNotFound
+		}
+		return Code{}, fmt.Errorf("store: get code by public key: %w", err)
 	}
-	return nil
+	return c, nil
 }
 
-// UpdateNickname 改昵称（需先过签名挑战）。
+// UpdateNickname 改昵称（需先过 NICKNAME_UPDATE 签名挑战）。
 func (s *Store) UpdateNickname(ctx context.Context, code, nickname string, now time.Time) error {
 	tag, err := s.pool.Exec(ctx, `UPDATE codes SET nickname = $2, updated_at = $3 WHERE code = $1`, code, nickname, now)
 	if err != nil {
@@ -77,13 +81,4 @@ func (s *Store) UpdateNickname(ctx context.Context, code, nickname string, now t
 		return ErrNotFound
 	}
 	return nil
-}
-
-// DeleteExpiredCodes 删除过期超过保留期的码（清理由 sweeper 触发）。
-func (s *Store) DeleteExpiredCodes(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM codes WHERE expires_at < $1`, before)
-	if err != nil {
-		return 0, fmt.Errorf("store: delete expired codes: %w", err)
-	}
-	return tag.RowsAffected(), nil
 }

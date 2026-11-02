@@ -1,110 +1,167 @@
 package auth
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 	"testing"
-	"time"
 )
 
-func TestChallengeMessageIsStable(t *testing.T) {
-	in := ChallengeInput{
-		Purpose:   "session",
-		Code:      "AWQW",
-		PubKey:    []byte{0x04, 0x01, 0x02},
-		Nonce:     []byte{0xaa, 0xbb},
-		ExpiresAt: time.Date(2026, 11, 2, 21, 30, 0, 0, time.UTC),
+// 逐字节核对 API.md §1.3 的 SIG_INPUT 构造。
+func TestBuildSignInput(t *testing.T) {
+	nonce := make([]byte, 32)
+	fields := []byte("AWQW")
+	got := BuildSignInput(0x05, nonce, fields)
+	wantPrefix := "YSAUTH1"
+	if string(got[:7]) != wantPrefix {
+		t.Fatalf("prefix = %q", string(got[:7]))
 	}
-	msg := string(BuildChallengeMessage(in))
-	want := "YANSHU-CHALLENGE/1\n" +
-		"purpose=session\n" +
-		"code=AWQW\n" +
-		"pubkey=" + B64.EncodeToString(in.PubKey) + "\n" +
-		"nonce=" + B64.EncodeToString(in.Nonce) + "\n" +
-		"expiresAt=2026-11-02T21:30:00Z\n" +
-		"context=" // 末行不带换行
-	if msg != want {
-		t.Fatalf("message mismatch:\n got: %q\nwant: %q", msg, want)
+	if got[7] != 0x05 {
+		t.Fatalf("purpose byte = %#x", got[7])
 	}
-}
-
-func TestChallengeMessageBindsContext(t *testing.T) {
-	base := ChallengeInput{
-		Purpose:   "nickname",
-		Code:      "AWQW",
-		PubKey:    []byte{0x04},
-		Nonce:     []byte{0x01},
-		ExpiresAt: time.Unix(1000, 0).UTC(),
+	if len(got) != 7+1+32+4 {
+		t.Fatalf("length = %d", len(got))
 	}
-	a := base
-	a.Context = []byte("alice")
-	b := base
-	b.Context = []byte("mallory")
-	if bytes.Equal(BuildChallengeMessage(a), BuildChallengeMessage(b)) {
-		t.Fatal("nickname context does not change the signed message")
+	if string(got[40:]) != "AWQW" {
+		t.Fatalf("fields = %q", got[40:])
 	}
 }
 
-func TestTokenHashing(t *testing.T) {
-	token, hash, err := NewToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(token) < 40 {
-		t.Fatalf("token too short: %q", token)
-	}
-	sum := sha256.Sum256([]byte(token))
-	if hex.EncodeToString(sum[:]) != hex.EncodeToString(hash) {
-		t.Fatal("token hash mismatch")
-	}
-	other, _, err := NewToken()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if other == token {
-		t.Fatal("token reuse")
-	}
-}
-
-func TestVerifierModes(t *testing.T) {
+func TestRegisterFields(t *testing.T) {
 	pub := make([]byte, 65)
 	pub[0] = 0x04
-	msg := []byte("m")
-	sig := []byte{0x30, 0x00}
-
-	deny, err := NewVerifier(ModeStubDeny, nil)
+	fields, err := RegisterFields("AWQW", pub)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := deny.Verify(pub, msg, sig); err != ErrUnavailable {
-		t.Fatalf("stub-deny = %v, want ErrUnavailable", err)
+	if len(fields) != 4+65 || string(fields[:4]) != "AWQW" || fields[4] != 0x04 {
+		t.Fatalf("unexpected fields: %x", fields)
 	}
+	if _, err := RegisterFields("AWQ", pub); err == nil {
+		t.Fatal("short code accepted")
+	}
+	if _, err := RegisterFields("AWQW", pub[:64]); err == nil {
+		t.Fatal("short public key accepted")
+	}
+}
 
-	allow, err := NewVerifier(ModeStubAllow, nil)
+func TestNicknameUpdateFieldsHasU16Length(t *testing.T) {
+	fields, err := NicknameUpdateFields("AWQW", "阿雁")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := allow.Verify(pub, msg, sig); err != nil {
-		t.Fatalf("stub-allow rejected valid shape: %v", err)
+	// CODE(4) ‖ u16be(len=6) ‖ UTF-8
+	if len(fields) != 4+2+6 {
+		t.Fatalf("length = %d", len(fields))
 	}
-	if err := allow.Verify([]byte{0x04}, msg, sig); err == nil {
-		t.Fatal("stub-allow accepted malformed public key")
+	if fields[4] != 0x00 || fields[5] != 0x06 {
+		t.Fatalf("length prefix = %x", fields[4:6])
 	}
-	if err := allow.Verify(pub, nil, sig); err == nil {
-		t.Fatal("stub-allow accepted empty message")
+	if string(fields[6:]) != "阿雁" {
+		t.Fatalf("nickname = %q", string(fields[6:]))
 	}
+}
 
-	sm2, err := NewVerifier(ModeSM2, nil)
+func TestTransferCreateFields(t *testing.T) {
+	sm3 := make([]byte, 32)
+	sm3[0] = 0xde
+	fields, err := TransferCreateFields("AWQW", "WTJF", 5, 1048576, 1, 485, sm3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sm2.Verify(pub, msg, sig); err != ErrUnavailable {
-		t.Fatalf("sm2 placeholder = %v, want ErrUnavailable", err)
+	// 4+4+8+4+4+4+32 = 60
+	if len(fields) != 60 {
+		t.Fatalf("length = %d", len(fields))
 	}
+	if string(fields[:4]) != "AWQW" || string(fields[4:8]) != "WTJF" {
+		t.Fatalf("codes = %q", string(fields[:8]))
+	}
+	if hex.EncodeToString(fields[8:16]) != "0000000000000005" {
+		t.Fatalf("plaintext_size = %x", fields[8:16])
+	}
+	if hex.EncodeToString(fields[16:20]) != "00100000" || hex.EncodeToString(fields[20:24]) != "00000001" {
+		t.Fatalf("chunk_size/count = %x", fields[16:24])
+	}
+	if hex.EncodeToString(fields[24:28]) != "000001e5" {
+		t.Fatalf("prelude_len = %x", fields[24:28])
+	}
+	if fields[28] != 0xde {
+		t.Fatalf("prelude_sm3 not appended: %x", fields[28:])
+	}
+}
 
-	if _, err := NewVerifier("bogus", nil); err == nil || !strings.Contains(err.Error(), "unknown") {
-		t.Fatalf("unknown mode error = %v", err)
+func TestTransferIDFields(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	fields, err := TransferRevokeFields("AWQW", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 4+32 || string(fields[4:]) != id {
+		t.Fatalf("unexpected fields: %q", fields)
+	}
+	if _, err := TransferAckFields("AWQW", "short"); err == nil {
+		t.Fatal("non-hex transfer id accepted")
+	}
+	if _, err := TransferAckFields("AWQW", strings.Repeat("Z", 32)); err == nil {
+		t.Fatal("uppercase transfer id accepted")
+	}
+}
+
+func TestInboxAndWSHelloFields(t *testing.T) {
+	for _, f := range []func(string) ([]byte, error){InboxListFields, WSHelloFields} {
+		fields, err := f("AWQW")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(fields) != 4 || string(fields) != "AWQW" {
+			t.Fatalf("fields = %q", fields)
+		}
+	}
+}
+
+func TestUploadTokenIsDeterministic(t *testing.T) {
+	issuer, err := NewTokenIssuer([]byte("test-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("b", 32)
+	t1, err := issuer.UploadToken(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t2, _ := issuer.UploadToken(id)
+	if t1 != t2 {
+		t.Fatal("upload token is not deterministic; idempotent replay cannot return the same token")
+	}
+	other, _ := issuer.UploadToken(strings.Repeat("c", 32))
+	if other == t1 {
+		t.Fatal("upload token does not depend on transfer id")
+	}
+	if !VerifyUploadToken(t1, UploadTokenHash(t1)) {
+		t.Fatal("verify failed for its own token")
+	}
+	if VerifyUploadToken(t1, UploadTokenHash(other)) {
+		t.Fatal("verify accepted a different token hash")
+	}
+	if VerifyUploadToken("", UploadTokenHash(t1)) {
+		t.Fatal("empty token accepted")
+	}
+}
+
+func TestNewID(t *testing.T) {
+	id, err := NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(id) != 32 {
+		t.Fatalf("id = %q", id)
+	}
+	for _, r := range id {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			t.Fatalf("id contains non-hex char %q", r)
+		}
+	}
+	other, _ := NewID()
+	if id == other {
+		t.Fatal("id collision")
 	}
 }

@@ -10,5 +10,5 @@
 ## 目录
 
 - `server/`：中转服务端（Go）。只存不透明密文块，不解析 prelude/块内容；启动与接口见 `server/README.md`。
-- `docs/`：契约文档。`CRYPTO-PACK.md` 是加密包格式（Ark）；`DRAFT-FIELDS.md` 是服务端骨架期暂定契约，待 `API.md` 冻结后对齐。
+- `docs/`：契约文档。`API.md` 是 HTTP/WS 接口契约，`CRYPTO-PACK.md` 是加密包格式；`DRAFT-FIELDS.md` 记录服务端对齐结果、残留偏离与契约缺口。
 

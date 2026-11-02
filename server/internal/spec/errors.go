@@ -2,160 +2,172 @@ package spec
 
 import "net/http"
 
-// ErrorCode 是服务端**唯一**的对外错误码类型。
-// 与端侧错误码（CRYPTO_*，见 docs/CRYPTO-PACK.md §13）刻意不共用命名空间：
-// 两套码一个走 HTTP、一个只在浏览器内部，混用会让排障分不清是谁报的错。
+// ErrorCode 是服务端**唯一**的对外错误码类型，取值逐字对齐 docs/API.md §10。
+//
+// 与端侧错误码（CRYPTO_*）刻意不共用命名空间：两套码一个走 HTTP、一个只在浏览器内部。
 type ErrorCode string
 
 const (
-	// 请求层面。
-	ErrInvalidRequest  ErrorCode = "invalid_request"
-	ErrPayloadTooLarge ErrorCode = "payload_too_large"
-	ErrNotImplemented  ErrorCode = "not_implemented"
-	ErrInternal        ErrorCode = "internal_error"
+	// 400
+	ErrBadRequest            ErrorCode = "BAD_REQUEST"
+	ErrFieldNotAllowed       ErrorCode = "FIELD_NOT_ALLOWED"
+	ErrCodeFormatInvalid     ErrorCode = "CODE_FORMAT_INVALID"
+	ErrNicknameInvalid       ErrorCode = "NICKNAME_INVALID"
+	ErrChunkSizeInvalid      ErrorCode = "CHUNK_SIZE_INVALID"
+	ErrChunkCountMismatch    ErrorCode = "CHUNK_COUNT_MISMATCH"
+	ErrChunkIndexOutOfRange  ErrorCode = "CHUNK_INDEX_OUT_OF_RANGE"
+	ErrLengthMismatch        ErrorCode = "LENGTH_MISMATCH"
+	ErrPreludeDigestMismatch ErrorCode = "PRELUDE_DIGEST_MISMATCH"
+	ErrRangeUnsupported      ErrorCode = "RANGE_UNSUPPORTED"
+	ErrSizeLimitExceeded     ErrorCode = "SIZE_LIMIT_EXCEEDED"
 
-	// 用户码。
-	ErrInvalidCode     ErrorCode = "invalid_code"
-	ErrCodeNotFound    ErrorCode = "code_not_found"
-	ErrCodeExpired     ErrorCode = "code_expired"
-	ErrCodeTaken       ErrorCode = "code_taken"
-	ErrCodeMismatch    ErrorCode = "code_mismatch"
-	ErrNicknameInvalid ErrorCode = "nickname_invalid"
-	ErrPubKeyInvalid   ErrorCode = "pubkey_invalid"
+	// 401
+	ErrAuthMissing          ErrorCode = "AUTH_MISSING"
+	ErrAuthSignatureInvalid ErrorCode = "AUTH_SIGNATURE_INVALID"
+	ErrAuthChallengeInvalid ErrorCode = "AUTH_CHALLENGE_INVALID"
+	ErrAuthCodeMismatch     ErrorCode = "AUTH_CODE_MISMATCH"
 
-	// 挑战/会话/签名。
-	ErrChallengeNotFound   ErrorCode = "challenge_not_found"
-	ErrChallengeExpired    ErrorCode = "challenge_expired"
-	ErrChallengeUsed       ErrorCode = "challenge_used"
-	ErrChallengeInvalid    ErrorCode = "challenge_invalid"
-	ErrSignatureInvalid    ErrorCode = "signature_invalid"
-	ErrUnauthorized        ErrorCode = "unauthorized"
-	ErrSessionExpired      ErrorCode = "session_expired"
-	ErrVerifierUnavailable ErrorCode = "verifier_unavailable"
+	// 403
+	ErrSignalPeerMismatch ErrorCode = "SIGNAL_PEER_MISMATCH"
 
-	// 鉴权边界。
-	ErrForbidden ErrorCode = "forbidden"
+	// 404
+	ErrCodeNotFound     ErrorCode = "CODE_NOT_FOUND"
+	ErrTransferNotFound ErrorCode = "TRANSFER_NOT_FOUND"
+	ErrChunkNotFound    ErrorCode = "CHUNK_NOT_FOUND"
 
-	// 包。
-	ErrPackageNotFound   ErrorCode = "package_not_found"
-	ErrPackageExpired    ErrorCode = "package_expired"
-	ErrPackageRevoked    ErrorCode = "package_revoked"
-	ErrPackageExhausted  ErrorCode = "package_exhausted"
-	ErrPackagePurged     ErrorCode = "package_purged"
-	ErrPackageLocked     ErrorCode = "package_locked"
-	ErrPackageIncomplete ErrorCode = "package_incomplete"
-	ErrPackageConflict   ErrorCode = "package_conflict"
+	// 409
+	ErrCodeTaken             ErrorCode = "CODE_TAKEN"
+	ErrPubkeyTaken           ErrorCode = "PUBKEY_TAKEN"
+	ErrPreludeConflict       ErrorCode = "PRELUDE_CONFLICT"
+	ErrChunkConflict         ErrorCode = "CHUNK_CONFLICT"
+	ErrChunksMissing         ErrorCode = "CHUNKS_MISSING"
+	ErrPreludeMissing        ErrorCode = "PRELUDE_MISSING"
+	ErrTransferNotReady      ErrorCode = "TRANSFER_NOT_READY"
+	ErrDownloadNotStarted    ErrorCode = "DOWNLOAD_NOT_STARTED"
+	ErrTransferStateConflict ErrorCode = "TRANSFER_STATE_CONFLICT"
 
-	// 块与 prelude。
-	ErrChunkConflict         ErrorCode = "chunk_conflict"
-	ErrChunkNotFound         ErrorCode = "chunk_not_found"
-	ErrChunkIndexOutOfRange  ErrorCode = "chunk_index_out_of_range"
-	ErrChunkLengthMismatch   ErrorCode = "chunk_length_mismatch"
-	ErrPreludeConflict       ErrorCode = "prelude_conflict"
-	ErrPreludeLengthMismatch ErrorCode = "prelude_length_mismatch"
+	// 410
+	ErrTransferRevoked  ErrorCode = "TRANSFER_REVOKED"
+	ErrTransferExpired  ErrorCode = "TRANSFER_EXPIRED"
+	ErrTransferConsumed ErrorCode = "TRANSFER_CONSUMED"
 
-	// 反滥用。
-	ErrQuotaExceeded ErrorCode = "quota_exceeded"
-	ErrRateLimited   ErrorCode = "rate_limited"
-	ErrLockedOut     ErrorCode = "locked_out"
+	// 413 / 415 / 416 / 423 / 429
+	ErrPayloadTooLarge        ErrorCode = "PAYLOAD_TOO_LARGE"
+	ErrContentTypeUnsupported ErrorCode = "CONTENT_TYPE_UNSUPPORTED"
+	ErrRangeNotSatisfiable    ErrorCode = "RANGE_NOT_SATISFIABLE"
+	ErrCodeLocked             ErrorCode = "CODE_LOCKED"
+	ErrRateLimited            ErrorCode = "RATE_LIMITED"
+
+	// 5xx
+	ErrInternal            ErrorCode = "INTERNAL"
+	ErrServiceUnavailable  ErrorCode = "SERVICE_UNAVAILABLE"
+	ErrInsufficientStorage ErrorCode = "INSUFFICIENT_STORAGE"
+
+	// WS 专属（API.md §10.4）
+	ErrSignalTooLarge ErrorCode = "SIGNAL_TOO_LARGE"
 )
 
-// errStatus 是错误码 → HTTP 状态码的唯一映射表。
-// DRAFT(API.md): 状态码取值待对齐（尤其 410 vs 404 的取舍）。
 var errStatus = map[ErrorCode]int{
-	ErrInvalidRequest:  http.StatusBadRequest,
-	ErrPayloadTooLarge: http.StatusRequestEntityTooLarge,
-	ErrNotImplemented:  http.StatusNotImplemented,
-	ErrInternal:        http.StatusInternalServerError,
-
-	ErrInvalidCode:     http.StatusBadRequest,
-	ErrCodeNotFound:    http.StatusNotFound,
-	ErrCodeExpired:     http.StatusGone,
-	ErrCodeTaken:       http.StatusConflict,
-	ErrCodeMismatch:    http.StatusBadRequest,
-	ErrNicknameInvalid: http.StatusBadRequest,
-	ErrPubKeyInvalid:   http.StatusBadRequest,
-
-	ErrChallengeNotFound:   http.StatusNotFound,
-	ErrChallengeExpired:    http.StatusGone,
-	ErrChallengeUsed:       http.StatusConflict,
-	ErrChallengeInvalid:    http.StatusBadRequest,
-	ErrSignatureInvalid:    http.StatusUnauthorized,
-	ErrUnauthorized:        http.StatusUnauthorized,
-	ErrSessionExpired:      http.StatusUnauthorized,
-	ErrVerifierUnavailable: http.StatusServiceUnavailable,
-
-	ErrForbidden: http.StatusForbidden,
-
-	ErrPackageNotFound:   http.StatusNotFound,
-	ErrPackageExpired:    http.StatusGone,
-	ErrPackageRevoked:    http.StatusGone,
-	ErrPackageExhausted:  http.StatusGone,
-	ErrPackagePurged:     http.StatusGone,
-	ErrPackageLocked:     http.StatusConflict,
-	ErrPackageIncomplete: http.StatusConflict,
-	ErrPackageConflict:   http.StatusConflict,
-
-	ErrChunkConflict:         http.StatusConflict,
-	ErrChunkNotFound:         http.StatusNotFound,
+	ErrBadRequest:            http.StatusBadRequest,
+	ErrFieldNotAllowed:       http.StatusBadRequest,
+	ErrCodeFormatInvalid:     http.StatusBadRequest,
+	ErrNicknameInvalid:       http.StatusBadRequest,
+	ErrChunkSizeInvalid:      http.StatusBadRequest,
+	ErrChunkCountMismatch:    http.StatusBadRequest,
 	ErrChunkIndexOutOfRange:  http.StatusBadRequest,
-	ErrChunkLengthMismatch:   http.StatusBadRequest,
+	ErrLengthMismatch:        http.StatusBadRequest,
+	ErrPreludeDigestMismatch: http.StatusBadRequest,
+	ErrRangeUnsupported:      http.StatusBadRequest,
+	ErrSizeLimitExceeded:     http.StatusBadRequest,
+
+	ErrAuthMissing:          http.StatusUnauthorized,
+	ErrAuthSignatureInvalid: http.StatusUnauthorized,
+	ErrAuthChallengeInvalid: http.StatusUnauthorized,
+	ErrAuthCodeMismatch:     http.StatusUnauthorized,
+
+	ErrSignalPeerMismatch: http.StatusForbidden,
+
+	ErrCodeNotFound:     http.StatusNotFound,
+	ErrTransferNotFound: http.StatusNotFound,
+	ErrChunkNotFound:    http.StatusNotFound,
+
+	ErrCodeTaken:             http.StatusConflict,
+	ErrPubkeyTaken:           http.StatusConflict,
 	ErrPreludeConflict:       http.StatusConflict,
-	ErrPreludeLengthMismatch: http.StatusBadRequest,
+	ErrChunkConflict:         http.StatusConflict,
+	ErrChunksMissing:         http.StatusConflict,
+	ErrPreludeMissing:        http.StatusConflict,
+	ErrTransferNotReady:      http.StatusConflict,
+	ErrDownloadNotStarted:    http.StatusConflict,
+	ErrTransferStateConflict: http.StatusConflict,
 
-	ErrQuotaExceeded: http.StatusTooManyRequests,
-	ErrRateLimited:   http.StatusTooManyRequests,
-	ErrLockedOut:     http.StatusLocked,
+	ErrTransferRevoked:  http.StatusGone,
+	ErrTransferExpired:  http.StatusGone,
+	ErrTransferConsumed: http.StatusGone,
+
+	ErrPayloadTooLarge:        http.StatusRequestEntityTooLarge,
+	ErrContentTypeUnsupported: http.StatusUnsupportedMediaType,
+	ErrRangeNotSatisfiable:    http.StatusRequestedRangeNotSatisfiable,
+	ErrCodeLocked:             http.StatusLocked,
+	ErrRateLimited:            http.StatusTooManyRequests,
+
+	ErrInternal:            http.StatusInternalServerError,
+	ErrServiceUnavailable:  http.StatusServiceUnavailable,
+	ErrInsufficientStorage: http.StatusInsufficientStorage,
+	ErrSignalTooLarge:      http.StatusBadRequest,
 }
 
-// errMessage 是给客户端看的默认文案（不泄露任何内部细节）。
 var errMessage = map[ErrorCode]string{
-	ErrInvalidRequest:  "request body or parameters are invalid",
-	ErrPayloadTooLarge: "request body exceeds the configured limit",
-	ErrNotImplemented:  "endpoint is reserved and not implemented yet",
-	ErrInternal:        "internal error",
-
-	ErrInvalidCode:     "code must be 4 Crockford Base32 characters",
-	ErrCodeNotFound:    "code is not registered",
-	ErrCodeExpired:     "code registration has expired; generate a new key pair",
-	ErrCodeTaken:       "code is already bound to another public key; generate a new key pair",
-	ErrCodeMismatch:    "code does not match the one derived from the public key",
-	ErrNicknameInvalid: "nickname is invalid",
-	ErrPubKeyInvalid:   "public key is invalid",
-
-	ErrChallengeNotFound:   "challenge not found",
-	ErrChallengeExpired:    "challenge has expired",
-	ErrChallengeUsed:       "challenge has already been used",
-	ErrChallengeInvalid:    "challenge does not match this request",
-	ErrSignatureInvalid:    "signature verification failed",
-	ErrUnauthorized:        "authentication required",
-	ErrSessionExpired:      "session has expired",
-	ErrVerifierUnavailable: "signature verifier is not available on this server",
-
-	ErrForbidden: "not allowed for this credential",
-
-	ErrPackageNotFound:   "package not found",
-	ErrPackageExpired:    "package has expired",
-	ErrPackageRevoked:    "package was revoked by the sender",
-	ErrPackageExhausted:  "package download quota is exhausted",
-	ErrPackagePurged:     "package payload has been deleted",
-	ErrPackageLocked:     "package is locked after completion",
-	ErrPackageIncomplete: "package is missing prelude or chunks",
-	ErrPackageConflict:   "package state conflict",
-
-	ErrChunkConflict:         "chunk index already holds different bytes",
-	ErrChunkNotFound:         "chunk is not present in this package",
+	ErrBadRequest:            "request format or parameter is invalid",
+	ErrFieldNotAllowed:       "field is not allowed by the contract",
+	ErrCodeFormatInvalid:     "code must be 4 Crockford Base32 characters",
+	ErrNicknameInvalid:       "nickname is invalid",
+	ErrChunkSizeInvalid:      "chunk_size is out of range",
+	ErrChunkCountMismatch:    "chunk_count does not match plaintext_size and chunk_size",
 	ErrChunkIndexOutOfRange:  "chunk index is out of range",
-	ErrChunkLengthMismatch:   "chunk length does not match the package manifest",
-	ErrPreludeConflict:       "prelude already uploaded with different bytes",
-	ErrPreludeLengthMismatch: "prelude length does not match the declared length",
+	ErrLengthMismatch:        "content length does not match the declared value",
+	ErrPreludeDigestMismatch: "SM3(body) does not match prelude_sm3",
+	ErrRangeUnsupported:      "only a single byte range is supported",
+	ErrSizeLimitExceeded:     "declared size exceeds the allowed limit",
 
-	ErrQuotaExceeded: "storage quota exceeded",
-	ErrRateLimited:   "too many requests, retry later",
-	ErrLockedOut:     "too many failures, temporarily locked",
+	ErrAuthMissing:          "authentication headers are missing",
+	ErrAuthSignatureInvalid: "signature verification failed",
+	ErrAuthChallengeInvalid: "challenge is expired, used or purpose mismatch",
+	ErrAuthCodeMismatch:     "X-YS-Code does not match the signed code",
+
+	ErrSignalPeerMismatch: "signal peers do not match the transfer",
+
+	ErrCodeNotFound:     "code is not registered",
+	ErrTransferNotFound: "transfer not found",
+	ErrChunkNotFound:    "chunk not found",
+
+	ErrCodeTaken:             "code is already bound to another public key",
+	ErrPubkeyTaken:           "public key is already registered under another code",
+	ErrPreludeConflict:       "prelude already stored with different bytes",
+	ErrChunkConflict:         "chunk already stored with different bytes",
+	ErrChunksMissing:         "some chunks are missing",
+	ErrPreludeMissing:        "prelude is missing",
+	ErrTransferNotReady:      "transfer is not ready for download",
+	ErrDownloadNotStarted:    "valid download_id is required",
+	ErrTransferStateConflict: "operation is not allowed in the current state",
+
+	ErrTransferRevoked:  "transfer was revoked",
+	ErrTransferExpired:  "transfer has expired",
+	ErrTransferConsumed: "transfer has been consumed",
+
+	ErrPayloadTooLarge:        "request body exceeds the accepted limit",
+	ErrContentTypeUnsupported: "only application/octet-stream is accepted",
+	ErrRangeNotSatisfiable:    "requested range is not satisfiable",
+	ErrCodeLocked:             "too many failed lookups, code is locked",
+	ErrRateLimited:            "too many requests",
+
+	ErrInternal:            "internal error",
+	ErrServiceUnavailable:  "service unavailable",
+	ErrInsufficientStorage: "insufficient storage quota",
+	ErrSignalTooLarge:      "signal frame exceeds 64 KiB",
 }
 
-// Status 返回错误码对应的 HTTP 状态码；未知码按 500 处理（fail closed，不猜）。
+// Status 返回错误码的 HTTP 状态码；未知码按 500 处理（fail closed）。
 func (c ErrorCode) Status() int {
 	if s, ok := errStatus[c]; ok {
 		return s
@@ -171,11 +183,11 @@ func (c ErrorCode) Message() string {
 	return errMessage[ErrInternal]
 }
 
-// AllErrorCodes 返回全部已定义错误码，供契约自检测试与文档生成使用。
+// AllErrorCodes 返回全部错误码，供契约自检与文档使用。
 func AllErrorCodes() []ErrorCode {
-	codes := make([]ErrorCode, 0, len(errStatus))
+	out := make([]ErrorCode, 0, len(errStatus))
 	for c := range errStatus {
-		codes = append(codes, c)
+		out = append(out, c)
 	}
-	return codes
+	return out
 }

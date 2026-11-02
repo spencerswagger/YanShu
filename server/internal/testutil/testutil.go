@@ -54,8 +54,8 @@ func Reset(t *testing.T, st *store.Store) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	tables := []string{
-		"package_chunks", "packages", "package_tombstones",
-		"sessions", "auth_challenges", "codes", "audit_events",
+		"transfer_chunks", "transfer_downloads", "transfers",
+		"idempotency_keys", "auth_challenges", "codes", "audit_events",
 	}
 	for _, tbl := range tables {
 		if _, err := st.Pool().Exec(ctx, "TRUNCATE TABLE "+tbl+" CASCADE"); err != nil {

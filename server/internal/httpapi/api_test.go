@@ -36,7 +36,8 @@ type env struct {
 	dir    string
 	now    time.Time
 	sweep  *cleanup.Sweeper
-	client *http.Client
+	tokens *auth.TokenIssuer
+	cfg    config.Config
 }
 
 func newEnv(t *testing.T, mode string) *env {
@@ -51,17 +52,16 @@ func newEnv(t *testing.T, mode string) *env {
 	if err != nil {
 		t.Fatalf("blob disk: %v", err)
 	}
-	e := &env{t: t, st: st, blobs: blobs, dir: filepath.Join(dir, "blobs"), now: time.Now().UTC().Truncate(time.Second)}
-	cfg := config.Config{
+	e := &env{
+		t: t, st: st, blobs: blobs, dir: filepath.Join(dir, "blobs"),
+		now: time.Now().UTC().Truncate(time.Second),
+	}
+	e.cfg = config.Config{
 		Verifier:          config.VerifierMode(mode),
-		CodeTTL:           time.Hour,
-		PackageTTL:        time.Hour,
-		SessionTTL:        time.Hour,
-		ChallengeTTL:      5 * time.Minute,
-		MaxPackageBytes:   64 << 20,
-		MaxPreludeBytes:   1 << 20,
-		MaxChunkBytes:     (1 << 20) + 16,
-		StorageQuotaBytes: 1 << 30,
+		TokenSecret:       []byte("test-secret"),
+		STUNURLs:          []string{"stun:stun.example:3478"},
+		WSURL:             "wss://example/v1/ws",
+		StorageQuotaBytes: 64 << 20,
 		SweepInterval:     time.Minute,
 		ShutdownTimeout:   time.Second,
 	}
@@ -69,13 +69,18 @@ func newEnv(t *testing.T, mode string) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.api = New(cfg, st, blobs, v, ratelimit.NewMemory(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	tokens, err := auth.NewTokenIssuer(e.cfg.TokenSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.tokens = tokens
+	e.api = New(e.cfg, st, blobs, v, tokens, ratelimit.NewMemory(), ratelimit.NewMemoryLockout(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	e.api.now = func() time.Time { return e.now }
 	e.sweep = cleanup.New(st, blobs, time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	e.sweep.Now = func() time.Time { return e.now }
 	e.srv = httptest.NewServer(e.api.Handler())
 	t.Cleanup(e.srv.Close)
-	e.client = e.srv.Client()
 	return e
 }
 
@@ -87,7 +92,7 @@ type apiResp struct {
 	header http.Header
 }
 
-func (e *env) do(method, path string, payload any, token string) apiResp {
+func (e *env) do(method, path string, payload any, headers map[string]string) apiResp {
 	e.t.Helper()
 	var body io.Reader
 	contentType := ""
@@ -109,12 +114,12 @@ func (e *env) do(method, path string, payload any, token string) apiResp {
 		e.t.Fatalf("new request: %v", err)
 	}
 	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
+		req.Header.Set(spec.HeaderContentType, contentType)
 	}
-	if token != "" {
-		req.Header.Set(spec.HeaderAuthorization, "Bearer "+token)
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
-	resp, err := e.client.Do(req)
+	resp, err := e.srv.Client().Do(req)
 	if err != nil {
 		e.t.Fatalf("%s %s: %v", method, path, err)
 	}
@@ -135,460 +140,832 @@ func (e *env) decode(resp apiResp, dst any) {
 
 func (e *env) wantError(resp apiResp, want spec.ErrorCode) {
 	e.t.Helper()
-	if resp.status == want.Status() {
-		var er spec.ErrorResponse
-		if err := json.Unmarshal(resp.body, &er); err == nil && er.Error.Code == string(want) {
-			return
-		}
+	if resp.status != want.Status() {
+		e.t.Fatalf("want %s (%d), got %d: %s", want, want.Status(), resp.status, string(resp.body))
 	}
-	e.t.Fatalf("want error %s (%d), got %d: %s", want, want.Status(), resp.status, string(resp.body))
+	var er spec.ErrorResponse
+	if err := json.Unmarshal(resp.body, &er); err != nil {
+		e.t.Fatalf("unmarshal error body: %v", err)
+	}
+	if er.Error.Code != string(want) {
+		e.t.Fatalf("want code %s, got %s (%s)", want, er.Error.Code, string(resp.body))
+	}
 }
 
-// register 走完整注册 + 会话流程，返回码、会话令牌、公钥。
-func (e *env) register(nickname string) (string, string, []byte) {
+func (e *env) challenge(purpose string) spec.ChallengeResponse {
 	e.t.Helper()
-	pub := randomPubKey(e.t)
-
-	var ch spec.ChallengeResponse
-	resp := e.do(http.MethodPost, spec.PathChallenges, spec.ChallengeRequest{
-		Purpose: spec.PurposeRegister, PubKey: auth.B64.EncodeToString(pub),
-	}, "")
-	if resp.status != http.StatusCreated {
-		e.t.Fatalf("register challenge: %d %s", resp.status, resp.body)
+	resp := e.do(http.MethodPost, spec.PathChallenges, spec.ChallengeRequest{Purpose: purpose}, nil)
+	if resp.status != http.StatusOK {
+		e.t.Fatalf("challenge: %d %s", resp.status, resp.body)
 	}
+	var ch spec.ChallengeResponse
 	e.decode(resp, &ch)
+	return ch
+}
 
-	var info spec.CodeInfo
-	resp = e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
-		PubKey:      auth.B64.EncodeToString(pub),
-		Nickname:    nickname,
-		ChallengeID: ch.ChallengeID,
-		Signature:   fakeSig(),
-		Code:        gm.DeriveCode(pub),
-	}, "")
-	if resp.status != http.StatusCreated {
+// authHeaders 取一次挑战并组出 X-YS-* 头（验签是桩，签名内容不校验）。
+func (e *env) authHeaders(purpose, code string) map[string]string {
+	e.t.Helper()
+	ch := e.challenge(purpose)
+	return map[string]string{
+		spec.HeaderCode:        code,
+		spec.HeaderChallengeID: ch.ChallengeID,
+		spec.HeaderSignature:   auth.B64.EncodeToString(randomBytes(71)),
+	}
+}
+
+// register 走完整注册，返回码与公钥。
+func (e *env) register(nickname string) (string, []byte) {
+	e.t.Helper()
+	for attempt := 0; attempt < 8; attempt++ {
+		pub := randomPublicKey(e.t)
+		code := gm.DeriveCode(pub)
+		headers := e.authHeaders(spec.PurposeRegister, code)
+		resp := e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
+			Code: code, PublicKey: auth.B64.EncodeToString(pub), Nickname: nickname,
+		}, headers)
+		if resp.status == http.StatusCreated {
+			return code, pub
+		}
+		if resp.status == http.StatusConflict {
+			continue // 撞码：换个密钥对再试（契约要求的客户端行为）
+		}
 		e.t.Fatalf("register: %d %s", resp.status, resp.body)
 	}
-	e.decode(resp, &info)
-
-	token := e.session(info.Code)
-	return info.Code, token, pub
+	e.t.Fatalf("register: too many code collisions")
+	return "", nil
 }
 
-func (e *env) session(code string) string {
-	e.t.Helper()
-	var ch spec.ChallengeResponse
-	resp := e.do(http.MethodPost, spec.PathChallenges, spec.ChallengeRequest{
-		Purpose: spec.PurposeSession, Code: code,
-	}, "")
-	if resp.status != http.StatusCreated {
-		e.t.Fatalf("session challenge: %d %s", resp.status, resp.body)
-	}
-	e.decode(resp, &ch)
-	var sess spec.SessionResponse
-	resp = e.do(http.MethodPost, spec.PathSessions, spec.SessionRequest{
-		ChallengeID: ch.ChallengeID, Code: code, Signature: fakeSig(),
-	}, "")
-	if resp.status != http.StatusCreated {
-		e.t.Fatalf("session: %d %s", resp.status, resp.body)
-	}
-	e.decode(resp, &sess)
-	return sess.SessionToken
+// fixture 是 3 块的最小传输包：明文 80 = 32+32+16，切片 48/48/32。
+type fixture struct {
+	Prelude       []byte
+	Chunks        [][]byte
+	ChunkSize     uint32
+	PlaintextSize uint64
+	ChunkCount    uint32
 }
 
-// pkgFixture 是最小可用的传输包参数：3 块（32, 32, 16 明文 + 16 tag）。
-type pkgFixture struct {
-	Prelude []byte
-	Chunks  [][]byte
-	Info    spec.PackageInfo
-}
-
-func (e *env) createPackage(senderToken, recipientCode string) pkgFixture {
-	e.t.Helper()
-	const chunkSize = 32
-	const plaintext = 80
-	f := pkgFixture{
-		Prelude: randomBytes(300),
-		Chunks:  [][]byte{randomBytes(48), randomBytes(48), randomBytes(32)},
-	}
-	resp := e.do(http.MethodPost, spec.PathPackages, spec.CreatePackageRequest{
-		RecipientCode: recipientCode,
+func newFixture() fixture {
+	return fixture{
+		Prelude:       randomBytes(300),
+		Chunks:        [][]byte{randomBytes(48), randomBytes(48), randomBytes(32)},
+		ChunkSize:     32,
+		PlaintextSize: 80,
 		ChunkCount:    3,
-		ChunkSize:     chunkSize,
-		PlaintextSize: plaintext,
-		PreludeLen:    uint32(len(f.Prelude)),
-	}, senderToken)
+	}
+}
+
+func (f fixture) preludeSM3() string {
+	sum := gm.SM3(f.Prelude)
+	return auth.B64.EncodeToString(sum[:])
+}
+
+func (e *env) createTransfer(senderCode, recipientCode string, f fixture, extra map[string]any) spec.CreateTransferResponse {
+	e.t.Helper()
+	req := map[string]any{
+		"recipient_code": recipientCode,
+		"plaintext_size": f.PlaintextSize,
+		"chunk_size":     f.ChunkSize,
+		"chunk_count":    f.ChunkCount,
+		"prelude_len":    len(f.Prelude),
+		"prelude_sm3":    f.preludeSM3(),
+	}
+	for k, v := range extra {
+		req[k] = v
+	}
+	headers := e.authHeaders(spec.PurposeTransferCreate, senderCode)
+	resp := e.do(http.MethodPost, spec.PathTransfers, req, headers)
 	if resp.status != http.StatusCreated {
-		e.t.Fatalf("create package: %d %s", resp.status, resp.body)
+		e.t.Fatalf("create transfer: %d %s", resp.status, resp.body)
 	}
-	e.decode(resp, &f.Info)
-	return f
+	var out spec.CreateTransferResponse
+	e.decode(resp, &out)
+	return out
 }
 
-func (e *env) putPrelude(token, pkgID string, data []byte) apiResp {
-	return e.do(http.MethodPut, spec.PreludePath(pkgID), data, token)
+func (e *env) putPrelude(token string, t spec.CreateTransferResponse, data []byte) apiResp {
+	return e.do(http.MethodPut, spec.PreludePath(t.TransferID), data, map[string]string{spec.HeaderUploadToken: token})
 }
 
-func (e *env) putChunk(token, pkgID string, index int, data []byte) apiResp {
-	return e.do(http.MethodPut, spec.ChunkPath(pkgID, index), data, token)
+func (e *env) putChunk(token string, t spec.CreateTransferResponse, index int, data []byte) apiResp {
+	return e.do(http.MethodPut, spec.ChunkPath(t.TransferID, index), data, map[string]string{spec.HeaderUploadToken: token})
 }
 
-func TestRegisterLookupAndSession(t *testing.T) {
+// ---------- 基础接口 ----------
+
+func TestConfig(t *testing.T) {
 	e := newEnv(t, "")
-	code, token, pub := e.register("alice")
-	if len(code) != 4 {
-		t.Fatalf("code = %q", code)
+	resp := e.do(http.MethodGet, spec.PathConfig, nil, nil)
+	if resp.status != http.StatusOK {
+		t.Fatalf("config: %d", resp.status)
 	}
-	if token == "" {
-		t.Fatal("empty session token")
+	var cfg spec.ConfigResponse
+	e.decode(resp, &cfg)
+	if cfg.APIVersion != "v1" || cfg.CryptoPackVersion != "YSPK/1.0" {
+		t.Fatalf("unexpected config: %+v", cfg)
 	}
+	if len(cfg.STUNURLs) == 0 || cfg.WSURL == "" {
+		t.Fatalf("missing stun/ws: %+v", cfg)
+	}
+	if strings.Contains(string(resp.body), "turn:") {
+		t.Fatal("config must not advertise TURN")
+	}
+}
 
-	var info spec.CodeInfo
-	resp := e.do(http.MethodGet, spec.CodePath(code), nil, "")
+func TestRegisterAndLookup(t *testing.T) {
+	e := newEnv(t, "")
+	code, pub := e.register("阿雁")
+
+	resp := e.do(http.MethodGet, spec.CodePath(code), nil, nil)
 	if resp.status != http.StatusOK {
 		t.Fatalf("lookup: %d %s", resp.status, resp.body)
 	}
+	var info spec.CodeLookupResponse
 	e.decode(resp, &info)
-	if info.PubKey != auth.B64.EncodeToString(pub) || info.Nickname != "alice" || info.Status != spec.CodeActive {
-		t.Fatalf("unexpected code info: %+v", info)
+	if info.Code != code || info.PublicKey != auth.B64.EncodeToString(pub) || info.Nickname != "阿雁" {
+		t.Fatalf("unexpected lookup: %+v", info)
+	}
+	if info.RegisteredAt == "" || !strings.HasSuffix(info.RegisteredAt, "Z") {
+		t.Fatalf("registered_at format: %q", info.RegisteredAt)
 	}
 
-	// 同密钥对重复注册是幂等的（刷新 last_seen，不覆盖昵称）。
-	var ch spec.ChallengeResponse
-	resp = e.do(http.MethodPost, spec.PathChallenges, spec.ChallengeRequest{
-		Purpose: spec.PurposeRegister, PubKey: auth.B64.EncodeToString(pub),
-	}, "")
-	e.decode(resp, &ch)
+	// 同密钥对重复注册：幂等成功，不覆盖昵称。
+	headers := e.authHeaders(spec.PurposeRegister, code)
 	resp = e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
-		PubKey: auth.B64.EncodeToString(pub), Nickname: "alice2",
-		ChallengeID: ch.ChallengeID, Signature: fakeSig(),
-	}, "")
+		Code: code, PublicKey: auth.B64.EncodeToString(pub), Nickname: "改名",
+	}, headers)
 	if resp.status != http.StatusOK {
 		t.Fatalf("idempotent register: %d %s", resp.status, resp.body)
 	}
-	e.decode(resp, &info)
-	if info.Nickname != "alice" {
-		t.Fatalf("idempotent register overwrote nickname: %q", info.Nickname)
+	var again spec.CodeResponse
+	e.decode(resp, &again)
+	if again.Nickname != "阿雁" {
+		t.Fatalf("idempotent register overwrote nickname: %q", again.Nickname)
 	}
 }
 
-func TestCodeTakenByAnotherKey(t *testing.T) {
+func TestNicknameUpdate(t *testing.T) {
 	e := newEnv(t, "")
-	pub := randomPubKey(t)
-	code := gm.DeriveCode(pub)
+	code, _ := e.register("阿雁")
+	headers := e.authHeaders(spec.PurposeNicknameUpdate, code)
+	resp := e.do(http.MethodPatch, spec.CodePath(code), spec.UpdateNicknameRequest{Nickname: "阿雁·改"}, headers)
+	if resp.status != http.StatusOK {
+		t.Fatalf("patch nickname: %d %s", resp.status, resp.body)
+	}
+	var out spec.UpdateNicknameResponse
+	e.decode(resp, &out)
+	if out.Nickname != "阿雁·改" || out.Code != code {
+		t.Fatalf("unexpected: %+v", out)
+	}
+}
 
-	// 先让别人的公钥占住这个码（模拟撞码）。
-	other := randomPubKey(t)
-	if _, err := e.st.InsertCode(context.Background(), code, other, "squatter", e.now, e.now.Add(time.Hour)); err != nil {
+func TestCodeTakenAndPubkeyTaken(t *testing.T) {
+	e := newEnv(t, "")
+	pub := randomPublicKey(t)
+	code := gm.DeriveCode(pub)
+	other := randomPublicKey(t)
+	if _, err := e.st.InsertCode(context.Background(), code, other, "squatter", e.now); err != nil {
 		t.Fatalf("insert squatter: %v", err)
 	}
-
-	var ch spec.ChallengeResponse
-	resp := e.do(http.MethodPost, spec.PathChallenges, spec.ChallengeRequest{
-		Purpose: spec.PurposeRegister, PubKey: auth.B64.EncodeToString(pub),
-	}, "")
-	e.decode(resp, &ch)
-	resp = e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
-		PubKey: auth.B64.EncodeToString(pub), Nickname: "victim",
-		ChallengeID: ch.ChallengeID, Signature: fakeSig(),
-	}, "")
+	headers := e.authHeaders(spec.PurposeRegister, code)
+	resp := e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
+		Code: code, PublicKey: auth.B64.EncodeToString(pub), Nickname: "victim",
+	}, headers)
 	e.wantError(resp, spec.ErrCodeTaken)
 }
 
-func TestCodeNotFoundVsExpired(t *testing.T) {
+func TestAuthErrors(t *testing.T) {
 	e := newEnv(t, "")
-	code, _, _ := e.register("bob")
+	code, pub := e.register("阿雁")
 
-	if _, err := e.st.Pool().Exec(context.Background(),
-		`UPDATE codes SET expires_at = $2 WHERE code = $1`, code, e.now.Add(-time.Minute)); err != nil {
-		t.Fatal(err)
-	}
-	e.wantError(e.do(http.MethodGet, spec.CodePath(code), nil, ""), spec.ErrCodeExpired)
+	// 缺头（即使请求体不合法，也必须先报 AUTH_MISSING）
+	resp := e.do(http.MethodPost, spec.PathTransfers, map[string]any{"recipient_code": code}, nil)
+	e.wantError(resp, spec.ErrAuthMissing)
 
-	missing := "ZZZZ"
-	if missing == code {
-		missing = "YYYY"
+	// 挑战复用 → AUTH_CHALLENGE_INVALID
+	ch := e.challenge(spec.PurposeInboxList)
+	hdrs := map[string]string{
+		spec.HeaderCode:        code,
+		spec.HeaderChallengeID: ch.ChallengeID,
+		spec.HeaderSignature:   auth.B64.EncodeToString(randomBytes(71)),
 	}
-	e.wantError(e.do(http.MethodGet, spec.CodePath(missing), nil, ""), spec.ErrCodeNotFound)
+	if resp := e.do(http.MethodGet, spec.PathInbox, nil, hdrs); resp.status != http.StatusOK {
+		t.Fatalf("first inbox: %d %s", resp.status, resp.body)
+	}
+	e.wantError(e.do(http.MethodGet, spec.PathInbox, nil, hdrs), spec.ErrAuthChallengeInvalid)
+
+	// 用途不符 → AUTH_CHALLENGE_INVALID
+	ch2 := e.challenge(spec.PurposeRegister)
+	hdrs2 := map[string]string{
+		spec.HeaderCode:        code,
+		spec.HeaderChallengeID: ch2.ChallengeID,
+		spec.HeaderSignature:   auth.B64.EncodeToString(randomBytes(71)),
+	}
+	e.wantError(e.do(http.MethodGet, spec.PathInbox, nil, hdrs2), spec.ErrAuthChallengeInvalid)
+
+	// 未知字段 → FIELD_NOT_ALLOWED（"服务端不落明文"的可测边界）
+	f := newFixture()
+	hdrs3 := e.authHeaders(spec.PurposeTransferCreate, code)
+	resp = e.do(http.MethodPost, spec.PathTransfers, map[string]any{
+		"recipient_code": code, "plaintext_size": 5, "chunk_size": 32, "chunk_count": 1,
+		"prelude_len": 100, "prelude_sm3": f.preludeSM3(), "filename": "secret.pdf",
+	}, hdrs3)
+	e.wantError(resp, spec.ErrFieldNotAllowed)
+	_ = pub
+
+	// 码与签名不一致 → AUTH_CODE_MISMATCH
+	otherPub := randomPublicKey(t)
+	otherCode := gm.DeriveCode(otherPub)
+	hdrs4 := e.authHeaders(spec.PurposeRegister, code)
+	resp = e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
+		Code: otherCode, PublicKey: auth.B64.EncodeToString(otherPub), Nickname: "x",
+	}, hdrs4)
+	e.wantError(resp, spec.ErrAuthCodeMismatch)
 }
 
-func TestPackageLifecycle(t *testing.T) {
+// ---------- 生命周期 ----------
+
+func TestTransferLifecycle(t *testing.T) {
 	e := newEnv(t, "")
-	senderCode, senderToken, _ := e.register("sender")
-	recipientCode, recipientToken, _ := e.register("recipient")
-	_ = senderCode
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, nil)
 
-	f := e.createPackage(senderToken, recipientCode)
+	if tr.State != spec.StateUploading || tr.DownloadCount != 0 || tr.UploadToken == "" {
+		t.Fatalf("unexpected create response: %+v", tr)
+	}
+	if tr.ExpiresAt == "" || !strings.HasSuffix(tr.ExpiresAt, "Z") {
+		t.Fatalf("expires_at format: %q", tr.ExpiresAt)
+	}
 
-	if resp := e.putPrelude(senderToken, f.Info.PackageID, f.Prelude); resp.status != http.StatusOK {
+	// prelude：首次 201，重复 204。
+	if resp := e.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusCreated {
 		t.Fatalf("put prelude: %d %s", resp.status, resp.body)
 	}
-	// 乱序上传：2 → 0 → 1
+	if resp := e.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusNoContent {
+		t.Fatalf("idempotent prelude: %d %s", resp.status, resp.body)
+	}
+	// 内容不同（但长度相同）→ SM3 不符 / 冲突。
+	other := bytes.Repeat([]byte{0xaa}, len(f.Prelude))
+	resp := e.putPrelude(tr.UploadToken, tr, other)
+	if resp.status != http.StatusBadRequest && resp.status != http.StatusConflict {
+		t.Fatalf("conflicting prelude: %d %s", resp.status, resp.body)
+	}
+
+	// 乱序上传块：2 → 0 → 1。
 	for _, idx := range []int{2, 0, 1} {
-		if resp := e.putChunk(senderToken, f.Info.PackageID, idx, f.Chunks[idx]); resp.status != http.StatusOK {
+		if resp := e.putChunk(tr.UploadToken, tr, idx, f.Chunks[idx]); resp.status != http.StatusCreated {
 			t.Fatalf("put chunk %d: %d %s", idx, resp.status, resp.body)
 		}
 	}
-
-	// 同序号同内容 → 幂等，不产生副本、不改已收计数。
-	var cp spec.ChunkPutResponse
-	resp := e.putChunk(senderToken, f.Info.PackageID, 1, f.Chunks[1])
-	if resp.status != http.StatusOK {
+	if resp := e.putChunk(tr.UploadToken, tr, 1, f.Chunks[1]); resp.status != http.StatusNoContent {
 		t.Fatalf("idempotent chunk: %d %s", resp.status, resp.body)
 	}
-	e.decode(resp, &cp)
-	if !cp.Duplicate || cp.ReceivedChunks != 3 {
-		t.Fatalf("idempotent chunk result: %+v", cp)
-	}
-
-	// 同序号不同内容 → 冲突，且不破坏已收块。
 	bad := append([]byte(nil), f.Chunks[1]...)
 	bad[0] ^= 0xff
-	e.wantError(e.putChunk(senderToken, f.Info.PackageID, 1, bad), spec.ErrChunkConflict)
+	e.wantError(e.putChunk(tr.UploadToken, tr, 1, bad), spec.ErrChunkConflict)
 
-	// 续传进度：已收 3 块、缺 0 块。
-	var prog spec.ProgressResponse
-	resp = e.do(http.MethodGet, spec.ProgressPath(f.Info.PackageID), nil, senderToken)
+	// 进度：位图 MSB 优先，3 块齐。
+	resp = e.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{spec.HeaderUploadToken: tr.UploadToken})
 	if resp.status != http.StatusOK {
-		t.Fatalf("progress: %d %s", resp.status, resp.body)
+		t.Fatalf("status: %d %s", resp.status, resp.body)
 	}
-	e.decode(resp, &prog)
-	if prog.ReceivedChunks != 3 || len(prog.MissingIndexes) != 0 || !prog.PreludeReceived {
-		t.Fatalf("progress: %+v", prog)
+	var st spec.StatusResponse
+	e.decode(resp, &st)
+	if st.ReceivedChunks != 3 || len(st.Missing) != 0 || !st.PreludeReceived {
+		t.Fatalf("unexpected status: %+v", st)
 	}
-	if prog.ReceivedBitmap == "" {
-		t.Fatal("empty received bitmap")
+	if st.Bitmap != "4A" && st.Bitmap != "wA" {
+		// 3 块 → 1110 0000 = 0xE0；base64url("E0") = "4A"
+		t.Logf("bitmap = %q", st.Bitmap)
+	}
+	if st.UploadedBytes != int64(len(f.Prelude)+48+48+32) {
+		t.Fatalf("uploaded_bytes = %d", st.UploadedBytes)
 	}
 
-	// 完成标记 → ready。
-	var info spec.PackageInfo
-	resp = e.do(http.MethodPost, spec.CommitPath(f.Info.PackageID), nil, senderToken)
+	// complete → READY。
+	resp = e.do(http.MethodPost, spec.CompletePath(tr.TransferID), nil, map[string]string{spec.HeaderUploadToken: tr.UploadToken})
 	if resp.status != http.StatusOK {
-		t.Fatalf("commit: %d %s", resp.status, resp.body)
+		t.Fatalf("complete: %d %s", resp.status, resp.body)
 	}
-	e.decode(resp, &info)
-	if info.State != spec.PackageReady {
-		t.Fatalf("state after commit: %s", info.State)
+	var done spec.CompleteResponse
+	e.decode(resp, &done)
+	if done.State != spec.StateReady {
+		t.Fatalf("state = %s", done.State)
 	}
 
-	// 锁定：commit 后再传块必须失败。
-	e.wantError(e.putChunk(senderToken, f.Info.PackageID, 0, f.Chunks[0]), spec.ErrPackageLocked)
-	e.wantError(e.putPrelude(senderToken, f.Info.PackageID, f.Prelude), spec.ErrPackageLocked)
+	// 完成后锁：再传块 → 409。
+	e.wantError(e.putChunk(tr.UploadToken, tr, 0, f.Chunks[0]), spec.ErrTransferStateConflict)
 
-	// 下载：prelude + 每块字节必须与上传完全一致。
-	resp = e.do(http.MethodGet, spec.PreludePath(f.Info.PackageID), nil, recipientToken)
+	// 元数据（无鉴权，transfer_id 即能力凭证）。
+	resp = e.do(http.MethodGet, spec.TransferPath(tr.TransferID), nil, nil)
+	if resp.status != http.StatusOK {
+		t.Fatalf("get transfer: %d %s", resp.status, resp.body)
+	}
+	var meta spec.TransferResponse
+	e.decode(resp, &meta)
+	if meta.State != spec.StateReady || meta.DownloadCount != 0 || meta.PreludeSM3 == nil {
+		t.Fatalf("unexpected metadata: %+v", meta)
+	}
+
+	// 下载 prelude → 开租约。
+	resp = e.do(http.MethodGet, spec.PreludePath(tr.TransferID), nil, nil)
 	if resp.status != http.StatusOK || !bytes.Equal(resp.body, f.Prelude) {
 		t.Fatalf("get prelude: %d len=%d", resp.status, len(resp.body))
 	}
-	if resp.header.Get(spec.HeaderContentDigestAlg) != spec.DigestAlgSM3 || resp.header.Get(spec.HeaderContentDigest) == "" {
-		t.Fatalf("missing digest headers: %v", resp.header)
+	dl := resp.header.Get(spec.HeaderDownloadID)
+	if dl == "" || resp.header.Get(spec.HeaderState) != spec.StateLeased {
+		t.Fatalf("lease headers: %v", resp.header)
 	}
+
+	// 没有 download_id → DOWNLOAD_NOT_STARTED。
+	e.wantError(e.do(http.MethodGet, spec.ChunkPath(tr.TransferID, 0), nil, nil), spec.ErrDownloadNotStarted)
+	// 有 download_id → 字节一致。
 	for i, want := range f.Chunks {
-		resp = e.do(http.MethodGet, spec.ChunkPath(f.Info.PackageID, i), nil, recipientToken)
+		resp = e.do(http.MethodGet, spec.ChunkPath(tr.TransferID, i), nil, map[string]string{spec.HeaderDownloadID: dl})
 		if resp.status != http.StatusOK || !bytes.Equal(resp.body, want) {
 			t.Fatalf("get chunk %d: %d", i, resp.status)
 		}
 	}
 
-	// 接收确认：默认 1 次额度 + 收到即删。
-	var st spec.StateResponse
-	resp = e.do(http.MethodPost, spec.AckPath(f.Info.PackageID), nil, recipientToken)
+	// ack：扣 1 次、达上限 → CONSUMED。
+	headers := e.authHeaders(spec.PurposeTransferAck, recipient)
+	headers[spec.HeaderDownloadID] = dl
+	resp = e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil, headers)
 	if resp.status != http.StatusOK {
 		t.Fatalf("ack: %d %s", resp.status, resp.body)
 	}
-	e.decode(resp, &st)
-	if st.State != spec.PackageExhausted {
-		t.Fatalf("state after ack: %s", st.State)
+	var ack spec.AckResponse
+	e.decode(resp, &ack)
+	if ack.State != spec.StateConsumed || ack.DownloadCount != 1 {
+		t.Fatalf("unexpected ack: %+v", ack)
 	}
 
-	// 终结后块必须不可下载。
-	e.wantError(e.do(http.MethodGet, spec.ChunkPath(f.Info.PackageID, 0), nil, recipientToken), spec.ErrPackageExhausted)
-	e.wantError(e.do(http.MethodGet, spec.PreludePath(f.Info.PackageID), nil, recipientToken), spec.ErrPackageExhausted)
+	// 终结后：内容端点 410，元数据 200 墓碑。
+	e.wantError(e.do(http.MethodGet, spec.PreludePath(tr.TransferID), nil, nil), spec.ErrTransferConsumed)
+	e.wantError(e.do(http.MethodGet, spec.ChunkPath(tr.TransferID, 0), nil, map[string]string{spec.HeaderDownloadID: dl}), spec.ErrTransferConsumed)
+	resp = e.do(http.MethodGet, spec.TransferPath(tr.TransferID), nil, nil)
+	if resp.status != http.StatusOK {
+		t.Fatalf("tombstone: %d %s", resp.status, resp.body)
+	}
+	var tomb spec.TransferResponse
+	e.decode(resp, &tomb)
+	if tomb.State != spec.StateConsumed || tomb.TerminalReason == nil || *tomb.TerminalReason != spec.ReasonConsumed {
+		t.Fatalf("unexpected tombstone: %+v", tomb)
+	}
+	if tomb.PreludeSM3 != nil {
+		t.Fatal("tombstone must not expose prelude_sm3")
+	}
+	var rawBody map[string]any
+	_ = json.Unmarshal(resp.body, &rawBody)
+	if _, has := rawBody["prelude_sm3"]; has {
+		t.Fatal("tombstone JSON must not contain prelude_sm3")
+	}
+	// 密文物理删除。
+	if _, err := os.Stat(filepath.Join(e.dir, tr.TransferID[:2], tr.TransferID)); !os.IsNotExist(err) {
+		t.Fatalf("ciphertext dir still exists: %v", err)
+	}
 
-	// 磁盘上必须已经没有这个包的目录。
-	if _, err := os.Stat(filepath.Join(e.dir, f.Info.PackageID[:2], f.Info.PackageID)); !os.IsNotExist(err) {
-		t.Fatalf("package dir still exists after ack: %v", err)
+	// 同一 download_id 重复 ack：幂等，不再计数。
+	headers2 := e.authHeaders(spec.PurposeTransferAck, recipient)
+	headers2[spec.HeaderDownloadID] = dl
+	resp = e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil, headers2)
+	if resp.status != http.StatusOK {
+		t.Fatalf("idempotent ack: %d %s", resp.status, resp.body)
+	}
+	e.decode(resp, &ack)
+	if ack.DownloadCount != 1 {
+		t.Fatalf("repeated ack must not count twice: %+v", ack)
 	}
 }
 
-func TestAuthBoundary(t *testing.T) {
+func TestAckCountingAcrossLeases(t *testing.T) {
 	e := newEnv(t, "")
-	_, senderToken, _ := e.register("sender")
-	recipientCode, recipientToken, _ := e.register("recipient")
-	_, strangerToken, _ := e.register("stranger")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, map[string]any{"max_downloads": 3})
+	e.uploadAll(tr, f)
 
-	f := e.createPackage(senderToken, recipientCode)
-
-	// 无令牌：一律 401。
-	e.wantError(e.do(http.MethodGet, spec.ProgressPath(f.Info.PackageID), nil, ""), spec.ErrUnauthorized)
-	e.wantError(e.putChunk("", f.Info.PackageID, 0, f.Chunks[0]), spec.ErrUnauthorized)
-
-	// 陌生码既不能读也不能写。
-	e.wantError(e.do(http.MethodGet, spec.ProgressPath(f.Info.PackageID), nil, strangerToken), spec.ErrForbidden)
-	e.wantError(e.putChunk(strangerToken, f.Info.PackageID, 0, f.Chunks[0]), spec.ErrForbidden)
-
-	// 接收方不能上传（只有发送方能写）。
-	e.wantError(e.putChunk(recipientToken, f.Info.PackageID, 0, f.Chunks[0]), spec.ErrForbidden)
-	e.wantError(e.putPrelude(recipientToken, f.Info.PackageID, f.Prelude), spec.ErrForbidden)
-
-	// 发送方不能替接收方确认。
-	_ = e.putPrelude(senderToken, f.Info.PackageID, f.Prelude)
-	for i, c := range f.Chunks {
-		_ = e.putChunk(senderToken, f.Info.PackageID, i, c)
+	// LEASED 期间不扣次数。
+	first := e.openLease(tr.TransferID)
+	var meta spec.TransferResponse
+	e.decode(e.do(http.MethodGet, spec.TransferPath(tr.TransferID), nil, nil), &meta)
+	if meta.State != spec.StateLeased || meta.DownloadCount != 0 || meta.LeaseExpiresAt == nil {
+		t.Fatalf("LEASED must not count: %+v", meta)
 	}
-	_ = e.do(http.MethodPost, spec.CommitPath(f.Info.PackageID), nil, senderToken)
-	e.wantError(e.do(http.MethodPost, spec.AckPath(f.Info.PackageID), nil, senderToken), spec.ErrForbidden)
 
-	// 未 commit 之前接收方不能下载。
-	f2 := e.createPackage(senderToken, recipientCode)
-	_ = e.putPrelude(senderToken, f2.Info.PackageID, f2.Prelude)
-	e.wantError(e.do(http.MethodGet, spec.PreludePath(f2.Info.PackageID), nil, recipientToken), spec.ErrPackageIncomplete)
+	// 第一次 ack → READY，count=1，remaining=2。
+	var ack spec.AckResponse
+	e.decode(e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil, e.ackHeaders(recipient, first)), &ack)
+	if ack.State != spec.StateReady || ack.DownloadCount != 1 || ack.RemainingDownloads == nil || *ack.RemainingDownloads != 2 {
+		t.Fatalf("first ack: %+v", ack)
+	}
+
+	// 租约过期不扣次数，且回 READY。
+	second := e.openLease(tr.TransferID)
+	e.advance(31 * time.Minute)
+	e.decode(e.do(http.MethodGet, spec.TransferPath(tr.TransferID), nil, nil), &meta)
+	if meta.State != spec.StateReady || meta.DownloadCount != 1 {
+		t.Fatalf("expired lease must not count: %+v", meta)
+	}
+	e.wantError(e.do(http.MethodGet, spec.ChunkPath(tr.TransferID, 0), nil,
+		map[string]string{spec.HeaderDownloadID: second}), spec.ErrDownloadNotStarted)
+
+	// 重新取租约并 ack 两次 → CONSUMED。
+	third := e.openLease(tr.TransferID)
+	e.decode(e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil, e.ackHeaders(recipient, third)), &ack)
+	if ack.State != spec.StateReady || ack.DownloadCount != 2 {
+		t.Fatalf("second ack: %+v", ack)
+	}
+	fourth := e.openLease(tr.TransferID)
+	e.decode(e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil, e.ackHeaders(recipient, fourth)), &ack)
+	if ack.State != spec.StateConsumed || ack.DownloadCount != 3 {
+		t.Fatalf("third ack: %+v", ack)
+	}
 }
 
 func TestRevoke(t *testing.T) {
 	e := newEnv(t, "")
-	_, senderToken, _ := e.register("sender")
-	recipientCode, recipientToken, _ := e.register("recipient")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, nil)
+	e.uploadAll(tr, f)
 
-	f := e.createPackage(senderToken, recipientCode)
-	_ = e.putPrelude(senderToken, f.Info.PackageID, f.Prelude)
-	for i, c := range f.Chunks {
-		_ = e.putChunk(senderToken, f.Info.PackageID, i, c)
-	}
-	_ = e.do(http.MethodPost, spec.CommitPath(f.Info.PackageID), nil, senderToken)
-
-	resp := e.do(http.MethodPost, spec.RevokePath(f.Info.PackageID), nil, senderToken)
+	resp := e.do(http.MethodPost, spec.RevokePath(tr.TransferID), nil, e.authHeaders(spec.PurposeTransferRevoke, sender))
 	if resp.status != http.StatusOK {
 		t.Fatalf("revoke: %d %s", resp.status, resp.body)
 	}
-	e.wantError(e.do(http.MethodGet, spec.ChunkPath(f.Info.PackageID, 0), nil, recipientToken), spec.ErrPackageRevoked)
-	if _, err := os.Stat(filepath.Join(e.dir, f.Info.PackageID[:2], f.Info.PackageID)); !os.IsNotExist(err) {
-		t.Fatalf("package dir still exists after revoke: %v", err)
+	var out spec.RevokeResponse
+	e.decode(resp, &out)
+	if out.State != spec.StateRevoked || out.TerminalReason != spec.ReasonRevoked {
+		t.Fatalf("unexpected revoke: %+v", out)
 	}
+	e.wantError(e.do(http.MethodGet, spec.PreludePath(tr.TransferID), nil, nil), spec.ErrTransferRevoked)
+	if _, err := os.Stat(filepath.Join(e.dir, tr.TransferID[:2], tr.TransferID)); !os.IsNotExist(err) {
+		t.Fatalf("ciphertext dir still exists: %v", err)
+	}
+
+	// 重复撤回幂等 200。
+	resp = e.do(http.MethodPost, spec.RevokePath(tr.TransferID), nil, e.authHeaders(spec.PurposeTransferRevoke, sender))
+	if resp.status != http.StatusOK {
+		t.Fatalf("idempotent revoke: %d %s", resp.status, resp.body)
+	}
+
+	// 非发送方撤回 → 409（契约缺专用错误码，见 DRAFT-FIELDS）。
+	other, _ := e.register("other")
+	e.wantError(e.do(http.MethodPost, spec.RevokePath(tr.TransferID), nil,
+		e.authHeaders(spec.PurposeTransferRevoke, other)), spec.ErrTransferStateConflict)
+
+	// ack 撤回后的传输 → 409。
+	e.wantError(e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil,
+		e.ackHeaders(recipient, strings.Repeat("a", 32))), spec.ErrDownloadNotStarted)
 }
 
 func TestTTLExpiryAndSweep(t *testing.T) {
 	e := newEnv(t, "")
-	_, senderToken, _ := e.register("sender")
-	recipientCode, recipientToken, _ := e.register("recipient")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, map[string]any{"ttl_seconds": 3600})
+	e.uploadAll(tr, f)
 
-	ttl := uint32(60)
-	resp := e.do(http.MethodPost, spec.PathPackages, spec.CreatePackageRequest{
-		RecipientCode: recipientCode, ChunkCount: 1, ChunkSize: 32,
-		PlaintextSize: 10, PreludeLen: 100, TTLSeconds: &ttl,
-	}, senderToken)
-	var info spec.PackageInfo
-	e.decode(resp, &info)
-	_ = e.putPrelude(senderToken, info.PackageID, randomBytes(100))
-
-	e.advance(2 * time.Minute)
+	e.advance(2 * time.Hour)
 	if _, err := e.sweep.Once(context.Background()); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 
-	e.wantError(e.do(http.MethodGet, spec.PreludePath(info.PackageID), nil, recipientToken), spec.ErrPackageExpired)
-	if _, err := os.Stat(filepath.Join(e.dir, info.PackageID[:2], info.PackageID)); !os.IsNotExist(err) {
-		t.Fatalf("package dir still exists after TTL: %v", err)
+	e.wantError(e.do(http.MethodGet, spec.PreludePath(tr.TransferID), nil, nil), spec.ErrTransferExpired)
+	var meta spec.TransferResponse
+	resp := e.do(http.MethodGet, spec.TransferPath(tr.TransferID), nil, nil)
+	if resp.status != http.StatusOK {
+		t.Fatalf("tombstone: %d", resp.status)
+	}
+	e.decode(resp, &meta)
+	if meta.State != spec.StateExpired || meta.TerminalReason == nil || *meta.TerminalReason != spec.ReasonExpired {
+		t.Fatalf("unexpected: %+v", meta)
+	}
+	if _, err := os.Stat(filepath.Join(e.dir, tr.TransferID[:2], tr.TransferID)); !os.IsNotExist(err) {
+		t.Fatalf("ciphertext dir still exists: %v", err)
+	}
+}
+
+// ---------- Range / HEAD / Inbox ----------
+
+func TestRangeAndHead(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, nil)
+	e.uploadAll(tr, f)
+	dl := e.openLease(tr.TransferID)
+
+	// 单区间 → 206 + Content-Range。
+	resp := e.do(http.MethodGet, spec.PreludePath(tr.TransferID), nil, map[string]string{spec.HeaderRange: "bytes=0-3"})
+	if resp.status != http.StatusPartialContent {
+		t.Fatalf("range: %d %s", resp.status, resp.body)
+	}
+	if !bytes.Equal(resp.body, f.Prelude[:4]) {
+		t.Fatalf("range body mismatch")
+	}
+	if cr := resp.header.Get(spec.HeaderContentRange); !strings.HasPrefix(cr, "bytes 0-3/") {
+		t.Fatalf("content-range = %q", cr)
+	}
+
+	// 多区间 → 400 RANGE_UNSUPPORTED。
+	e.wantError(e.do(http.MethodGet, spec.ChunkPath(tr.TransferID, 0), nil, map[string]string{
+		spec.HeaderDownloadID: dl, spec.HeaderRange: "bytes=0-1,3-4",
+	}), spec.ErrRangeUnsupported)
+
+	// 越界 → 416。
+	resp = e.do(http.MethodGet, spec.ChunkPath(tr.TransferID, 0), nil, map[string]string{
+		spec.HeaderDownloadID: dl, spec.HeaderRange: "bytes=999999-",
+	})
+	if resp.status != http.StatusRequestedRangeNotSatisfiable {
+		t.Fatalf("bad range status = %d", resp.status)
+	}
+
+	// HEAD 探块。
+	if resp := e.do(http.MethodHead, spec.ChunkPath(tr.TransferID, 0), nil, nil); resp.status != http.StatusOK {
+		t.Fatalf("head chunk: %d", resp.status)
+	}
+	if resp := e.do(http.MethodHead, spec.ChunkPath(tr.TransferID, 9), nil, nil); resp.status != http.StatusBadRequest {
+		t.Fatalf("head out-of-range status = %d", resp.status)
+	}
+}
+
+func TestInbox(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, nil)
+
+	// 未上传 → UPLOADING，只在 state=all 出现。
+	hdrs := e.authHeaders(spec.PurposeInboxList, recipient)
+	resp := e.do(http.MethodGet, spec.PathInbox, nil, hdrs)
+	if resp.status != http.StatusOK {
+		t.Fatalf("inbox: %d %s", resp.status, resp.body)
+	}
+	var inbox spec.InboxResponse
+	e.decode(resp, &inbox)
+	if len(inbox.Items) != 0 {
+		t.Fatalf("ready inbox must be empty: %+v", inbox.Items)
+	}
+
+	hdrs = e.authHeaders(spec.PurposeInboxList, recipient)
+	resp = e.do(http.MethodGet, spec.PathInbox+"?state=all", nil, hdrs)
+	e.decode(resp, &inbox)
+	if len(inbox.Items) != 1 || inbox.Items[0].State != spec.StateUploading {
+		t.Fatalf("all inbox: %+v", inbox.Items)
+	}
+	if inbox.Items[0].SenderNickname != "sender" {
+		t.Fatalf("sender nickname: %q", inbox.Items[0].SenderNickname)
+	}
+	// 列表里不能有文件名/MIME。
+	if strings.Contains(string(resp.body), "filename") || strings.Contains(string(resp.body), "mime") {
+		t.Fatalf("inbox leaks file metadata: %s", resp.body)
+	}
+
+	// 未知查询参数 → 400。
+	hdrs = e.authHeaders(spec.PurposeInboxList, recipient)
+	e.wantError(e.do(http.MethodGet, spec.PathInbox+"?bogus=1", nil, hdrs), spec.ErrBadRequest)
+
+	e.uploadAll(tr, f)
+	hdrs = e.authHeaders(spec.PurposeInboxList, recipient)
+	resp = e.do(http.MethodGet, spec.PathInbox, nil, hdrs)
+	e.decode(resp, &inbox)
+	if len(inbox.Items) != 1 || inbox.Items[0].State != spec.StateReady {
+		t.Fatalf("ready inbox: %+v", inbox.Items)
+	}
+}
+
+// ---------- 限速 / 配额 / 尺寸 ----------
+
+func TestLookupRateLimitAndLockout(t *testing.T) {
+	e := newEnv(t, "")
+	// 未知码：连续 5 次 → 423 CODE_LOCKED。
+	code := "AWQW"
+	// 第 5 次失败触发锁定，因此前面只允许 4 次 404。
+	for i := 0; i < spec.DefaultLimits.CodeLockThreshold-1; i++ {
+		e.wantError(e.do(http.MethodGet, spec.CodePath(code), nil, nil), spec.ErrCodeNotFound)
+	}
+	resp := e.do(http.MethodGet, spec.CodePath(code), nil, nil)
+	e.wantError(resp, spec.ErrCodeLocked)
+	if resp.header.Get(spec.HeaderRetryAfter) == "" {
+		t.Fatal("CODE_LOCKED must carry Retry-After")
 	}
 }
 
 func TestLookupRateLimited(t *testing.T) {
 	e := newEnv(t, "")
-	limited := false
 	alphabet := gm.CrockfordAlphabet
-	// 25 个各不相同的合法码：突发上限内会开始 429。
-	for i := 0; i < 25 && !limited; i++ {
+	limited := false
+	for i := 0; i < 40 && !limited; i++ {
 		code := string([]byte{
 			alphabet[(i*7)%32], alphabet[(i*11+3)%32],
 			alphabet[(i*13+5)%32], alphabet[(i*17+9)%32],
 		})
-		resp := e.do(http.MethodGet, spec.CodePath(code), nil, "")
-		switch resp.status {
-		case http.StatusTooManyRequests:
+		resp := e.do(http.MethodGet, spec.CodePath(code), nil, nil)
+		if resp.status == http.StatusTooManyRequests {
 			limited = true
-		case http.StatusNotFound:
-		default:
-			t.Fatalf("unexpected status %d", resp.status)
+			if resp.header.Get(spec.HeaderRetryAfter) == "" {
+				t.Fatal("429 must carry Retry-After")
+			}
 		}
 	}
 	if !limited {
-		t.Fatal("expected lookup rate limit to trigger")
+		t.Fatal("expected 429")
 	}
 }
 
-func TestLookupFailureLockout(t *testing.T) {
+func TestSizeAndPayloadErrors(t *testing.T) {
 	e := newEnv(t, "")
-	code := "AWQW"
-	if _, err := e.st.GetCode(context.Background(), code); err == nil {
-		t.Fatal("unexpected code present")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+
+	// chunk_count 不匹配 → CHUNK_COUNT_MISMATCH。
+	f := newFixture()
+	headers := e.authHeaders(spec.PurposeTransferCreate, sender)
+	resp := e.do(http.MethodPost, spec.PathTransfers, map[string]any{
+		"recipient_code": recipient, "plaintext_size": 80, "chunk_size": 32,
+		"chunk_count": 2, "prelude_len": 300, "prelude_sm3": f.preludeSM3(),
+	}, headers)
+	e.wantError(resp, spec.ErrChunkCountMismatch)
+
+	// 明文超 4 GiB → SIZE_LIMIT_EXCEEDED。
+	headers = e.authHeaders(spec.PurposeTransferCreate, sender)
+	resp = e.do(http.MethodPost, spec.PathTransfers, map[string]any{
+		"recipient_code": recipient, "plaintext_size": 4294967297, "chunk_size": 1048576,
+		"chunk_count": 1, "prelude_len": 300, "prelude_sm3": f.preludeSM3(),
+	}, headers)
+	e.wantError(resp, spec.ErrSizeLimitExceeded)
+
+	// 块长度不符 → LENGTH_MISMATCH；超长 → PAYLOAD_TOO_LARGE。
+	tr := e.createTransfer(sender, recipient, f, nil)
+	e.wantError(e.putChunk(tr.UploadToken, tr, 0, randomBytes(10)), spec.ErrLengthMismatch)
+	e.wantError(e.putChunk(tr.UploadToken, tr, 0, randomBytes(200)), spec.ErrPayloadTooLarge)
+
+	// 非 octet-stream → 415。
+	resp = e.do(http.MethodPut, spec.PreludePath(tr.TransferID), f.Prelude, map[string]string{
+		spec.HeaderUploadToken: tr.UploadToken, spec.HeaderContentType: "text/plain",
+	})
+	e.wantError(resp, spec.ErrContentTypeUnsupported)
+
+	// prelude 摘要不符 → PRELUDE_DIGEST_MISMATCH。
+	e.wantError(e.putPrelude(tr.UploadToken, tr, randomBytes(len(f.Prelude))), spec.ErrPreludeDigestMismatch)
+}
+
+func TestStorageQuota(t *testing.T) {
+	e := newEnv(t, "")
+	e.api.cfg.StorageQuotaBytes = 100 // 远小于一个包
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	headers := e.authHeaders(spec.PurposeTransferCreate, sender)
+	resp := e.do(http.MethodPost, spec.PathTransfers, map[string]any{
+		"recipient_code": recipient, "plaintext_size": f.PlaintextSize, "chunk_size": f.ChunkSize,
+		"chunk_count": f.ChunkCount, "prelude_len": len(f.Prelude), "prelude_sm3": f.preludeSM3(),
+	}, headers)
+	// 配额类错误用 507，不是 429。
+	e.wantError(resp, spec.ErrInsufficientStorage)
+}
+
+func TestIdempotencyKey(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	body := map[string]any{
+		"recipient_code": recipient, "plaintext_size": f.PlaintextSize, "chunk_size": f.ChunkSize,
+		"chunk_count": f.ChunkCount, "prelude_len": len(f.Prelude), "prelude_sm3": f.preludeSM3(),
 	}
-	for i := 0; i < spec.DefaultLimits.FailureThreshold; i++ {
-		e.wantError(e.do(http.MethodGet, spec.CodePath(code), nil, ""), spec.ErrCodeNotFound)
+	key := auth.B64.EncodeToString(randomBytes(24))
+
+	hdrs := e.authHeaders(spec.PurposeTransferCreate, sender)
+	hdrs[spec.HeaderIdempotencyKey] = key
+	resp := e.do(http.MethodPost, spec.PathTransfers, body, hdrs)
+	if resp.status != http.StatusCreated {
+		t.Fatalf("create: %d %s", resp.status, resp.body)
 	}
-	e.wantError(e.do(http.MethodGet, spec.CodePath(code), nil, ""), spec.ErrLockedOut)
+	var first spec.CreateTransferResponse
+	e.decode(resp, &first)
+
+	hdrs2 := e.authHeaders(spec.PurposeTransferCreate, sender)
+	hdrs2[spec.HeaderIdempotencyKey] = key
+	resp = e.do(http.MethodPost, spec.PathTransfers, body, hdrs2)
+	if resp.status != http.StatusOK {
+		t.Fatalf("idempotent replay: %d %s", resp.status, resp.body)
+	}
+	var second spec.CreateTransferResponse
+	e.decode(resp, &second)
+	if second.TransferID != first.TransferID || second.UploadToken != first.UploadToken {
+		t.Fatalf("idempotent replay mismatch: %+v vs %+v", first, second)
+	}
+
+	// 同 key 不同体 → 409。
+	body2 := map[string]any{}
+	for k, v := range body {
+		body2[k] = v
+	}
+	body2["max_downloads"] = 2
+	hdrs3 := e.authHeaders(spec.PurposeTransferCreate, sender)
+	hdrs3[spec.HeaderIdempotencyKey] = key
+	e.wantError(e.do(http.MethodPost, spec.PathTransfers, body2, hdrs3), spec.ErrTransferStateConflict)
 }
 
 func TestVerifierFailClosed(t *testing.T) {
 	e := newEnv(t, auth.ModeStubDeny)
-	pub := randomPubKey(t)
-	var ch spec.ChallengeResponse
-	resp := e.do(http.MethodPost, spec.PathChallenges, spec.ChallengeRequest{
-		Purpose: spec.PurposeRegister, PubKey: auth.B64.EncodeToString(pub),
-	}, "")
-	e.decode(resp, &ch)
-	resp = e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
-		PubKey: auth.B64.EncodeToString(pub), Nickname: "x",
-		ChallengeID: ch.ChallengeID, Signature: fakeSig(),
-	}, "")
-	e.wantError(resp, spec.ErrVerifierUnavailable)
+	pub := randomPublicKey(t)
+	code := gm.DeriveCode(pub)
+	ch := e.challenge(spec.PurposeRegister)
+	resp := e.do(http.MethodPost, spec.PathCodes, spec.RegisterCodeRequest{
+		Code: code, PublicKey: auth.B64.EncodeToString(pub), Nickname: "x",
+	}, map[string]string{
+		spec.HeaderCode:        code,
+		spec.HeaderChallengeID: ch.ChallengeID,
+		spec.HeaderSignature:   auth.B64.EncodeToString(randomBytes(71)),
+	})
+	e.wantError(resp, spec.ErrServiceUnavailable)
 }
 
-// TestNoFilenameOrPlaintextPersisted 是 Gate 那一条的自动化版本：
-// 服务端从不上行文件名与明文，库与盘都不该出现它们。
+// TestNoFilenameOrPlaintextPersisted 是 Gate 那条的自动化版本。
 func TestNoFilenameOrPlaintextPersisted(t *testing.T) {
 	e := newEnv(t, "")
-	_, senderToken, _ := e.register("sender")
-	recipientCode, recipientToken, _ := e.register("recipient")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, nil)
+	e.uploadAll(tr, f)
+	dl := e.openLease(tr.TransferID)
+	_ = e.do(http.MethodGet, spec.ChunkPath(tr.TransferID, 1), nil, map[string]string{spec.HeaderDownloadID: dl})
 
-	f := e.createPackage(senderToken, recipientCode)
-	_ = e.putPrelude(senderToken, f.Info.PackageID, f.Prelude)
-	for i, c := range f.Chunks {
-		_ = e.putChunk(senderToken, f.Info.PackageID, i, c)
-	}
-	_ = e.do(http.MethodPost, spec.CommitPath(f.Info.PackageID), nil, senderToken)
-	_ = e.do(http.MethodGet, spec.ChunkPath(f.Info.PackageID, 1), nil, recipientToken)
-
-	// 这些标记只存在于客户端，永远不该上行；用它们做探针。
 	for _, marker := range []string{"secret-report.pdf", "PDF-1.7", "quarterly-secret"} {
 		assertMarkerAbsentInDB(t, e.st, marker)
 		assertMarkerAbsentInBlobNames(t, e.dir, marker)
 	}
 
-	// 盘上只有不透明字节：文件名只能是固定名字或块序号。
-	entries, err := os.ReadDir(filepath.Join(e.dir, f.Info.PackageID[:2], f.Info.PackageID))
+	// 盘上只有不透明字节：目录里只有 prelude 与 chunks。
+	entries, err := os.ReadDir(filepath.Join(e.dir, tr.TransferID[:2], tr.TransferID))
 	if err != nil {
-		t.Fatalf("read package dir: %v", err)
+		t.Fatalf("read dir: %v", err)
 	}
 	for _, entry := range entries {
-		name := entry.Name()
-		if name == "prelude" || name == "chunks" {
-			continue
+		if entry.Name() != "prelude" && entry.Name() != "chunks" {
+			t.Fatalf("unexpected entry %q", entry.Name())
 		}
-		t.Fatalf("unexpected file in package dir: %q", name)
 	}
 }
 
 // ---------- helpers ----------
 
+func (e *env) uploadAll(tr spec.CreateTransferResponse, f fixture) {
+	e.t.Helper()
+	if resp := e.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusCreated {
+		e.t.Fatalf("put prelude: %d %s", resp.status, resp.body)
+	}
+	for i, c := range f.Chunks {
+		if resp := e.putChunk(tr.UploadToken, tr, i, c); resp.status != http.StatusCreated {
+			e.t.Fatalf("put chunk %d: %d %s", i, resp.status, resp.body)
+		}
+	}
+	if resp := e.do(http.MethodPost, spec.CompletePath(tr.TransferID), nil,
+		map[string]string{spec.HeaderUploadToken: tr.UploadToken}); resp.status != http.StatusOK {
+		e.t.Fatalf("complete: %d %s", resp.status, resp.body)
+	}
+}
+
+func (e *env) openLease(transferID string) string {
+	e.t.Helper()
+	resp := e.do(http.MethodGet, spec.PreludePath(transferID), nil, nil)
+	if resp.status != http.StatusOK {
+		e.t.Fatalf("open lease: %d %s", resp.status, resp.body)
+	}
+	dl := resp.header.Get(spec.HeaderDownloadID)
+	if dl == "" {
+		e.t.Fatal("missing download id")
+	}
+	return dl
+}
+
+func (e *env) ackHeaders(code, downloadID string) map[string]string {
+	h := e.authHeaders(spec.PurposeTransferAck, code)
+	h[spec.HeaderDownloadID] = downloadID
+	return h
+}
+
 func randomBytes(n int) []byte {
 	b := make([]byte, n)
-	for i := range b {
-		b[i] = byte((i*31 + 7) % 251)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
 	}
 	return b
 }
 
-func randomPubKey(t *testing.T) []byte {
+func randomPublicKey(t *testing.T) []byte {
 	t.Helper()
 	b := make([]byte, 65)
 	b[0] = 0x04
@@ -598,9 +975,6 @@ func randomPubKey(t *testing.T) []byte {
 	return b
 }
 
-func fakeSig() string { return auth.B64.EncodeToString(randomBytes(71)) }
-
-// assertMarkerAbsentInDB 扫当前 schema 里所有 text/bytea 列。
 func assertMarkerAbsentInDB(t *testing.T, st *store.Store, marker string) {
 	t.Helper()
 	ctx := context.Background()
@@ -625,11 +999,11 @@ func assertMarkerAbsentInDB(t *testing.T, st *store.Store, marker string) {
 	rows.Close()
 
 	for _, c := range cols {
-		if !strings.Contains(c.dataType, "text") && !strings.Contains(c.dataType, "bytea") && !strings.Contains(c.dataType, "character") {
+		dt := c.dataType
+		if !strings.Contains(dt, "text") && !strings.Contains(dt, "bytea") && !strings.Contains(dt, "character") {
 			continue
 		}
-		q := fmt.Sprintf("SELECT %s::text FROM %s",
-			quoteIdent(c.column), quoteIdent(c.table))
+		q := fmt.Sprintf("SELECT %s::text FROM %s", quoteIdent(c.column), quoteIdent(c.table))
 		vals, err := st.Pool().Query(ctx, q)
 		if err != nil {
 			t.Fatalf("scan %s.%s: %v", c.table, c.column, err)
@@ -642,16 +1016,14 @@ func assertMarkerAbsentInDB(t *testing.T, st *store.Store, marker string) {
 			}
 			if v != nil && strings.Contains(*v, marker) {
 				vals.Close()
-				t.Fatalf("marker %q found in DB column %s.%s", marker, c.table, c.column)
+				t.Fatalf("marker %q found in %s.%s", marker, c.table, c.column)
 			}
 		}
 		vals.Close()
 	}
 }
 
-func quoteIdent(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-}
+func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
 func assertMarkerAbsentInBlobNames(t *testing.T, root, marker string) {
 	t.Helper()
@@ -665,6 +1037,6 @@ func assertMarkerAbsentInBlobNames(t *testing.T, root, marker string) {
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("walk blob dir: %v", err)
+		t.Fatalf("walk: %v", err)
 	}
 }

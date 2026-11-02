@@ -1,44 +1,52 @@
 package spec
 
-// 限速与锁定的默认阈值（骨架期占位值）。
-//
-// DRAFT(API.md): 全部阈值、窗口长度、锁定时长待对齐；这里是「能让接口跑起来
-// 且明显偏保守」的一组值，不是最终产品参数。对齐时只改本文件。
+// 限速与反滥用默认额度，逐条对齐 docs/API.md §11.1 / §11.3 / §11.4。
+// 服务端可配，但契约给出的是默认值。
 
-// Limit 描述一个「窗口 + 配额」。
+// Limit 描述一个「时间窗 + 配额」。
 type Limit struct {
-	// Window 是计数窗口长度（秒）。
-	WindowSeconds int `json:"windowSeconds"`
-	// Max 是窗口内允许的请求数。
-	Max int `json:"max"`
-	// Burst 是允许的瞬时突发（令牌桶容量），0 表示等于 Max。
-	Burst int `json:"burst"`
+	WindowSeconds int `json:"window_seconds"`
+	Max           int `json:"max"`
+	Burst         int `json:"burst"`
 }
 
-// DefaultLimits 按用途给出限速档位。
+// DefaultLimits 是契约默认额度。
 var DefaultLimits = struct {
-	// 按 IP。
-	CodeLookupPerIP          Limit // 按码查询公钥：严格限速（防枚举 4 位码）
-	CodeRegisterPerIP        Limit
-	SessionPerIP             Limit
-	PackageCreatePerIP       Limit
-	UploadBytesPerIPPerMin   int64 // 上传字节/分钟/IP
-	DownloadBytesPerIPPerMin int64
-	// 按码。
-	CodeLookupPerCode    Limit
-	PackageCreatePerCode Limit
-	// 失败锁定。
-	FailureThreshold   int // 连续失败次数
-	FailureLockSeconds int // 锁定时长
+	CodeLookupPerIP         Limit
+	ChallengePerIP          Limit
+	TransferReadPerIP       Limit
+	TransferCreatePerCode   Limit
+	NicknameUpdatePerCode   Limit
+	ChunkPutPerTransfer     Limit
+	TransferReadPerTransfer Limit
+	WSConnPerIP             Limit
+
+	// 失败锁定：同一 IP 对同一码连续 CODE_NOT_FOUND 5 次 → 423 CODE_LOCKED。
+	CodeLockThreshold int
+	// 锁定时长从 1 分钟起，逐次翻倍，上限 60 分钟。
+	CodeLockBaseSeconds int
+	CodeLockMaxSeconds  int
+
+	// 签名失败：同一码 10 次/小时 → 429（scope=code）。
+	AuthFailurePerCode Limit
+
+	// 单码并发未终结传输上限。
+	MaxConcurrentTransfersPerCode int
 }{
-	CodeLookupPerIP:          Limit{WindowSeconds: 60, Max: 60, Burst: 20},
-	CodeRegisterPerIP:        Limit{WindowSeconds: 60, Max: 10, Burst: 5},
-	SessionPerIP:             Limit{WindowSeconds: 60, Max: 30, Burst: 10},
-	PackageCreatePerIP:       Limit{WindowSeconds: 60, Max: 20, Burst: 5},
-	UploadBytesPerIPPerMin:   512 << 20, // 512 MiB/min
-	DownloadBytesPerIPPerMin: 1 << 30,   // 1 GiB/min
-	CodeLookupPerCode:        Limit{WindowSeconds: 60, Max: 30, Burst: 10},
-	PackageCreatePerCode:     Limit{WindowSeconds: 3600, Max: 100, Burst: 20},
-	FailureThreshold:         5,
-	FailureLockSeconds:       900,
+	CodeLookupPerIP:         Limit{WindowSeconds: 60, Max: 30, Burst: 30},
+	ChallengePerIP:          Limit{WindowSeconds: 60, Max: 20, Burst: 20},
+	TransferReadPerIP:       Limit{WindowSeconds: 60, Max: 120, Burst: 120},
+	TransferCreatePerCode:   Limit{WindowSeconds: 3600, Max: 10, Burst: 10},
+	NicknameUpdatePerCode:   Limit{WindowSeconds: 3600, Max: 5, Burst: 5},
+	ChunkPutPerTransfer:     Limit{WindowSeconds: 60, Max: 600, Burst: 600},
+	TransferReadPerTransfer: Limit{WindowSeconds: 60, Max: 600, Burst: 600},
+	WSConnPerIP:             Limit{WindowSeconds: 60, Max: 10, Burst: 10},
+
+	CodeLockThreshold:   5,
+	CodeLockBaseSeconds: 60,
+	CodeLockMaxSeconds:  3600,
+
+	AuthFailurePerCode: Limit{WindowSeconds: 3600, Max: 10, Burst: 10},
+
+	MaxConcurrentTransfersPerCode: 20,
 }
