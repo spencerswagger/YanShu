@@ -313,3 +313,113 @@ fn tampering_breaks_either_auth_or_signature() {
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{:02x}", x)).collect()
 }
+
+/// 契约 §7.2 / §7.3 的 AAD **逐字节**核对（六个绑定字段 + 域标签，32B / 31B 大端）。
+///
+/// 期望值直接取自契约 §15.2 的 AAD hex，不做任何重排：
+/// * `AAD_CHUNK(i=0, last=1, pt_len=5)` = `01 | "YSPK" | 0100 | chunk_size | chunk_count |
+///   plaintext_size | index | last | pt_len`
+/// * `AAD_MANIFEST` = `02 | "YSPK" | 0100 | flags | chunk_size | chunk_count |
+///   plaintext_size | manifest_pt_len`
+#[test]
+fn aad_bytes_match_contract_section_7() {
+    use yanshu_sm::pack::{aad_chunk, aad_manifest, Header};
+
+    let header = Header {
+        flags: 0x0000_0002,
+        chunk_size: 1_048_576,
+        chunk_count: 1,
+        plaintext_size: 5,
+        wrapped_key_len: 129,
+        manifest_len: 109,
+        manifest_pt_len: 93,
+        sender_pub_len: 65,
+        kdf_salt: [0u8; 16],
+        sig_len: 70,
+    };
+
+    assert_eq!(
+        hex(&aad_chunk(&header, 0, true, 5)),
+        "015953504b010000100000000000010000000000000005000000000100000005",
+        "§7.2 AAD_CHUNK（32 字节）"
+    );
+    assert_eq!(
+        hex(&aad_manifest(&header)),
+        "025953504b010000000002001000000000000100000000000000050000005d",
+        "§7.3 AAD_MANIFEST（31 字节）"
+    );
+
+    // 六个绑定字段各自改动，AAD 必须变（否则等于没绑）
+    let base = aad_chunk(&header, 0, true, 5);
+    assert_ne!(aad_chunk(&header, 1, true, 5), base, "index 未绑定");
+    assert_ne!(
+        aad_chunk(
+            &Header {
+                chunk_count: 2,
+                ..header.clone()
+            },
+            0,
+            true,
+            5
+        ),
+        base,
+        "chunk_count 未绑定"
+    );
+    assert_ne!(
+        aad_chunk(
+            &Header {
+                chunk_size: 1_048_577,
+                ..header.clone()
+            },
+            0,
+            true,
+            5
+        ),
+        base,
+        "chunk_size 未绑定"
+    );
+    assert_ne!(
+        aad_chunk(
+            &Header {
+                plaintext_size: 6,
+                ..header.clone()
+            },
+            0,
+            true,
+            5
+        ),
+        base,
+        "plaintext_size 未绑定"
+    );
+    assert_ne!(
+        aad_chunk(&header, 0, false, 5),
+        base,
+        "AAD 必须随 last 变化"
+    );
+    assert_ne!(
+        aad_chunk(&header, 0, true, 6),
+        base,
+        "AAD 必须随 pt_len 变化"
+    );
+}
+
+/// 契约 §8.4：清单摘要取**明文块**（不是密文、不是 tag）。
+#[test]
+fn digest_is_over_plaintext_block() {
+    let header = pack::read_header(&v1_pack_bytes()).expect("header");
+    let _ = header;
+    // V1 明文是 "hello"
+    assert_eq!(
+        hex(&yanshu_sm::sm3::sm3(b"hello")),
+        "becbbfaae6548b8bf0cfcad5a27183cd1be6093b1cceccc303d9c61d0a645268",
+        "§15.2 DIGEST[0] 应等于 SM3(明文块)"
+    );
+    // 解包后清单里的摘要必须与明文块重算一致
+    let d_r: [u8; 32] = h(D_R).try_into().unwrap();
+    let out = pack::unpack(&v1_pack_bytes(), &d_r, None).expect("unpack");
+    assert_eq!(out.manifest.digests[0], yanshu_sm::sm3::sm3(&out.data));
+}
+
+fn v1_pack_bytes() -> Vec<u8> {
+    v1_pack()
+}

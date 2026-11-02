@@ -150,6 +150,18 @@ Rust 侧 API 为 `pack::unpack(pack, recipient_sk, Option<&str>)`（第三个参
   截断 `TRUNCATED`·`LENGTH_INCONSISTENT` / 缺块 `CHUNK_MISSING`·`MISSING_BLOCK` /
   版本 `UNSUPPORTED_VERSION` / tag `TAG_MISMATCH`·`CHUNK_AUTH_FAILED`。
 
+## 9.4 AAD 的字节级证明
+
+`contract_samples.rs::aad_bytes_match_contract_section_7` 直接断言：
+
+* `AAD_CHUNK(0, last=1, pt_len=5)` == 契约 §15.2 的 32 字节 hex
+  `015953504b010000100000000000010000000000000005000000000100000005`；
+* `AAD_MANIFEST` == 契约 §15.3 的 31 字节 hex
+  `025953504b010000000002001000000000000100000000000000050000005d`；
+* 六个绑定字段（`CHUNK_INDEX / CHUNK_COUNT / CHUNK_SIZE / PLAINTEXT_SIZE / LAST_FLAG / PT_LEN`）
+  各改动一处，AAD 必变——少绑一个都会断言失败。
+* `digest_is_over_plaintext_block`：清单摘要 == `SM3(明文块)`（不是密文、不是 tag）。
+
 ## 9.5 评审要求的五类反例
 
 `crypto/sm/tests/review_counterexamples.rs` 按"评审给的五种攻击"各一条，断言到具体错误名：
