@@ -61,10 +61,10 @@
  * | `ys_unpack_v1` / `ys_unpack_meta_v1` | pack、priv 32 | 明文 / JSON |
  * | `ys_unpack_meta_prelude` | pack（≥ prelude）、priv 32 | JSON（`scope=prelude`） |
  *
- * **ABI 入参公钥一律 64 字节 `X‖Y`，不带 `0x04`**（`ys_pack_v1` 与 `ys_pack` 相同）；
- * 需要 `0x04` 时内核内部补。**65 字节含 `0x04` 只出现在**：
- * 包内 `SENDER_PUB` 段、`WRAPPED_KEY` 的 C1、`ys_unpack_meta*` JSON 的 `sender_pub`
- * （这三处就是 wire/包内原文）。
+ * **一句话**：`ys_sm2_keygen` 与 `ys_sm2_pubkey` 的输出都是 **64 字节 `X‖Y`（不含 `0x04`）**；
+ * 65 字节含 `0x04` 只出现在三处**包内/元数据**位置——`SENDER_PUB` 段、`WRAPPED_KEY` 的 C1、
+ * `ys_unpack_meta*` JSON 的 `sender_pub`，`0x04` 前缀**由内核在打包/解包时补或去**，
+ * 调用方不参与。所有入参公钥也一律 64 字节 `X‖Y`（`ys_pack_v1` 与 `ys_pack` 相同）。
  *
  * ## 错误名（唯一格式）
  * `ys_error_name()` 与 `ys_error_name_v1()` 都返回 **`CRYPTO_*`**（与 Rust 侧

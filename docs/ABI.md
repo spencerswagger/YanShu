@@ -244,8 +244,10 @@ const isContract = ys_version() === 0x00010000 && ys_header_len() === 112
 > `tests/ffi_user_code.rs` 断言原生 FFI，`tests/wasm_user_code.rs` 用 Node 加载
 > 实际 wasm 产物断言同一份向量）。`check_symbol` 同理。
 
-**65 字节含 `0x04` 只出现在输出/包内**：包内 `SENDER_PUB`、`WRAPPED_KEY` 的 C1、
-`ys_unpack_meta*` JSON 的 `sender_pub`。其余**所有入参公钥都是 64 字节 `X‖Y`**。
+**一句话**：`ys_sm2_keygen` / `ys_sm2_pubkey` 的输出是 **64 字节 `X‖Y`（不含 `0x04`）**；
+65 字节含 `0x04` 只出现在三处**包内/元数据**位置——`SENDER_PUB` 段、`WRAPPED_KEY` 的 C1、
+`ys_unpack_meta*` JSON 的 `sender_pub`，前缀**由内核在打包/解包时补或去**，调用方不参与；
+其余所有入参公钥一律 64 字节 `X‖Y`。
 
 **`ys_pack` 与 `ys_pack_v1` 的关系**：除 `ext`、`created_at_ms`、`chunk_size` 三个参数外
 **完全等价**——`ys_pack(...)` ≡ `ys_pack_v1(..., ext="", created_at_ms=0,
