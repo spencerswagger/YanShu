@@ -16,6 +16,7 @@
 | `docs/ABI.md` | **端侧 C ABI 最终版**（原型/出参/错误码/导出一览/迁移说明） |
 | `docs/crypto-pack-impl-notes.md` | 实现与 `docs/CRYPTO-PACK.md` v1 的对照（§15 样例逐字节核对） |
 | `vectors/host-crosscheck.json` / `.md` | 宿主侧对照请求（机器可读 + 人读表格） |
+| `vectors/sm2-verify-vectors.json` | 服务端 SM2 验签供给包（SIG_INPUT 样例 + 验签向量） |
 | `testdata/vectors.json` | 全 hex 测试向量（SM3/SM4-GCM/SM2/用户码/完整加密包） |
 | `scripts/crosscheck/` | GmSSL 逐字节交叉验证（`run.sh` 一键复跑） |
 | `scripts/wasm-smoke/` | wasm C ABI 冒烟测试（Node，无 wasm-bindgen） |

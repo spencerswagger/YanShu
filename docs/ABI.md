@@ -104,6 +104,28 @@ int32_t ys_unpack_meta_v1(const uint8_t *pack, size_t pack_len, const uint8_t *r
 > ⚠️ 用 `_v2` 时必须真的少传一个参数。wasm 调函数时多余实参会被**静默丢弃**并整体错位，
 > 不是编译错。
 
+## 3.4 SM2 验签（服务端/Core 用）
+
+```c
+int32_t ys_sm2_verify_der(const uint8_t *public_key /* 64 = X‖Y */,
+                          const uint8_t *msg, size_t msg_len,
+                          const uint8_t *sig_der, size_t sig_len);
+// 1 = 通过，0 = 不通过，负数 = 参数/DER/曲线错误
+```
+
+- 固定 `userID = 1234567812345678`（ENTL = 0x0080），`e = SM3(ZA ‖ msg)`；MID = 默认 ID。
+- 签名只接受**规范 DER**（最短 INTEGER、无尾随字节）；非规范直接 `CRYPTO_SIGNATURE_INVALID`。
+- 供给包：`vectors/sm2-verify-vectors.json`
+  - `sig_input_samples`：3 组 `SIG_INPUT`（REGISTER / NICKNAME_UPDATE / TRANSFER_CREATE）
+    的完整 hex 与长度，标明 `CODE(4)`、`u16be` 昵称前缀的位置；
+  - `verify_vectors`：5 组（正常 / 签名改 1 字节 / 消息被改 / userID 不同 / 公钥不符），
+    每组给 `pub65`、`msg`、`za`、`digest_e`、`sig_der`、`expect_verify`；
+  - `fixtures`：私钥与两把公钥（含"另一把"用于公钥不符）。
+- 注意：ABI 固定默认 userID；`different_user_id` 那条用于验证 ZA 口径（应用层用该 ID 复算）。
+- **wazero（Go 纯 Go wasm 运行时）实测**：0 import 直接 `Instantiate`，32 个函数可见，
+  `ys_version()=0x00010000`，`ys_sm2_verify_der` 对上述向量 4/4 结果符合预期
+  （正常 1；签名改字节/消息改/公钥不符均 0）。Core 可直接用同一份 `.wasm`。
+
 ## 3.5 版本判定（前端做标签用）
 
 `ys_version()` 返回的是 **`uint32_t` 编号 `0x00010000`，不是字符串**。

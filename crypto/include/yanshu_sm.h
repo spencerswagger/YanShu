@@ -121,6 +121,11 @@ int32_t ys_sm2_sign_der(const uint8_t *priv_key /* 32 */, const uint8_t *seed, s
                         const uint8_t *msg, size_t msg_len, uint8_t *sig_out, size_t sig_cap,
                         size_t *sig_len_out);
 
+/* 契约口径验签：公钥 64B X‖Y + DER 签名；1 通过 / 0 不通过 / 负数错误。
+ * 固定 userID = 1234567812345678，e = SM3(ZA‖msg)。服务端校验 X-YS-Signature 用这个。 */
+int32_t ys_sm2_verify_der(const uint8_t *public_key /* 64 */, const uint8_t *msg, size_t msg_len,
+                          const uint8_t *sig_der, size_t sig_len);
+
 /* ---------------------------------------------------------------- 用户码（4 位，不加长） */
 
 /* 入参 64 字节公钥；内核补 0x04 后按契约（SM3 覆盖 65 字节）派生 4 位码 */

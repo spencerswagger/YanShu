@@ -487,6 +487,35 @@ pub unsafe extern "C" fn ys_sm2_verify(
     }
 }
 
+/// 契约口径的验签：入参公钥 64 字节 `X‖Y`、签名 DER（70..72 字节）。
+///
+/// 1 = 通过，0 = 不通过，负数 = 参数/曲线/DER 非规范错误。
+/// 服务端（Go/wazero 等）校验 `X-YS-Signature` 时用这个，不用自己解 DER。
+#[no_mangle]
+pub unsafe extern "C" fn ys_sm2_verify_der(
+    public_key: *const u8,
+    msg: *const u8,
+    msg_len: usize,
+    sig_der: *const u8,
+    sig_len: usize,
+) -> i32 {
+    let r = (|| -> Result<bool> {
+        let pub64 = fixed::<64>(public_key)?;
+        let msg = as_slice(msg, msg_len)?;
+        let der_bytes = as_slice(sig_der, sig_len)?;
+        let (r, s) = der::decode_signature(der_bytes)?;
+        let mut raw = [0u8; 64];
+        raw[..32].copy_from_slice(&r);
+        raw[32..].copy_from_slice(&s);
+        sm2::verify(&pub64, msg, sm2::DEFAULT_ID, &raw)
+    })();
+    match r {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(e) => e.code(),
+    }
+}
+
 /// 契约口径的签名（DER 70..72 字节），新增导出。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_sign_der(

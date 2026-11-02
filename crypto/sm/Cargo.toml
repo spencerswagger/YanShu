@@ -28,6 +28,10 @@ name = "gen-code-vectors"
 path = "src/bin/gen_code_vectors.rs"
 
 [[bin]]
+name = "gen-core-vectors"
+path = "src/bin/gen_core_vectors.rs"
+
+[[bin]]
 name = "gen-host-crosscheck"
 path = "src/bin/gen_host_crosscheck.rs"
 

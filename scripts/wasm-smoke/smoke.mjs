@@ -21,6 +21,7 @@ const u8 = () => new Uint8Array(e.memory.buffer);
 const write = (ptr, data) => u8().set(data, ptr);
 const read = (ptr, n) => u8().slice(ptr, ptr + n);
 const hex = (b) => Buffer.from(b).toString("hex");
+const fromHex = (s) => Uint8Array.from(Buffer.from(s, "hex"));
 const dv = () => new DataView(e.memory.buffer);
 
 function alloc(n) {
@@ -129,6 +130,28 @@ expectRc(
   -29,
   "tampered tag", // CRYPTO_CHUNK_AUTH_FAILED（首版 -15 的规范值）
 );
+
+// ---- SM2 DER 验签（服务端/Core 口径）：用 vectors/sm2-verify-vectors.json 驱动
+{
+  const vecPath = new URL("../../vectors/sm2-verify-vectors.json", import.meta.url);
+  const vec = JSON.parse(fs.readFileSync(vecPath, "utf8"));
+  for (const v of vec.verify_vectors) {
+    // ABI 固定默认 userID；不同 ID 的用例只用于验证 ZA 口径（应用层复算），不走 ABI
+    if (v.user_id !== "1234567812345678") continue;
+    const pub = fromHex(v.pub65).slice(1); // ABI 64 字节 X‖Y
+    const msg = fromHex(v.msg);
+    const sig = fromHex(v.sig_der);
+    const pubP = alloc(64); write(pubP, pub);
+    const msgP = alloc(msg.length); write(msgP, msg);
+    const sigP = alloc(sig.length); write(sigP, sig);
+    const rc = e.ys_sm2_verify_der(pubP, msgP, msg.length, sigP, sig.length);
+    const got = rc === 1 ? true : rc === 0 ? false : null;
+    if (got !== v.expect_verify) {
+      throw new Error(`verify_der ${v.name}: rc=${rc} want ${v.expect_verify}`);
+    }
+    e.ys_free(pubP, 64); e.ys_free(msgP, msg.length); e.ys_free(sigP, sig.length);
+  }
+}
 
 // ---- 错误名：唯一格式 CRYPTO_*，旧数值能被解析为同一名字
 {
