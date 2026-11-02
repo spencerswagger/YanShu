@@ -43,6 +43,17 @@ python3 "$here/check_code_consistency.py" --wasm "$WASM" --ys-tool "$TOOL" \
 rc_code=$?
 set -e
 
+if [ -n "${YS_SERVER_DIR:-}" ]; then
+    echo "== 3a/5 服务端内嵌内核 sha256 =="
+    set +e
+    python3 "$here/check_server_kernel.py" --server-dir "$YS_SERVER_DIR" | tail -4
+    rc_kernel=$?
+    set -e
+else
+    rc_kernel=0
+    echo "== 3a/5 服务端内嵌内核 sha256：跳过（未设 YS_SERVER_DIR）=="
+fi
+
 echo "== 3/5 prelude-only 元数据语义 =="
 set +e
 python3 "$here/check_prelude_meta.py" --wasm "$WASM" --json-out "$work/prelude-meta.json" | tail -4
@@ -57,5 +68,6 @@ echo "== 5/5 汇总 =="
 echo "  head 产物：$BYTES 字节  sha256=$SHA  ys_version=$VER"
 echo "  用户码一致性：exit=$rc_code"
 echo "  prelude-only 元数据：exit=$rc_prelude"
+echo "  服务端内嵌内核 sha：exit=$rc_kernel${YS_SERVER_DIR:+（$YS_SERVER_DIR）}"
 echo "  证据二：exit=$rc_ev2"
-[ "$rc_code" -eq 0 ] && [ "$rc_prelude" -eq 0 ] && [ "$rc_ev2" -eq 0 ]
+[ "$rc_code" -eq 0 ] && [ "$rc_prelude" -eq 0 ] && [ "$rc_ev2" -eq 0 ] && [ "$rc_kernel" -eq 0 ]

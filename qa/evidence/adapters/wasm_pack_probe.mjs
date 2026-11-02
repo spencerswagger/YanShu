@@ -131,6 +131,16 @@ if (mode === "meta" || mode === "meta-prelude") {
     console.log(`ERR ${errName(err.code)}`);
     process.exit(1);
   }
+} else if (mode === "exports") {
+  // 打印导出清单：函数数 + 是否有 memory + 名称（供内核同源/完整性二级校验）
+  const names = Object.keys(e).sort();
+  const funcs = names.filter((n) => typeof e[n] === "function");
+  console.log(JSON.stringify({
+    count: names.length,
+    functions: funcs.length,
+    hasMemory: typeof e.memory !== "undefined",
+    names,
+  }));
 } else if (mode === "check-symbol") {
   // ys_check_symbol(pub64, out1) / ys_check_symbol_wire(pub65, out1)
   const raw = Buffer.from((rest[1] || "").trim(), "hex");

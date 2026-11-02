@@ -26,6 +26,8 @@ results/
 | `contract-v1/c1b87d0a-evidence2-freeze.md` | `031e95b` | `80400ec` | `c1b87d0a…c97259f` | — | wasm-production | `qa/evidence/run_evidence2_wasm.sh <rune-crate> <workdir>` | 证据二 6/6 + 11/11 + 变体 18/18，未报错 0 |
 | `contract-v1/c1b87d0a-user-code-consistency.md` | `031e95b` | `80400ec` | `c1b87d0a…c97259f` | — | wasm + 原生 | `python3 qa/evidence/check_code_consistency.py --wasm <wasm> --ys-tool <ys-tool> [--base-url …]` | 26/26：四形态 `PB_S=AWQW`、校验位 `X`、反向 65→64 得 `X2EH`、归一化 14 组 |
 | `contract-v1/2026-11-02-prelude-meta.md` | `031e95b` | `031e95b` | `c1b87d0a…c97259f` | — | wasm-production | `python3 qa/evidence/check_prelude_meta.py --wasm <wasm>` | prelude-only 能读且 `data_verified:false`；整包入口拒绝半包；篡改必失败（6/6） |
+| `contract-v1/2026-11-02-kid-and-kernel-sha.md` | 无 | 服务端 `739293a` | 二进制 `a9f3933e…6fc44` | stub-allow | native-api | `python3 qa/evidence/check_token_lifecycle.py --kid k1 …`；`python3 qa/evidence/check_server_kernel.py --server-dir <src>` | kid 轮换三态成立（401 `AUTH_TOKEN_REVOKED`）；**服务端内嵌内核 sha 与冻结不一致（FAIL）**；老库缺 `upload_token_kid` 列 |
+| `web/2026-11-02-D-core-sm2-real-auth.md`（Web 产出） | 无 | 服务端 `caf00ac` + 冻结内核 | `c1b87d0a…` | **真 sm2** | wasm-production | 由 Web 的 `npm run` 脚本复跑 | **真认证链路**：浏览器双端真验签，2 506 889 字节逐字节一致 |
 | `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | 无（服务端证据） | 服务端 `08d40e7` / 端侧 `0f33a15` | 二进制 `275fc463…6af55` | **真 sm2** | native-api | `YS_EV1_VERIFIER=sm2 YS_EV1_LOG_MODE=dir YS_DELIVER_BIN=core-deliver qa/evidence/run_evidence1_core.sh <core-src> <rune-crate> <wd>` | 存储/DB/日志三处零命中，对照 1/1/1/0 |
 | `contract-v1/2026-11-02-host-binary-980fc44.md` | 无 | 服务端 `08d40e7`（含 `980fc44` 旧记录） | 二进制 `275fc463…6af55` | 真 sm2 / stub | native-api | `python3 qa/evidence/check_token_lifecycle.py --binary <bin> --dsn "<DSN>" --ys-tool <tool>` | 二进制三件套；token 三态 201→401→201 |
 | `contract-v1/2026-11-02-evidence1-core-run4-logfile.md` | 无 | 服务端 `28d75b0` | — | stub-allow | — | `YS_EV1_LOG_MODE=file … run_evidence1_core.sh` | 日志改 `YANSHU_LOG_FILE`/`LOG_DIR`；LEASED vs CONSUMED 残留对比 |
@@ -62,6 +64,26 @@ head 号只作溯源；**同一份验收产物以 sha256 为准**。规则：
 - 跨环境构建可能产生不同 sha（例如内核随仓库打进 tarball 时的 130,653 字节版
   `8b89dd7f…`），此时以**"sha256 白名单 + 该产物通过冻结向量套件"**判定同源，
   而不是死抠一个哈希。
+
+## 经验：同源 ≠ 同字节（跨环境重建 sha 不同）
+
+同一 commit 在不同工具链/环境下重建出的 wasm，**sha256 可能不同**。本沙盒实测：
+
+| 产物 | 大小 | sha256 |
+|---|---:|---|
+| 验收冻结产物（Gate/Web/Rune 三方一致） | 127,313 B | `c1b87d0a…7259f` |
+| Core 工作树里内嵌的那份 | 130,653 B | `8b89dd7f…154f9` |
+
+两者的 `ys_version()` 与导出数完全相同（`0x00010000`、34 函数 + memory），
+所以**只看版本/导出/commit 都发现不了差异**——但服务端验的就不是验收过的那份字节。
+
+规矩：
+
+1. 验收比 **sha256**，不比 commit；head 号只作溯源；
+2. 服务端内嵌内核必须单独校验：`check_server_kernel.py --server-dir <源码根>`
+   （sha 不等 FAIL、版本/导出不符 FAIL、文件缺失 BLOCKED）；
+3. 跨环境允许不同构建时，用「sha256 白名单 + 该产物通过冻结向量套件」双条件判定，
+   不能只凭"同 commit"放行。
 
 ## 反例二：入参宽度错一位造成的"假缺陷"（2026-11-02，P0 级误报）
 

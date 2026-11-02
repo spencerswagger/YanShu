@@ -35,6 +35,21 @@ import urllib.request
 from pathlib import Path
 
 B64 = lambda b: base64.urlsafe_b64encode(b).decode().rstrip("=")
+
+
+def next_kid(kid: str) -> str:
+    """单调递增：k1→k2、1→2、k001→k002；其它形式直接追加 +1 后缀。"""
+    import re
+    m = re.fullmatch(r"([A-Za-z_]*)(\d+)", kid)
+    if m:
+        return f"{m.group(1)}{int(m.group(2)) + 1}"
+    return kid + "-next"
+
+
+def kid_note(a, b) -> str:
+    if not b:
+        return ""
+    return f" + kid={a}→{b}" if a != b else f" + kid={a}"
 # stub-allow 下签名只做形状检查；本实验验的是 token，不是签名
 SIG = B64(b"\x30\x44" + b"\x00" * 66)
 
@@ -43,11 +58,14 @@ def free_port() -> int:
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 
 
-def start(binary: str, dsn: str, work: Path, secret: str, extra: dict | None = None):
+def start(binary: str, dsn: str, work: Path, secret: str, kid: str | None = None,
+          extra: dict | None = None):
     port = free_port()
     env = dict(os.environ, YANSHU_DATABASE_URL=dsn, YANSHU_BLOB_DIR=str(work / "blobs"),
                YANSHU_ADDR=f"127.0.0.1:{port}", YANSHU_VERIFIER="stub-allow",
                YANSHU_TOKEN_SECRET=secret, YANSHU_LOG_DIR=str(work / "logs"))
+    if kid is not None:
+        env["YANSHU_TOKEN_KID"] = kid
     env.update(extra or {})
     proc = subprocess.Popen([binary], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(60):
@@ -84,6 +102,8 @@ def main(argv=None) -> int:
     ap.add_argument("--dsn", required=True)
     ap.add_argument("--ys-tool", required=True, help="用于派生用户码与 SM3")
     ap.add_argument("--work", default="/tmp/ys-token")
+    ap.add_argument("--kid", default=None,
+                    help="设置 YANSHU_TOKEN_KID（fa479d9 起为必配项）；给了就按 kid 轮换做三态")
     ap.add_argument("--epoch-check", action="store_true",
                     help="额外做一组：只改 YANSHU_TOKEN_EPOCH（secret 不变），验证是否真存在版本吊销")
     ap.add_argument("--json-out")
@@ -104,7 +124,7 @@ def main(argv=None) -> int:
     code = subprocess.run([args.ys_tool, "user-code", pub65], capture_output=True, text=True).stdout.strip()
     prelude = os.urandom(495)
 
-    proc, port = start(args.binary, args.dsn, work, "a" * 32)
+    proc, port = start(args.binary, args.dsn, work, "a" * 32, args.kid)
     try:
         st, body = call(port, "POST", "/v1/challenges", json.dumps({"purpose": "REGISTER"}).encode(),
                         {"Content-Type": "application/json"})
@@ -133,11 +153,11 @@ def main(argv=None) -> int:
         proc.terminate(); proc.wait()
 
     # 先自证：同一密钥下旧 token 可用（基线，避免"本来就不对"被当成吊销成功）
-    proc, port = start(args.binary, args.dsn, work, "a" * 32)
+    proc, port = start(args.binary, args.dsn, work, "a" * 32, args.kid)
     try:
         st, body = call(port, "PUT", f"/v1/transfers/{tid}/prelude", prelude,
                         {"Content-Type": "application/octet-stream", "X-YS-Upload-Token": token})
-        print(f"[基线] 同一 secret 下用 token 打 PUT /prelude → HTTP {st}"
+        print(f"[基线] 同一 secret{kid_note(args.kid, args.kid)} 下用 token 打 PUT /prelude → HTTP {st}"
               + (f"（{err_code(body)}）" if st >= 300 else ""))
         if st >= 300:
             print("[BLOCKED] 基线都不通过，本轮不能用来判断轮换是否生效", file=sys.stderr)
@@ -167,12 +187,14 @@ def main(argv=None) -> int:
         finally:
             proc.terminate(); proc.wait()
 
-    proc, port = start(args.binary, args.dsn, work, "b" * 32)
+    proc, port = start(args.binary, args.dsn, work, "b" * 32,
+                       next_kid(args.kid) if args.kid else None)
     try:
         st, body = call(port, "PUT", f"/v1/transfers/{tid}/prelude", prelude,
                         {"Content-Type": "application/octet-stream", "X-YS-Upload-Token": token})
         revoked = st in (401, 403)
-        print(f"[轮换后] secret=B 下用旧 token 打 PUT /prelude → HTTP {st}"
+        print(f"[轮换后] secret=B{kid_note(args.kid, next_kid(args.kid) if args.kid else None)} "
+              f"下用旧 token 打 PUT /prelude → HTTP {st}"
               + (f"（{err_code(body)}）" if st >= 300 else ""))
         # 第三态：轮换后重新签发的新 token 应当可用
         st3, body3 = call(port, "POST", "/v1/challenges",
