@@ -156,6 +156,32 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 **结论：递增 EPOCH 立即生效、无需重启**——与"KID 是唯一吊销开关"的设计一致。
 （只换 `TOKEN_SECRET` 的那条在「三、KID 矩阵」里已实测为 **200（不吊销）**。）
 
+### ②d `SIG_INPUT` 上限口径（8 组实测，字段级优先）
+
+| PURPOSE | 字段串上限 | `SIG_INPUT` 总长（= 40 + 字段串） |
+|---|---:|---:|
+| `0x01 REGISTER` | 69 | **109** |
+| `0x02 NICKNAME_UPDATE` | 38 | 78 |
+| `0x03 TRANSFER_CREATE` | 60 | 100 |
+| `0x04 TRANSFER_REVOKE` | 36 | 76 |
+| `0x05 INBOX_LIST` | 4 | 44 |
+| `0x06 WS_HELLO` | 4 | 44 |
+| `0x07 TRANSFER_ACK` | 36 | 76 |
+| `0x08 UPLOAD_TOKEN_ISSUE` | 36 | 76 |
+
+实测结论（`check_siginput_limits.py`，**4/4 通过**）：
+
+| 用例 | 结果 |
+|---|---|
+| 长度表推导出的合法上限 == 109 | **PASS** |
+| `REGISTER` 恰好 109 字节 | **PASS**（走到验签：401 `AUTH_SIGNATURE_INVALID`） |
+| `REGISTER` 110 字节（PUBKEY 66） | **PASS**：字段级错误 400 `BAD_REQUEST`（非 TOO_LONG） |
+| 昵称 33 字节 | **PASS**：400 `NICKNAME_INVALID`（字段级） |
+| 513 字节（昵称 467） | **N/A（不可观测）**：返回 400 `NICKNAME_INVALID`——字段级校验先行，512 门在 HTTP 层不可达；契约将注明"防御性上限、当前不可达，若触发回 `BAD_REQUEST`" |
+
+**结论：字段级优先、不用字节上限代替字段校验——实现正确**；缺的只是一个永远触发不了的专属码。
+**基线用途**：以后有人改字段上限，直接用上表比对是否越界（109 是硬上限）。
+
 ## 五、结论
 
 **建议 spencer 用这份产物重启**（`5a42bbdf…` 见上表；`deliver` 与内核同表），

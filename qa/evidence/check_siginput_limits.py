@@ -169,10 +169,10 @@ def main(argv=None) -> int:
         if st == 400 and c513 == "SIG_INPUT_TOO_LONG":
             results.append(("513 字节输入 → SIG_INPUT_TOO_LONG（400）", True, f"{st} {c513}"))
         elif st == 400 and c513 in ("NICKNAME_INVALID", "BAD_REQUEST", "CODE_FORMAT_INVALID"):
-            # 字段级校验先行（昵称 ≤32），>512 的门在 HTTP 层不可达——这是设计使然，
-            # 不能判 FAIL，也不能判 PASS（没观察到该码）。记 INCONCLUSIVE 并说明。
-            results.append(("513 字节输入 → SIG_INPUT_TOO_LONG（HTTP 不可达）", None,
-                            f"{st} {c513}（字段校验先行；该码只在库层单测可达）"))
+            # 口径（2026-11-02 定）：字段级校验先行、512 门在 HTTP 层不可达，属设计使然。
+            # 记 N/A（不可观测），不判 FAIL；契约将注明该码"防御性上限、当前不可达"。
+            results.append(("513 字节 → SIG_INPUT_TOO_LONG（N/A：不可观测）", None,
+                            f"{st} {c513}（字段级优先，按设计；该码不可达）"))
         else:
             results.append(("513 字节输入 → SIG_INPUT_TOO_LONG（400）", False, f"{st} {c513}"))
         print(f"  实测 513 字节（昵称 467）：{st} {c513}")
@@ -181,11 +181,12 @@ def main(argv=None) -> int:
 
     print("-" * 90)
     failed = sum(1 for _, ok, _ in results if ok is False)
-    incon = sum(1 for _, ok, _ in results if ok is None)
+    na = sum(1 for _, ok, _ in results if ok is None)
     for name, ok, detail in results:
-        tag = "PASS" if ok else ("INCONCLUSIVE" if ok is None else "FAIL")
-        print(f"{tag:<12} {name:<44} {detail}")
-    print(f"{len(results) - failed}/{len(results)} 通过")
+        tag = "PASS" if ok else ("N/A" if ok is None else "FAIL")
+        print(f"{tag:<6} {name:<46} {detail}")
+    print(f"{len(results) - failed - na}/{len(results) - na} 通过"
+          + (f"（另 {na} 条 N/A：不可观测，按设计）" if na else ""))
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(
             {"ok": failed == 0,
