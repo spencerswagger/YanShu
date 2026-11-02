@@ -12,6 +12,25 @@ results/
 `rune-v1-noncontract/2026-11-02-evidence2-rune-v1.md`、
 `contract-v1/2026-11-03-evidence2-contract-v1.md`。
 
+
+## 今晚验收证据一览（收口索引）
+
+| 文件 | 对象（head） | 产物 sha256 | 认证 | 入口类型 | 一句话结论 |
+|---|---|---|---|---|---|
+| `contract-v1/2026-11-02-evidence2-freeze-80400ec.md` | 端侧 `80400ec`（**冻结 head**） | `c1b87d0a…c97259f`（127,313B） | — | wasm-production | 证据二 6/6 + 11/11 + 变体 18/18，未报错 0；用户码 4 入口一致 |
+| `contract-v1/2026-11-02-user-code-consistency.md` | 端侧 `f1ef9f9` | — | — | wasm + 原生 | 20/20 通过；P0 定位为驱动调用约定 bug |
+| `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | 服务端 `08d40e7` + 端侧 `0f33a15` | — | **真 sm2** | native-api | 存储/DB/日志三处零命中，对照 1/1/1/0 |
+| `contract-v1/2026-11-02-evidence1-core-run4-logfile.md` | 服务端 `28d75b0` | — | stub-allow | — | 日志改 `YANSHU_LOG_FILE`/`LOG_DIR`；含 LEASED vs CONSUMED 残留对比 |
+| `contract-v1/2026-11-02-evidence1-core-run3-core-deliver.md` | 服务端 `2bc7dae` | — | stub-allow | — | 投递改用 Core 官方 `deliver` |
+| `contract-v1/2026-11-02-evidence1-core-run2-logdir.md` | 服务端 `2bc7dae` | — | stub-allow | — | 内建按日滚动日志复扫 |
+| `contract-v1/2026-11-02-evidence1-core-c3c2fc9.md` | 服务端 `c3c2fc9` | — | stub-allow | — | **初步证据 run #1**（stdout 重定向日志） |
+| `contract-v1/2026-11-02-evidence2-contract-v1-wasm.md` | 端侧 `0f33a15` | `9df8b8c3…`（125,839B） | — | wasm-production | 早一版生产路径结果（保留对照） |
+| `contract-v1/2026-11-02-evidence2-contract-v1.md` | 端侧 `de6d6e1` | — | — | native-api | 测试入口版（保留对照） |
+| `rune-v1-noncontract/2026-11-02-evidence2-rune-v1.md` | 端侧 `12b3d94`（旧布局） | — | — | 测试入口 | **非契约实现，不作验收** |
+
+规矩：同一结论只留一份；重跑加新文件不覆盖；非契约/旧 head 的必须写明"不作验收"；
+文件名 + head + sha256 三者齐了才算可追溯。
+
 ## 标准做法：零命中必须配阳性对照
 
 "扫不到明文"只有在**检测器被证明能扫到**时才算证据。所以每一份"零命中"的结论都必须自带

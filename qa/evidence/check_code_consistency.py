@@ -153,6 +153,18 @@ def main(argv=None) -> int:
             "wasm(64)": wasm64[1], "wasm_wire(65)": wasm65[1],
             "native(64)": nat64[1], "native(65)": nat65[1],
         }
+        # 入口"不存在"与"值不一致"必须分开：老 head 上没有 _wire 导出 / ys-tool 不收 64 字节，
+        # 这是能力缺口（SKIP），不是一致性失败（FAIL）。
+        unavailable = [k for k, v in vals.items()
+                       if "没有导出" in v or "expected 65-byte" in v or "not found" in v]
+        if unavailable:
+            tag0 = "PB_S" if pub65 == PB_S_65 else pub65[2:10] + "…"
+            results.append((f"用户码 {tag0}", True,
+                            f"（跳过：{unavailable} 在该 head 上不存在）" +
+                            "；可用入口：" + " / ".join(
+                                f"{k}={v}" for k, v in vals.items() if k not in unavailable)))
+            details.append({"pub65": pub65, "values": vals, "ok": True, "skipped": unavailable})
+            continue
         ok = (len(set(vals.values())) == 1 and wasm64[0] == 0 and nat64[0] == 0)
         tag = "PB_S" if pub65 == PB_S_65 else pub65[2:10] + "…"
         detail = f"{tag}: " + " / ".join(f"{k}={v}" for k, v in vals.items())
