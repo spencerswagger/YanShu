@@ -1104,10 +1104,61 @@ func newSM2Identity(t *testing.T) (priv, pub []byte, code string) {
 	return priv, pub, gm.DeriveCode(pub)
 }
 
+// 轮换矩阵：只换 secret / 只换 kid / 两个都换，各自对旧 token 的结果。
+// 这是"运维到底该改哪个变量"的自动化答案。
+func TestTokenRotationMatrix(t *testing.T) {
+	cases := []struct {
+		name     string
+		secret   string
+		kid      string
+		wantCode spec.ErrorCode
+	}{
+		{"only_secret", "rotated-secret", "k1", spec.ErrAuthTokenInvalid},
+		{"only_kid", "test-secret", "k2", spec.ErrAuthTokenStale},
+		{"both", "rotated-secret", "k2", spec.ErrAuthTokenStale},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t, "")
+			sender, _ := e.register("sender")
+			recipient, _ := e.register("recipient")
+			f := newFixture()
+			tr := e.createTransfer(sender, recipient, f, nil)
+			if resp := e.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusCreated {
+				t.Fatalf("baseline put: %d %s", resp.status, resp.body)
+			}
+
+			issuer, err := auth.NewTokenIssuer([]byte(tc.secret))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg2 := e.cfg
+			cfg2.TokenSecret = []byte(tc.secret)
+			cfg2.TokenKID = tc.kid
+			e2 := *e
+			e2.cfg = cfg2
+			e2.api = New(cfg2, e.st, e.blobs, e.api.verifier, issuer,
+				ratelimit.NewMemory(), ratelimit.NewMemoryLockout(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			e2.api.now = func() time.Time { return e.now }
+			e2.srv = httptest.NewServer(e2.api.Handler())
+			defer e2.srv.Close()
+
+			e2.wantError(e2.putPrelude(tr.UploadToken, tr, f.Prelude), tc.wantCode)
+
+			// 新签发的 token 必须可用（否则"全坏也是 401"会掩盖问题）。
+			f2 := newFixture()
+			tr2 := e2.createTransfer(sender, recipient, f2, nil)
+			if resp := e2.putPrelude(tr2.UploadToken, tr2, f2.Prelude); resp.status != http.StatusCreated {
+				t.Fatalf("new token unusable: %d %s", resp.status, resp.body)
+			}
+		})
+	}
+}
+
 // token 轮换语义（三步实测，见 TestUploadTokenRotationThreeSteps）：
 //
 //	① 同 kid 下签发的 token 能正常用；
-//	② 换 secret + kid 后，同一个 token 立刻 401 AUTH_TOKEN_REVOKED；
+//	② 换 secret + kid 后，同一个 token 立刻 401 AUTH_TOKEN_STALE；
 //	③ 重新签发（新建传输）的 token 正常 200。
 func TestUploadTokenRotationThreeSteps(t *testing.T) {
 	e := newEnv(t, "")
@@ -1124,7 +1175,7 @@ func TestUploadTokenRotationThreeSteps(t *testing.T) {
 	wrong := e.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
 		spec.HeaderUploadToken: "not-a-real-token",
 	})
-	e.wantError(wrong, spec.ErrAuthSignatureInvalid)
+	e.wantError(wrong, spec.ErrAuthTokenInvalid)
 
 	// 再建一条传输：轮换必须让**所有**既有 token 一起失效，而不是只有一条。
 	f1b := newFixture()
@@ -1146,12 +1197,12 @@ func TestUploadTokenRotationThreeSteps(t *testing.T) {
 	e2.srv = httptest.NewServer(e2.api.Handler())
 	defer e2.srv.Close()
 
-	e2.wantError(e2.putPrelude(tr.UploadToken, tr, f.Prelude), spec.ErrAuthTokenRevoked)
-	e2.wantError(e2.putPrelude(tr1b.UploadToken, tr1b, f1b.Prelude), spec.ErrAuthTokenRevoked)
+	e2.wantError(e2.putPrelude(tr.UploadToken, tr, f.Prelude), spec.ErrAuthTokenStale)
+	e2.wantError(e2.putPrelude(tr1b.UploadToken, tr1b, f1b.Prelude), spec.ErrAuthTokenStale)
 	stale := e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
 		spec.HeaderUploadToken: tr.UploadToken,
 	})
-	e2.wantError(stale, spec.ErrAuthTokenRevoked)
+	e2.wantError(stale, spec.ErrAuthTokenStale)
 
 	// ③ 重新签发的新传输用新 token 正常。
 	f2 := newFixture()

@@ -26,8 +26,10 @@ const (
 	ErrAuthSignatureInvalid ErrorCode = "AUTH_SIGNATURE_INVALID"
 	ErrAuthChallengeInvalid ErrorCode = "AUTH_CHALLENGE_INVALID"
 	ErrAuthCodeMismatch     ErrorCode = "AUTH_CODE_MISMATCH"
-	// ErrAuthTokenRevoked：upload_token 因密钥版本（kid）轮换而作废（旧 token）。
-	ErrAuthTokenRevoked ErrorCode = "AUTH_TOKEN_REVOKED"
+	// ErrAuthTokenStale：upload_token 因密钥版本（kid）轮换而作废（旧 token）。
+	ErrAuthTokenStale ErrorCode = "AUTH_TOKEN_STALE"
+	// ErrAuthTokenInvalid：token 值不对（伪造/不属于该传输），与"签名不被接受"分开。
+	ErrAuthTokenInvalid ErrorCode = "AUTH_TOKEN_INVALID"
 
 	// 403
 	ErrSignalPeerMismatch ErrorCode = "SIGNAL_PEER_MISMATCH"
@@ -88,7 +90,7 @@ var errStatus = map[ErrorCode]int{
 	ErrAuthSignatureInvalid: http.StatusUnauthorized,
 	ErrAuthChallengeInvalid: http.StatusUnauthorized,
 	ErrAuthCodeMismatch:     http.StatusUnauthorized,
-	ErrAuthTokenRevoked:     http.StatusUnauthorized,
+	ErrAuthTokenStale:       http.StatusUnauthorized,
 
 	ErrSignalPeerMismatch: http.StatusForbidden,
 	ErrNotTransferParty:   http.StatusForbidden,
@@ -140,7 +142,7 @@ var errMessage = map[ErrorCode]string{
 	ErrAuthSignatureInvalid: "signature verification failed",
 	ErrAuthChallengeInvalid: "challenge is expired, used or purpose mismatch",
 	ErrAuthCodeMismatch:     "X-YS-Code does not match the signed code",
-	ErrAuthTokenRevoked:     "upload token was revoked by a key rotation; create a new transfer",
+	ErrAuthTokenStale:       "upload token was revoked by a key rotation; create a new transfer",
 
 	ErrSignalPeerMismatch: "signal peers do not match the transfer",
 	ErrNotTransferParty:   "authenticated credential is not a party of this transfer",

@@ -546,13 +546,15 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 		a.internalError(w, r, "get transfer", err)
 		return store.Transfer{}, false
 	}
-	// 先看密钥版本：轮换 kid 后旧 token 一律 401 AUTH_TOKEN_REVOKED（可据此自愈重建传输）。
+	// 先看密钥版本：轮换 kid 后旧 token 一律 401 AUTH_TOKEN_STALE（可据此自愈重建传输）。
 	if t.UploadTokenKID != a.cfg.TokenKID {
-		writeError(w, r, apiError{code: spec.ErrAuthTokenRevoked})
+		writeError(w, r, apiError{code: spec.ErrAuthTokenStale})
 		return store.Transfer{}, false
 	}
 	if !a.tokens.Validate(token, t.ID, t.UploadTokenSM3) {
-		fail(w, r, spec.ErrAuthSignatureInvalid)
+		// token 值不对（伪造/串了传输）→ AUTH_TOKEN_INVALID；
+		// AUTH_SIGNATURE_INVALID 只留给"签名不被接受"。
+		writeError(w, r, apiError{code: spec.ErrAuthTokenInvalid})
 		return store.Transfer{}, false
 	}
 	return t, true

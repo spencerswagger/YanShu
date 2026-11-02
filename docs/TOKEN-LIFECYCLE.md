@@ -18,11 +18,11 @@ upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖
 ——它的生命周期绑在传输行上。
 
 **kid 的作用**：服务端只认当前 `YANSHU_TOKEN_KID`。轮换时把 `YANSHU_TOKEN_SECRET` 与
-`YANSHU_TOKEN_KID` 一起换掉，所有旧行立刻失效，错误名为 **`401 AUTH_TOKEN_REVOKED`**
+`YANSHU_TOKEN_KID` 一起换掉，所有旧行立刻失效，错误名为 **`401 AUTH_TOKEN_STALE`**
 （与"token 不对"的 `AUTH_SIGNATURE_INVALID` 区分，客户端据此走"重建传输"的自愈路径）。
 `TOKEN_KID` 缺失 → 启动报错（fail closed），不允许"没有版本信息就都放过"。
 
-错误名只有两个：**`AUTH_TOKEN_REVOKED`**（kid 轮换导致的作废，401）与
+错误名只有两个：**`AUTH_TOKEN_STALE`**（kid 轮换导致的作废，401）与
 **`AUTH_SIGNATURE_INVALID`**（token 值本身不对，401）。前者让客户端"重建传输"，后者说明
 头部/令牌传错了。**没有** `AUTH_TOKEN_EXPIRED`：过期是传输级语义（`410 TRANSFER_EXPIRED`）。
 
@@ -34,7 +34,7 @@ upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖
 
 | 事件 | 效果 | 说明 |
 |---|---|---|
-| **轮换 `TOKEN_SECRET` + `TOKEN_KID`** | **全部 token 立即失效**，返回 `401 AUTH_TOKEN_REVOKED` | kid 对不上直接拒；客户端重建传输拿新 token |
+| **轮换 `TOKEN_SECRET` + `TOKEN_KID`** | **全部 token 立即失效**，返回 `401 AUTH_TOKEN_STALE` | kid 对不上直接拒；客户端重建传输拿新 token |
 | 只换 `TOKEN_SECRET` 不换 kid | 旧 token 也会失败（重算值不同），错误名是 `AUTH_SIGNATURE_INVALID` | 不建议；规范做法是两个一起换 |
 | TTL 到期 | 传输转 `EXPIRED`，内容端点 `410 TRANSFER_EXPIRED` | 这是**传输**生命周期，不是 token 错误；没有 `AUTH_TOKEN_EXPIRED` 这个码 |
 | 传输进入终结态（`CONSUMED`/`REVOKED`/`EXPIRED`） | 上传接口拒绝（`409 TRANSFER_STATE_CONFLICT`） | token 本身不再是有效上传凭据 |
@@ -55,6 +55,31 @@ upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖
 - secret 没变 → 重算值 = 原值，重放 `200`；
 - secret 轮换过 → 重算值 ≠ 原值，服务端不会把一个不可用的 token 发出去，返回 `409 TRANSFER_STATE_CONFLICT`，
   客户端重建传输即可（新传输拿新 token）。
+
+## 3.5 运维：如何一次性吊销全部 upload_token（三步）
+
+```sh
+# 1) 同时改两个变量（只改一个也行，见下表）：
+#    YANSHU_TOKEN_SECRET = 新的 ≥16 字节随机值
+#    YANSHU_TOKEN_KID    = 新的版本号，单调递增（如 k1 -> k2 -> k3）
+# 2) 重启服务（配置没有热加载）
+# 3) 旧 token 立刻 401，客户端重建传输拿新 token（新 token 立即可用）
+```
+
+轮换矩阵（自动化测试 `TestTokenRotationMatrix`）：
+
+| 只改什么 | 旧 token 结果 | 说明 |
+|---|---|---|
+| 只改 `TOKEN_SECRET` | `401 AUTH_TOKEN_INVALID` | 校验会按新密钥重算，旧 token 自然也失效 |
+| 只改 `TOKEN_KID` | `401 AUTH_TOKEN_STALE` | 行内 kid 与当前不一致 |
+| 两个都改（推荐） | `401 AUTH_TOKEN_STALE` | kid 先判，语义最清楚 |
+
+`AUTH_TOKEN_STALE` = 版本被轮换，客户端应**重建传输**；`AUTH_TOKEN_INVALID` = token 值不对，
+客户端应检查是不是串了传输；`AUTH_SIGNATURE_INVALID` 只用于签名不被接受。
+**没有 `AUTH_TOKEN_EXPIRED`**：过期是传输级语义（`410 TRANSFER_EXPIRED`）。
+
+> kid 的"单调递增"是运维约定（服务端只做等值比较，不解析序数）；如果要服务端强制递增，
+> 需要契约先定义 kid 的格式与历史版本存储，v1 不做。
 
 ## 4. 切换 `sm2` 的操作清单（宿主）
 
