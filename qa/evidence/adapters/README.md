@@ -23,14 +23,17 @@ git -C <YanShu 仓库> archive origin/feat/endcrypto-wasm | tar -x -C /tmp/rune
 qa/evidence/adapters/build_probe.sh /tmp/rune/crypto/sm
 # → /.cache/rust/release/ys_pack_probe
 
-# 手工试一把
-PROBE=$(.…build_probe.sh /tmp/rune/crypto/sm)
+# 手工试一把（契约布局 YSPK/1.0：公钥入包，unpack 不再收发送方公钥）
+PROBE=$(qa/evidence/adapters/build_probe.sh /tmp/rune/crypto/sm)
 $PROBE keygen /tmp/alice.sk /tmp/alice.pk
 $PROBE keygen /tmp/bob.sk /tmp/bob.pk
 $PROBE pack  /tmp/plain.bin /tmp/a.yspk --recipient-pk /tmp/bob.pk --sender-sk /tmp/alice.sk \
-       --name "样本.bin" --mime application/octet-stream --block-size 1048576
-$PROBE unpack /tmp/a.yspk /tmp/out.bin --recipient-sk /tmp/bob.sk --sender-pk /tmp/alice.pk
+       --name "样本.bin" --mime application/octet-stream --ext bin --chunk-size 1048576
+$PROBE unpack /tmp/a.yspk /tmp/out.bin --recipient-sk /tmp/bob.sk
 ```
+
+密钥文件：`sk` 32B、`pk` 64B（`x‖y`）。`pack` 需要 65B `0x04‖x‖y`，驱动会按需补前缀；
+`unpack` 只需要收件方私钥（发送方公钥已在包里，可用 `--expect-sender-code` 顺带比对 §13 #18）。
 
 一键跑全套（含篡改检查）：`qa/evidence/run_evidence2_rune.sh /tmp/rune/crypto/sm`。
 

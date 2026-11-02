@@ -617,12 +617,15 @@ class CmdBackend(Backend):
     label = "cmd"
 
     def __init__(self, template: str, error_regex: str = r"CRYPTO_[A-Z0-9_]+",
-                 timeout: float = 120.0, expect_plaintext: bytes | None = None):
+                 timeout: float = 120.0, expect_plaintext: bytes | None = None,
+                 entry_kind: str = "production"):
         self.template = template
         self.error_regex = re.compile(error_regex)
         self.timeout = timeout
         self.expect_plaintext = expect_plaintext
-        self.note = template
+        self.entry_kind = entry_kind
+        self.production = entry_kind == "production"
+        self.note = template + ("" if self.production else f"（入口类型：{entry_kind}）")
 
     def _run(self, data: bytes, workdir: str, tag: str) -> tuple[int, str, bool, str]:
         path = os.path.join(workdir, f"probe-{tag}.yspk")
@@ -727,7 +730,8 @@ def build_backend(args, pristine: bytes) -> Backend:
         expect = None
         if args.expect_plaintext:
             expect = Path(args.expect_plaintext).read_bytes()
-        return CmdBackend(args.decrypt_cmd, args.error_regex, args.timeout, expect)
+        return CmdBackend(args.decrypt_cmd, args.error_regex, args.timeout, expect,
+                          args.entry_kind)
     if args.backend == "cargo-test":
         crate = args.rune_crate or ""
         if not crate:
@@ -827,7 +831,8 @@ def print_report(backend: Backend, env_summary: str, results: Sequence[CaseResul
                  started: float) -> None:
     print()
     print("=" * 104)
-    print(f"后端：{backend.label}    {('生产/半生产导出路径' if backend.production else '⚠ 当前走的是测试入口而非生产导出路径')}")
+    entry = "生产/半生产导出路径" if backend.production else "⚠ 当前走的是测试入口而非生产导出路径"
+    print(f"后端：{backend.label}    {entry}")
     if backend.note:
         print(f"说明：{backend.note}")
     print(f"包  ：{env_summary}")
@@ -1178,6 +1183,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                          "rune-v1 只用于非契约实现的临时验证")
     ap.add_argument("--expect-plaintext",
                     help="未篡改包应解出的明文文件；给了就逐字节比对（baseline 才算数）")
+    ap.add_argument("--entry-kind", default=os.environ.get("YS_ENTRY_KIND", "production"),
+                    choices=["production", "native-api", "test-entry"],
+                    help="解密入口的性质：production=生产导出路径；native-api=同 crate 的原生 API；"
+                         "test-entry=测试替身/测试二进制。非 production 会打「测试入口」横幅")
     ap.add_argument("--cases", help="逗号分隔的用例白名单（默认要求的 6 条）")
     ap.add_argument("--extra-cases", action="store_true", help="追加 tag/半块/截断 3 条")
     ap.add_argument("--out-dir", help="篡改产物落盘目录（给了就保留）")
@@ -1262,7 +1271,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[warn] 当前包不是契约布局（{LAYOUT_CONTRACT}，{env.layout}）—— "
               f"这份结果只作非契约实现的临时验证，不能作为对契约实现的验收证据")
     if not backend.production:
-        print("[warn] 当前走的是测试入口而非生产导出路径 —— 这份结果不能作为最终验收证据")
+        print("[warn] 当前走的是测试入口而非生产导出路径 —— 结论需在 wasm 生产导出路径上"
+              "复跑一遍后才作为最终验收")
 
     try:
         results, code = execute(backend, pristine, donor, names, args.out_dir, args.keep,

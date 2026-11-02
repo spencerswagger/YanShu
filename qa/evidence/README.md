@@ -5,10 +5,10 @@
 > **当前状态（2026-11-02 首夜·三轮）**
 > * 默认布局 = **契约布局 `contract-v1`**（CRYPTO-PACK `YSPK/1.0`）。`rune-v1` 只能显式
 >   `--layout rune-v1` 使用，且输出会打「非契约实现、不作验收」横幅。
-> * 证据二在端侧旧实现上跑过一轮（`rune-v1`），10/10 篡改 + 16 种变体全部被拒；
->   该结果**不是对契约实现的验收**，单独存放在
->   `results/rune-v1-noncontract/`。等端侧按契约重写完，用默认布局重跑，
->   结果存进 `results/contract-v1/`。
+> * 证据二**已按契约布局跑全量**（`results/contract-v1/`）：单块 5/5、多块 10/10、
+>   补充变体 18/18，全部被明确拒绝，基线明文逐字节一致。入口是 Rust 原生 API
+>   （`--entry-kind native-api`），**需在 wasm 生产导出路径上复跑后才算最终验收**。
+> * 旧布局（`rune-v1`）的历史结果留在 `results/rune-v1-noncontract/`，仅作对照。
 > * 证据一仍是骨架：检索逻辑、投递钩子、存储/日志/数据库三路扫描、表列白名单都已可用
 >   且自测通过，但**服务端还没跑起来**；`--profile core-skeleton` 缺参时打印
 >   「待 Core 合入 + 参数确认」并以退出码 4 结束 —— 既不伪装 PASS，也不误报 FAIL。
@@ -189,7 +189,8 @@ PostgreSQL 走 `row_to_json`：`TEXT` 列明文原样、`BYTEA` 列以 `\x<hex>`
 qa/evidence/
 ├─ scan_plaintext.py            证据一
 ├─ tamper_probe.py              证据二
-├─ run_evidence2_rune.sh        证据二一键复跑（对端侧真实实现）
+├─ run_evidence2_contract.sh    证据二一键复跑（契约布局，默认）
+├─ run_evidence2_rune.sh        证据二一键复跑（旧布局，仅对照）
 ├─ adapters/
 │  ├─ ys_pack_probe.rs          Gate 侧驱动：用 yanshu-sm 打包 / 解包
 │  ├─ build_probe.sh            把驱动塞进端侧 crate 的临时副本并编译
