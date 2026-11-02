@@ -195,6 +195,45 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 
 即：收到 `AUTH_TOKEN_STALE`/`INVALID` 后，"重新挑战→签名→取新凭据"这条恢复路径在 API 层是通的。
 
+
+## ④e · 浏览器双端真认证端到端（**Web 交付**，宿主实例）
+
+| 项 | 值 |
+|---|---|
+| 跑批人 | **Web**（前端） |
+| 时间 | 2026-11-02 19:14Z（`startedAt`） |
+| **是否宿主实例** | **是**：`http://127.0.0.1:18080`，产物 **`4eda665`**（`cc117070…e571f9`），`YANSHU_VERIFIER=sm2`（wazero 真验签），`YANSHU_TOKEN_EPOCH=1` |
+| 产物 sha | `cc117070de08bd34f52055af48bb4e28f475bdd4f71b55f705a6420cc7e571f9` |
+| 内核 sha | `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`（127,313 B，34 函数 / 0 import / `ys_version()=0x00010000`） |
+| 来源文件 | `results/web/c1b87d0a-sm2-e2e.md` / `c1b87d0a-sm2-e2e.json` |
+
+流程：注册 → 建包（`ys_pack_v1`）→ prelude + 3 块 PUT → `complete` → 收件箱 → 取 prelude（`ys_unpack_meta_prelude` 先显示"来自谁/文件名/大小/块数"，标**未校验**）→ 逐块 GET → `ys_unpack_v1` 验签解密 → 落盘（切**已校验**）→ `ack`。
+
+**结果**：源 `2,506,889 B` / sha256 `4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f`；
+落盘**同为 2,506,889 B**，sha256 **完全相同**；`ack` 后再取 **410 `TRANSFER_CONSUMED`**；
+客户端是两个独立 Chrome profile，覆盖**前端实现**（WASM 加载、IndexedDB 私钥、跨端 UI）。
+
+## ④f · 401 自愈（`AUTH_TOKEN_STALE`）—— Web 交付，**本地演练（非宿主）**
+
+| 项 | 值 |
+|---|---|
+| 跑批人 | **Web**（前端） |
+| 时间 | 2026-11-02（同一轮） |
+| **是否宿主实例** | **否**：用交付二进制 **`06c9f56`** 在本地起 `sm2` 实例真实演练（宿主 `TOKEN_EPOCH=1` 不便构造） |
+| 产物 sha | `5a42bb43d481926f9238e5016335354e4721224c2b7b8e34d7a24ec0d9426eb0`（head `06c9f56`） |
+| 内核 sha | `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f` |
+| 来源文件 | `results/web/c1b87d0a-sm2-token-heal.json` |
+
+步骤与结果：
+
+1. 上传中断（3 块已传，`record=true`）；
+2. 旧 token 打 status → **401 `AUTH_TOKEN_STALE`**，响应原文
+   `{"error":{"code":"AUTH_TOKEN_STALE","message":"upload token was revoked by a key version rotation; create a new transfer",…}}`；
+3. 客户端 `resumeSend` **自动重建传输**（新 `transferId`，state `READY`）；
+4. B 端取回 **12,000 字节**，`bytesEqual=true`（逐字节一致）。
+
+**客户端触发条件**：按 `authFailed`（任意 401 通用分支）触发重取，**不依赖具体错误名**——对后续错误名调整更稳。
+
 ## 三、KID 矩阵（逐字错误名与 message）
 
 | 步 | 场景 | 状态 | 错误名 / message |
@@ -314,10 +353,14 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 **① 协议层闭环**：由 `[本地]` 三份产物（`5a42bb43` / `db58ae47` / `a302dccf`，**均非宿主实例**）与 `[宿主]` 实测共同支撑——
 加密→上传→凭码取回→真解密→逐字节一致→`ack` 后 410 全部成立（宿主两端 sha256 `5ccada48…1db6d7`；
 本地 `06c9f56` 上为 `0fd76c0f…2ead12`）。
-**② 两路并行验证**：`[宿主]` API 等价端到端（「④b」「④c」）＋ **浏览器双端端到端**（由前端交付：
-`results/web/c1b87d0a-closure-web.md`，2,506,889 B、落盘 sha256 `4b0c533a…482f`、`ack` 后 410）。
-两条独立路径**互相印证**；API 路径覆盖协议层，浏览器路径覆盖前端实现（UI/WASM 加载/IndexedDB 私钥）。
-若以最新状态为准：**浏览器端到端已交付**，"未覆盖前端实现"这一条**不再成立**。
+**② 两路并行验证（均已完成）**：
+- **API 等价**（Gate，`[宿主]`）：「④b」「④c」「④d」——协议层闭环，逐字节一致 + `ack` 后 410 + 三条前端行为等价；
+- **浏览器双端**（Web，`[宿主]`）：「④e」——2,506,889 B、落盘 sha256 `4b0c533a…482f` 与源一致、`ack` 后 410。
+两条独立路径**互相印证**：一条验协议层、一条验前端实现（WASM 加载 / IndexedDB 私钥 / 跨端 UI）。
+**"浏览器端到端未交付"这一说法不再成立，本文件已修正。**
+
+附件清单：`results/web/c1b87d0a-sm2-e2e.md`/`.json`、`c1b87d0a-sm2-token-heal.json`、
+`c1b87d0a-sm2-auth-branches.json`、`c1b87d0a-closure-web.md`（均为 Web 侧原始证据）。
 
 已知偏差（如实，不美化）：
 
