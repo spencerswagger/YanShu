@@ -43,12 +43,19 @@ python3 "$here/check_code_consistency.py" --wasm "$WASM" --ys-tool "$TOOL" \
 rc_code=$?
 set -e
 
-echo "== 3/4 证据二（生产路径，单块 + 多块 + 变体）=="
+echo "== 3/5 prelude-only 元数据语义 =="
+set +e
+python3 "$here/check_prelude_meta.py" --wasm "$WASM" --json-out "$work/prelude-meta.json" | tail -4
+rc_prelude=$?
+set -e
+
+echo "== 4/5 证据二（生产路径，单块 + 多块 + 变体）=="
 "$here/run_evidence2_wasm.sh" "$crate" "$work/ev2" | tail -6
 rc_ev2=$?
 
-echo "== 4/4 汇总 =="
+echo "== 5/5 汇总 =="
 echo "  head 产物：$BYTES 字节  sha256=$SHA  ys_version=$VER"
 echo "  用户码一致性：exit=$rc_code"
+echo "  prelude-only 元数据：exit=$rc_prelude"
 echo "  证据二：exit=$rc_ev2"
-[ "$rc_code" -eq 0 ] && [ "$rc_ev2" -eq 0 ]
+[ "$rc_code" -eq 0 ] && [ "$rc_prelude" -eq 0 ] && [ "$rc_ev2" -eq 0 ]

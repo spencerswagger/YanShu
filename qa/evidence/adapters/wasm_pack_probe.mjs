@@ -99,7 +99,39 @@ function callSized(fn, capGuess) {
 
 const mode = rest[0];
 
-if (mode === "normalize") {
+if (mode === "meta" || mode === "meta-prelude") {
+  // meta：整包元信息（_v1 6 参 / 旧 7 参传 0）；meta-prelude：只给 prelude 也要能解
+  const inPath = rest[1];
+  if (!inPath) die(`${mode} <pack> --recipient-sk <f> [--v1]`);
+  const pack = fs.readFileSync(inPath);
+  const skBytes = readKey(opt("--recipient-sk"), 32, "recipient-sk");
+  const pp = alloc(pack.length || 1), skp = alloc(32);
+  write(pp, pack); write(skp, skBytes);
+  const wantV1 = rest.includes("--v1");
+  let fn;
+  if (mode === "meta-prelude") {
+    fn = e.ys_unpack_meta_prelude;
+    if (typeof fn !== "function") die("内核没有导出 ys_unpack_meta_prelude");
+    if (fn.length !== 6) die(`ys_unpack_meta_prelude arity=${fn.length}，期望 6`);
+  } else if (wantV1) {
+    fn = e.ys_unpack_meta_v1;
+    if (typeof fn !== "function") die("内核没有导出 ys_unpack_meta_v1");
+    if (fn.length !== 6) die(`ys_unpack_meta_v1 arity=${fn.length}，期望 6`);
+  } else {
+    fn = e.ys_unpack_meta;
+    if (typeof fn !== "function") die("内核没有导出 ys_unpack_meta");
+    if (fn.length !== 7) die(`ys_unpack_meta arity=${fn.length}，期望 7`);
+  }
+  try {
+    const out = callSized((buf, cap, lenPtr) =>
+      fn.length === 6 ? fn(pp, pack.length, skp, buf, cap, lenPtr)
+                      : fn(pp, pack.length, skp, 0, buf, cap, lenPtr), 4096);
+    console.log(out.toString("utf8"));
+  } catch (err) {
+    console.log(`ERR ${errName(err.code)}`);
+    process.exit(1);
+  }
+} else if (mode === "normalize") {
   // ys_normalize_code(input, len, out4)：非法输入返回负错误码（CRYPTO_CODE_INVALID）
   const text = Buffer.from(rest[1] ?? "", "utf8");
   const inp = alloc(text.length || 1);
