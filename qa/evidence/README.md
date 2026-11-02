@@ -237,6 +237,7 @@ qa/evidence/
 ├─ check_prelude_meta.py        prelude-only 元数据语义（能读 + 标注未校验 + 整包入口拒绝半包）
 ├─ check_token_lifecycle.py     token 生命周期实测（轮换 TOKEN_SECRET / EPOCH 后旧 token 是否失效）
 ├─ check_upgrade_path.py        **升级路径**：老库缺列 → 跑新版迁移 → 列补上/历史行完好/服务起/幂等
+├─ check_restore_after_drop.py  **回滚恢复**：列与状态表被删的库 → 新版迁移恢复 → 旧凭据 401 STALE
 ├─ check_all.sh                 一条命令跑全部：构建 → 自测 → 用户码 → prelude 元数据 → 证据二
 ├─ run_evidence1_core.sh        证据一一键复跑（起真服务 → 投递 → 三处扫 → 阳性对照）
 ├─ run_evidence2_contract.sh    证据二一键复跑（契约布局，Rust 原生入口）

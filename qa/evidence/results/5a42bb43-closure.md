@@ -52,6 +52,24 @@ go build -trimpath -buildvcs=false -ldflags "-s -w" -o deliver ./cmd/deliver
 | 证据二（生产路径） | 单块 **6/6**、多块 **11/11**，未报错 0，基线逐字节一致 |
 | 其它常规项 | 用户码四形态 26/26、prelude-only 6/6 |
 
+### ②b 回滚后向前修复（跑过「删 epoch」的库）—— **PASS 11/11**
+
+模拟线上库曾跑过 `0004_drop_token_epoch.sql`（**列与状态表被删**、记账也抹掉）后升级到本版本：
+
+| 断言 | 结果 |
+|---|---|
+| 损坏状态：`upload_token_kid` 列已删 | PASS（count=0） |
+| 新版 `-migrate-only` | PASS（`migrations applied`） |
+| **列恢复** | PASS（count=1） |
+| **`token_kid_state` 恢复** | PASS（count=1） |
+| 历史行回填 `pre-kid` | PASS |
+| 再跑一次幂等 | PASS（`rows 1→1`） |
+| 服务起 + `/healthz` 200 | PASS |
+| **旧凭据 → 401 `AUTH_TOKEN_STALE`**（非 500、非 INVALID） | PASS |
+| 启动日志无 `does not exist` / `sweep failed` | PASS |
+
+复跑：`python3 qa/evidence/check_restore_after_drop.py --binary <bin> --dsn "<DSN>"`。
+
 ## 三、KID 矩阵（逐字错误名与 message）
 
 | 步 | 场景 | 状态 | 错误名 / message |
