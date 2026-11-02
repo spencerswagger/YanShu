@@ -297,7 +297,7 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 **客户端处置按名字分叉**：前两个都走"重新挑战 → 签名 → 取新凭据"（**不要重算签名**，那是签名问题的解法）；只有拿到 `AUTH_SIGNATURE_INVALID` 才去查 `SIG_INPUT` 拼接、私钥与公钥是否配对。
 
-**v1 不设凭据级的"过期"错误码**：上传凭据的有效期就是传输的 `expires_at`，到期由传输终结表达（`410 TRANSFER_EXPIRED`）；下载租约到期视为凭据失效（`AUTH_TOKEN_INVALID`）。凭据类 **MUST NOT** 再造 `*_EXPIRED`。
+**v1 不设凭据级的"过期"错误码（定稿：删除，不保留）**：上传凭据的有效期就是传输的 `expires_at`，到期由传输终结表达（`410 TRANSFER_EXPIRED`）；下载租约到期视为凭据失效（`AUTH_TOKEN_INVALID`）。凭据类 **MUST NOT** 另设任何"凭据过期"类错误名；与 `TRANSFER_EXPIRED` 的边界是"传输终结走 410、凭据失效走 401 两码"，两者不混用。
 
 凭据失效 **MUST NOT** 返回签名类错误：否则客户端会被引去"重算签名 / 怀疑私钥"，而真正原因是"该换凭据了"。同理 `AUTH_TOKEN_STALE` 也 **MUST NOT** 被 `AUTH_TOKEN_INVALID` 顶替——两者客户端处置相同，但排查含义完全不同（一个是版本、一个是来源）。
 
