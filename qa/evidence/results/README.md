@@ -62,6 +62,7 @@ results/
 | `3c1e4b2b-fallback-closure.md`（**兜底**） | —（五段式） | `5605907` | `3c1e4b2b…35f98f` | stub-allow + 真 sm2 | native-api | 见文件内各节 | **可用但非首选**：三条件 PASS、四码齐；已知偏差 5 条（缺 `uploader_ip NULL` P0、无 `0005` 恢复、过期靠改库时间等） |
 | `2026-11-02-head-matrix.md`（**候选对比表**） | — | 8 个 head | — | 静态 + 实测 | — | 见文件内 | **六项对照表**：只有 `06c9f56` 六项全 PASS；其余各有硬伤（内核未入库/名字 REVOKED/含 drop 迁移/恢复 500） |
 | `cc117070-final-six.md`（`4eda665` 六项） | — | `4eda665` | `cc117070…7e571f9` | stub-allow + sm2 | native-api | 见文件内 | **5 PASS / 1 部分 FAIL**：secret 轮换仍 401 `INVALID`（旧语义）、`EXPIRED` 未实现；`SIG_INPUT_TOO_LONG` 已实现但 HTTP 不可达 |
+| **`cc117070-host-closure.md`（宿主收口）** | — | 宿主 `4eda665` | `cc117070…7e571f9` | **真 sm2** | native-api | 见文件内 | **宿主真认证可用**：六步 + 六项 + e2e 逐字节一致 + ack 后 410；**偏差 5 条**（secret 旧语义、无 EXPIRED、513 不可达、②③⑥ 在自建实例、与 06c9f56 不等价） |
 | `c1b87d0a-host-sm2-e2e.md`（**宿主真 sm2**） | — | 宿主 `4eda665` | 内核 `c1b87d0a…` | **真 sm2** | native-api | 见文件内 | **宿主 e2e PASS**：2,506,889B → 3 块 → 取回 prelude+3 块逐字节一致 → 解密 sha256 相同 → ack 后 410；token 六步只做了 3 条只读项（其余需动宿主 env/库，未做不充数） |
 | **`5a42bb43-closure.md`（最终收口单文件）** | —（五段式收口） | `06c9f56` | `5a42bb43…09426eb0` | stub-allow + 真 sm2 | native-api | 见该文件「三/四」两节的命令 | **三条件全 PASS + KID 矩阵 + 四码点亮**；产物 sha 与 Core 报的一致（Gate 自建，已核） |
 | **`a302dccf-closure.md`（收口单文件）** | —（五段式收口） | `4b3babd` | `a302dccf…24e535d4` | stub-allow + 真 sm2 | native-api | 见该文件「三、复跑」五条命令 | **三条件全 PASS + 四码点亮（STALE / INVALID / EXPIRED / SIGNATURE 互不顶替）**；含已知偏差 5 条 |
