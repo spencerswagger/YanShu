@@ -40,7 +40,7 @@
 
 | R10 | `SIG_INPUT` 缺长度上限（实现自设 512，契约无定义） | **补定义**：`SIG_INPUT_MAX = 109` 字节，由字段上限推导（前缀 7 + PURPOSE 1 + NONCE 32 + 最长字段串 69，最长是 `REGISTER` 的 `CODE‖PUBKEY`）；另设防御性硬上限 `SIG_INPUT_HARD_LIMIT = 512`，仅作 DoS 门、不是合法性边界；超硬上限 → `400 SIG_INPUT_TOO_LONG`；服务端 MUST 逐字段校验（不得用字节上限代替），客户端 MUST 本地按字段上限校验 | API §1.3、§10.1 | 否 |
 
-| R11 | 凭据"版本失效"错误名的**字面值**上游已改三轮 | **先留占位**：语义定稿（凭据不匹配 = `AUTH_TOKEN_INVALID`；版本失效 = 待定字面；传输级过期 = 410），本稿字面写 `AUTH_TOKEN_REVOKED` 并标注"待实测确认"，候选 `AUTH_TOKEN_REVOKED` / `AUTH_TOKEN_STALE`；过渡期客户端与门禁 MUST 视两字面同义。拿到实测表后只替换字面，语义与状态码不变 | API §1.7.4、§1.7.8、§10.1 | 否 |
+| R11 | 凭据类错误名字面值上游改过三轮 | **已定稿（不再变）**：`AUTH_TOKEN_REVOKED`（KID 已轮换）/ `AUTH_TOKEN_INVALID`（不存在·格式错·值不匹配·租约过期）/ `AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受）；传输级过期与终结仍走 410，凭据类**不设** `*_EXPIRED`。客户端按名字分叉：前两个走"重新挑战→签名→取新凭据、不重算签名"，只有签名类才查 `SIG_INPUT`/私钥配对 | API §1.7.4、§10.1 | 否 |
 
 ## 凭证吊销 · 可复跑用例（验收集直接抄）
 
@@ -66,7 +66,7 @@
 |---:|---|---|---|
 | K1 | 服务端内嵌内核曾为 `8b89dd7f…`（130,653 B），与冻结产物 `c1b87d0a…`（127,313 B）不同字节 | 内嵌内核 MUST 与冻结构建产物同 sha256；同一 commit 跨环境重建可能不同字节，因此**以冻结产物 sha256 为准**，不以 commit 号为准 | 已换为 `c1b87d0a…`，待验收集复跑确认 |
 | K2 | 实现不返回任何 `*_EXPIRED` 凭据码（过期由传输 TTL 承担） | 已按实现收口：v1 **不设**凭据级过期码；上传凭据有效期 = 传输 `expires_at`，到期走 `410 TRANSFER_EXPIRED`；租约到期归 `AUTH_TOKEN_INVALID` | **已收口**（契约已删该码） |
-| K3 | 实现（最终口径）用 `AUTH_TOKEN_REVOKED`（KID 轮换）与 `AUTH_TOKEN_INVALID`（只换 secret / 不匹配） | 与本契约 §1.7.4 完全一致（两种吊销语义分开，且无 `*_EXPIRED`） | **已对齐，结案** |
+| K3 | 实现当前用 `AUTH_TOKEN_STALE`（KID 轮换）与 `AUTH_TOKEN_INVALID`（值不匹配） | 契约终值为 `AUTH_TOKEN_REVOKED` / `AUTH_TOKEN_INVALID` / `AUTH_SIGNATURE_INVALID`；实现只需把 STALE 字面改成 REVOKED（语义一致） | 待实现改字面 |
 
 ## 易错点（自查清单）
 

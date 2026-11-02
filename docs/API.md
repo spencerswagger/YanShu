@@ -274,19 +274,21 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 | 缺凭证头 | 401 | `AUTH_MISSING` | 补头 |
 | 凭据不存在 / 格式错 / 与任何已签发凭据不匹配 | 401 | `AUTH_TOKEN_INVALID` | 重新申领（上传见 §1.7.5；下载重新 `GET /prelude`）；**不要**重试同一凭据 |
 | 下载租约过期（30 min），或凭据被端侧丢弃后重放 | 401 | `AUTH_TOKEN_INVALID` | 重新 `GET /prelude` 取新租约 |
-| 凭据记录的 `KID` 落后于当前版本（版本已轮换） | 401 | `AUTH_TOKEN_REVOKED`（字面待确认，§1.7.8） | 重新挑战 → 签名 → 取新凭据（§1.7.5）；**不要重算签名** |
+| 凭据记录的 `KID` 落后于当前版本（版本已轮换） | 401 | `AUTH_TOKEN_REVOKED` | 重新挑战 → 签名 → 取新凭据（§1.7.5）；**不要重算签名**；文案"凭据已过期版本，请重新获取" |
 | 传输进入终态 | 410 | `TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` | 停止并清理本地 |
 
 **判定顺序写死**：先凭据（401）、后状态（410）；凭据内部**先比 `KID`、再比凭据本身**。
 
 **两类错误不得互相顶替**（写死）：
 
-- 凭据类**只有两个**：`AUTH_TOKEN_INVALID`（不存在/格式错/不匹配/租约过期）、`AUTH_TOKEN_REVOKED`（`KID` 已轮换，**字面值待实测确认**，见 §1.7.8）；
-- 签名类：`AUTH_SIGNATURE_INVALID`（验签失败）、`AUTH_CODE_MISMATCH`（码与签名不一致）。
+- 凭据类**只有两个**：`AUTH_TOKEN_INVALID`（不存在 / 格式错 / 值不匹配 / 租约过期）、`AUTH_TOKEN_REVOKED`（`KID` 已轮换）；
+- 签名类：`AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受：伪造 DER、消息被改、公钥不符）、`AUTH_CODE_MISMATCH`（码与签名不一致）。
+
+**三个终值（不再变）**：`AUTH_TOKEN_REVOKED` / `AUTH_TOKEN_INVALID` / `AUTH_SIGNATURE_INVALID`。**客户端处置按名字分叉**：前两个都走"重新挑战 → 签名 → 取新凭据"（**不要重算签名**，那是签名问题的解法）；只有拿到 `AUTH_SIGNATURE_INVALID` 才去查 `SIG_INPUT` 拼接、私钥与公钥是否配对。
 
 **v1 不设凭据级的"过期"错误码**：上传凭据的有效期就是传输的 `expires_at`，到期由传输终结表达（`410 TRANSFER_EXPIRED`）；下载租约到期视为凭据失效（`AUTH_TOKEN_INVALID`）。凭据类 **MUST NOT** 再造 `*_EXPIRED`。
 
-凭据失效 **MUST NOT** 返回签名类错误：否则客户端会被引去"重算签名 / 怀疑私钥"，而真正原因是"该换凭据了"。同理，版本失效码也 **MUST NOT** 被 `INVALID` 顶替——两者处置相同但排查含义完全不同（一个是版本、一个是来源）。
+凭据失效 **MUST NOT** 返回签名类错误：否则客户端会被引去"重算签名 / 怀疑私钥"，而真正原因是"该换凭据了"。同理 `AUTH_TOKEN_REVOKED` 也 **MUST NOT** 被 `AUTH_TOKEN_INVALID` 顶替——两者客户端处置相同，但排查含义完全不同（一个是版本、一个是来源）。
 
 #### 1.7.5 重签发（可选端点）
 
@@ -336,22 +338,6 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 #### 1.7.7 本节不定义的东西
 
 表名/列名、`KID` 的存储方式、热载还是重启生效、是否保留上一代密钥——都属实现自由。契约只约束**行为**与**可观测结果**（错误名、HTTP 状态、可复跑用例）。
-
-#### 1.7.8 错误名字面值：占位状态（待实测确认）
-
-**语义已定稿，不随字面变化**：
-
-1. 凭据值不匹配（只换 `TOKEN_SECRET`、随机串、租约过期）→ `AUTH_TOKEN_INVALID`；
-2. 版本失效（`KID` 轮换后的旧凭据）→ **版本失效码**（字面待定）；
-3. 传输级过期/终结 → `410`（`TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` / `TRANSFER_REVOKED`），凭据类**不设** `*_EXPIRED`。
-
-**字面值当前为占位**：本稿用 `AUTH_TOKEN_REVOKED` 表示"版本失效"，另一个候选是实现正在使用的 `AUTH_TOKEN_STALE`。终值以**实测表**为准（同一二进制、三种场景——只换 secret / 只换 `KID` / 两者都换，逐字记录服务端实际返回的错误名字符串），由契约方**一次性替换字面**，**语义、HTTP 状态、客户端处置都不变**。
-
-**过渡期要求（写死）**：
-
-- 客户端 MUST 把 `AUTH_TOKEN_REVOKED` 与 `AUTH_TOKEN_STALE` 视为**同一语义**，处置相同（重新挑战 → 签名 → 取新凭据；**不要重算签名**）；
-- 门禁与测试 MUST NOT 因字面差异把正确的"旧版本拒绝"判成失败——断言应允许这两个字面；
-- 替换字面时只改名字，不改本节任何行为描述，也不影响任何包字节。
 
 ---
 
@@ -957,11 +943,11 @@ v1 的信令与在线表**未实现**（排期见 §15），所以"WS 不可用"
 | `SIZE_LIMIT_EXCEEDED` | 400 | **声明值**超上限：`plaintext_size > 4 GiB`、`chunk_count > 1048576`、`prelude_len > 4 MiB` | 提示用户拆分文件 |
 | `AUTH_MISSING` | 401 | 缺 `X-YS-*` 鉴权头 | 补签名后重试 |
 | `SIG_INPUT_TOO_LONG` | 400 | `SIG_INPUT` 超过防御性硬上限 512 字节（合法上限是 109，见 §1.3） | 客户端本地按字段上限校验后重算签名；不要靠服务端兜底 |
-| `AUTH_SIGNATURE_INVALID` | 401 | 验签失败或签名与字段不匹配 | 用同一挑战重算签名；**不要**无限重试（挑战已作废，需重新申请） |
+| `AUTH_SIGNATURE_INVALID` | 401 | **仅**签名本身不被接受（伪造 DER、消息被改、公钥不符） | 检查 `SIG_INPUT` 拼接顺序与私钥/公钥配对，用同一挑战重算签名；**不要**无限重试（挑战已作废，需重新申请） |
 | `AUTH_CHALLENGE_INVALID` | 401 | 挑战过期/已用/用途不符 | 重新 `POST /challenges` 后重试一次 |
 | `AUTH_CODE_MISMATCH` | 401 | `X-YS-Code` 与 `SIG_INPUT` 里被签名的 `CODE(4)` 不一致 | 修 bug；用同一码重算签名 |
 | `AUTH_TOKEN_INVALID` | 401 | 凭据不存在 / 与任何已签发凭据不匹配（随机串、别的传输的 token；§1.7.4） | 重新申领（上传 §1.7.5、下载重取租约）；不要重试同一凭据 |
-| `AUTH_TOKEN_REVOKED` | 401 | 凭据记录的 `KID` 落后于当前版本（版本已轮换，§1.7.3）。**字面值待实测确认**（候选 `AUTH_TOKEN_REVOKED` / `AUTH_TOKEN_STALE`，见 §1.7.8） | 重新挑战 → 签名 → 取新凭据（上传 §1.7.5、下载重取租约）；**不要重算签名** |
+| `AUTH_TOKEN_REVOKED` | 401 | 凭据记录的 `KID` 落后于当前版本（版本已轮换，§1.7.3） | 重新挑战 → 签名 → 取新凭据（上传 §1.7.5、下载重取租约）；**不要重算签名** |
 | `SIGNAL_PEER_MISMATCH` | 403 | 信令双方与传输不匹配 | 停止该直传尝试，走中转 |
 | `NOT_TRANSFER_PARTY` | 403 | 已认证（签名有效）但**不是该传输的当事人**：非接收方调 `ack`、非发送方调 `revoke` | 停止操作、不要重试；提示"这不是你的传输" |
 | `CODE_NOT_FOUND` | 404 | 码未注册 | 提示"码不对或对方已换浏览器" |
