@@ -205,8 +205,10 @@ npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局�
 - A：`dev relay + 旧布局内核` —— 仅跨浏览器链路证据，**不作验收**。
 - B：`Core 真实服务 + 契约布局内核`（沙盒内自起）—— 同一份样本落盘逐字节一致。
 - C：`宿主常驻实例 127.0.0.1:18080 + 契约布局内核` —— 同流程复跑，1 MiB 分块 → 3 块，落盘逐字节一致（服务端当时仍 `stub-allow`）。
-- D：`Core caf00ac + YANSHU_VERIFIER=sm2`（wazero 载内核**真验签**）+ 冻结内核 `80400ec` —— **真认证链路**，
-  注册/建包/inbox/ack 全过真验签，2 506 889 字节逐字节一致。
+- D：`Core caf00ac + YANSHU_VERIFIER=sm2`（本地自起，wazero 载内核**真验签**）+ 冻结内核 —— **真认证链路**。
+- C2（`results/web/c1b87d0a-sm2-e2e.md`）：宿主 `127.0.0.1:18080`（`4eda665`，真 `sm2`，`TOKEN_EPOCH=1`）+ 冻结产物
+  `c1b87d0a…`，端到端逐字节一致；同一次运行内实测三条鉴权分支：昵称签名 200、篡改签名 `AUTH_SIGNATURE_INVALID`、
+  路径码≠头码 `AUTH_CODE_MISMATCH`、复用挑战 `AUTH_CHALLENGE_INVALID`。
 - 复跑条件：Core 把 `YANSHU_VERIFIER` 换成真实 SM2 验签后，用同一脚本再跑一份。
 
 **未验证 / 做不到**

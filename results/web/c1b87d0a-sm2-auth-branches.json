@@ -1,0 +1,14 @@
+{
+  "run": "c1b87d0a-sm2-auth-branches",
+  "relay": "core-host-18080-sm2",
+  "server": "yanshu-server-4eda665 (sha256 cc117070…e571f9), YANSHU_VERIFIER=sm2, YANSHU_TOKEN_EPOCH=1",
+  "kernel": { "sha256": "c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f", "bytes": 127313, "head": "80400ec" },
+  "results": [
+    { "label": "nickname_update_valid", "ok": true, "status": 200 },
+    { "label": "tampered_signature", "ok": false, "status": 401, "code": "AUTH_SIGNATURE_INVALID" },
+    { "label": "code_mismatch_path", "ok": false, "status": 401, "code": "AUTH_CODE_MISMATCH" },
+    { "label": "reused_challenge", "ok": false, "status": 401, "code": "AUTH_CHALLENGE_INVALID" }
+  ],
+  "note": "token stale 未构造（需改宿主 EPOCH，属运维动作）；客户端 401 自愈由单测覆盖",
+  "acceptance": true
+}
