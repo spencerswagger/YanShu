@@ -30,7 +30,7 @@
 
 | # | 条件 | 结果 |
 |---|---|---|
-| 1 | 内核 sha（工作区 + git blob + 版本/导出） | **PASS**：`c1b87d0a…`/127,313 B，`ys_version()=0x00010000`、34 函数 + memory |
+| 1 | 内核 sha（三重核对：工作区 + git blob + 启动日志） | **PASS**：工作区 `c1b87d0a…7259f`/127,313 B；`git cat-file blob 8223096:server/kernel/yanshu_sm.wasm` 同为该值；启动日志 `sm2 verifier loaded kernel=./kernel/yanshu_sm.wasm version=0x00010000`，`/healthz` 200 |
 | 2 | 迁移对已有库幂等（含 `ADD COLUMN`） | **PASS 10/10**：缺列 → 补列 → 历史行 `pre-kid` → 服务起 + `/healthz` 200 → 连跑两次 `rows 1→1` |
 | 3 | 冻结向量套件 + 证据二 | **PASS**：sm2 14 条可执行（1 条 `executable:false` 跳过）、user-code 5、normalize 20；证据二 6/6 + 11/11 |
 
