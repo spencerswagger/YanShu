@@ -228,12 +228,19 @@ const isContract = ys_version() === 0x00010000 && ys_header_len() === 112
 | 函数 | 入参关键长度 | 出参 |
 |---|---|---|
 | `ys_sm2_keygen` | seed ≥16 | priv 32、**pub 64**（`X‖Y`） |
+| `ys_user_code` / `ys_check_symbol` | **pub 64**（`X‖Y`） | 4 / 1 ASCII |
+| `ys_user_code_wire` / `ys_check_symbol_wire` | **pub 65**（`0x04‖X‖Y`） | 4 / 1 ASCII |
 | `ys_sm2_pubkey` | priv 32 | **pub 64** |
 | `ys_sm2_encrypt` / `ys_sm2_verify` / `ys_user_code` / `ys_check_symbol` / `ys_pack` / `ys_pack_v1` | **pub 64** | — |
 | `ys_sm2_sign` / `ys_sm2_verify` | sig raw `R‖S` 64 | — |
 | `ys_sm2_sign_der` / `ys_sm2_verify_der` | sig DER 70..72 | — |
 | `ys_unpack` / `ys_unpack_meta` | `sender_pub_or_0` = **64 或 0** | 明文 / JSON |
 | `ys_unpack_v1` / `ys_unpack_meta_v1` / `ys_unpack_meta_prelude` | — | 明文 / JSON |
+
+> ⚠️ 用户码派生：传 64 字节 `X‖Y` 用 `ys_user_code`；传 65 字节 wire 用
+> `ys_user_code_wire`。**把 65 字节缓冲传给 64 字节接口会得到不同的码**（内核会按
+> `0x04‖X[0..63]` 再补一个 `0x04`），这是历史 P0 的来源，已加
+> `vectors/user-code-vectors.json` + 双侧断言钉死。`check_symbol` 同理。
 
 **65 字节含 `0x04` 只出现在输出/包内**：包内 `SENDER_PUB`、`WRAPPED_KEY` 的 C1、
 `ys_unpack_meta*` JSON 的 `sender_pub`。其余**所有入参公钥都是 64 字节 `X‖Y`**。

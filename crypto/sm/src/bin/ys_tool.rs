@@ -41,6 +41,25 @@ fn fixed<const N: usize>(s: &str) -> [u8; N] {
     out
 }
 
+/// 公钥入参：接受 65 字节 wire（`0x04‖X‖Y`）或 64 字节 `X‖Y`，统一成 65。
+fn pub65_arg(s: &str) -> [u8; 65] {
+    let v = unhex(s);
+    match v.len() {
+        65 if v[0] == 0x04 => {
+            let mut p = [0u8; 65];
+            p.copy_from_slice(&v);
+            p
+        }
+        64 => {
+            let mut p = [0u8; 65];
+            p[0] = 0x04;
+            p[1..].copy_from_slice(&v);
+            p
+        }
+        _ => fail("public key must be 65 bytes (0x04||X||Y) or 64 bytes (X||Y)"),
+    }
+}
+
 fn fail(msg: &str) -> ! {
     eprintln!("ys-tool: {}", msg);
     exit(2);
@@ -187,11 +206,11 @@ fn main() {
             }
         }
         "user-code" => {
-            let pub65 = fixed::<65>(&args[2]);
+            let pub65 = pub65_arg(&args[2]);
             println!("{}", code::from_public_key(&pub65));
         }
         "check-symbol" => {
-            let pub65 = fixed::<65>(&args[2]);
+            let pub65 = pub65_arg(&args[2]);
             println!("{}", code::check_symbol(&pub65));
         }
         other => fail(&format!("unknown subcommand {}", other)),

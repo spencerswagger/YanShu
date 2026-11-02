@@ -558,6 +558,36 @@ pub unsafe extern "C" fn ys_user_code(public_key: *const u8, out: *mut u8) -> i3
     })())
 }
 
+/// 由 **65 字节 wire 公钥**（`0x04‖X‖Y`）派生 4 位码。
+///
+/// 与 [`ys_user_code`] 的区别只有一个：入参已经是包内/meta 里的 wire 形态（65 字节）。
+/// 两个函数对"同一把钥匙"必须给出同一个码；`vectors/user-code-vectors.json` 把这条钉死。
+#[no_mangle]
+pub unsafe extern "C" fn ys_user_code_wire(public_key: *const u8, out: *mut u8) -> i32 {
+    rc((|| {
+        let pub65 = fixed::<65>(public_key)?;
+        if pub65[0] != 0x04 {
+            return Err(Error::BadPoint);
+        }
+        let code = code::from_public_key(&pub65);
+        as_slice_mut(out, 4)?.copy_from_slice(code.as_bytes());
+        Ok(())
+    })())
+}
+
+/// 由 65 字节 wire 公钥派生第 5 位校验字符（仅 UI 防误输入）。
+#[no_mangle]
+pub unsafe extern "C" fn ys_check_symbol_wire(public_key: *const u8, out: *mut u8) -> i32 {
+    rc((|| {
+        let pub65 = fixed::<65>(public_key)?;
+        if pub65[0] != 0x04 {
+            return Err(Error::BadPoint);
+        }
+        as_slice_mut(out, 1)?.copy_from_slice(&[code::check_symbol(&pub65) as u8]);
+        Ok(())
+    })())
+}
+
 /// 校验字符（第 5 位，仅 UI 防误输入；**不是用户码的一部分**）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_check_symbol(public_key: *const u8, out: *mut u8) -> i32 {

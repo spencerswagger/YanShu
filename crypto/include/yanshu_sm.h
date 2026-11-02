@@ -51,7 +51,8 @@
  * | `ys_sm2_verify` | **pub 64**、msg、sig 64 | 1/0/负 |
  * | `ys_sm2_sign_der` | priv 32、seed、msg | DER 70..72 |
  * | `ys_sm2_verify_der` | **pub 64**、msg、DER | 1/0/负 |
- * | `ys_user_code` / `ys_check_symbol` | **pub 64** | 4 / 1 ASCII |
+ * | `ys_user_code` / `ys_check_symbol` | **pub 64**（`X‖Y`） | 4 / 1 ASCII |
+ * | `ys_user_code_wire` / `ys_check_symbol_wire` | **pub 65**（`0x04‖X‖Y`） | 4 / 1 ASCII |
  * | `ys_normalize_code` | 任意文本 | 4 ASCII |
  * | `ys_pack` | **recipient_pub 64**、sender_priv 32、name/mime/block_size/seed/data | 包（上界见 `out_len`） |
  * | `ys_pack_v1` | 同上 + `ext` + `created_at_ms` + `chunk_size` | 包 |

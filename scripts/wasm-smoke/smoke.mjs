@@ -131,6 +131,35 @@ expectRc(
   "tampered tag", // CRYPTO_CHUNK_AUTH_FAILED（首版 -15 的规范值）
 );
 
+// ---- 用户码：wasm 两个入口（64B X‖Y / 65B wire）都必须等于原生冻结值
+{
+  const vecPath = new URL("../../vectors/user-code-vectors.json", import.meta.url);
+  const vec = JSON.parse(fs.readFileSync(vecPath, "utf8"));
+  for (const v of vec.vectors) {
+    const p65 = fromHex(v.pub65);
+    const p64 = p65.slice(1);
+    const a64 = alloc(64); write(a64, p64);
+    const a65 = alloc(65); write(a65, p65);
+    const out64 = alloc(4), out65 = alloc(4);
+    check(e.ys_user_code(a64, out64), "ys_user_code(64B)");
+    check(e.ys_user_code_wire(a65, out65), "ys_user_code_wire(65B)");
+    const c64 = Buffer.from(read(out64, 4)).toString("ascii");
+    const c65 = Buffer.from(read(out65, 4)).toString("ascii");
+    if (c64 !== v.code || c65 !== v.code) {
+      throw new Error(`user_code ${v.name}: wasm64=${c64} wasm65=${c65} expect=${v.code}`);
+    }
+    const s64 = alloc(1), s65 = alloc(1);
+    check(e.ys_check_symbol(a64, s64), "ys_check_symbol(64B)");
+    check(e.ys_check_symbol_wire(a65, s65), "ys_check_symbol_wire(65B)");
+    const k64 = Buffer.from(read(s64, 1)).toString("ascii");
+    const k65 = Buffer.from(read(s65, 1)).toString("ascii");
+    if (k64 !== v.check || k65 !== v.check) {
+      throw new Error(`check_symbol ${v.name}: wasm=${k64}/${k65} expect=${v.check}`);
+    }
+    [a64, a65, out64, out65, s64, s65].forEach((p, i) => e.ys_free(p, [64, 65, 4, 4, 1, 1][i]));
+  }
+}
+
 // ---- SM2 DER 验签（服务端/Core 口径）：用 vectors/sm2-verify-vectors.json 驱动
 {
   const vecPath = new URL("../../vectors/sm2-verify-vectors.json", import.meta.url);
