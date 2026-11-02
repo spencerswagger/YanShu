@@ -102,42 +102,40 @@ const isContract = ys_version() === 0x00010000 && ys_header_len() === 112
   （与 Rust `Error::name()` 逐字一致）；首版 `BAD_MAGIC` 等旧名不再返回，
   避免 wasm 与 Rust 两套自由格式。
 
-| code | `ys_error_name`（= `_v1`） | 含义 |
+| code | `CRYPTO_*`（唯一权威） | 含义 | 首版别名（仅解析） |
 |---:|---|---|---|
-| -1 | `CRYPTO_BAD_ARGUMENT` | 参数非法 |
-| -2 | `CRYPTO_BUFFER_TOO_SMALL` | 缓冲区不足（`*out_len` 给所需长度） |
-| -3 | `CRYPTO_RNG_FAILED` | 随机源失败 / **同一 seed 复用** |
-| -4 | `CRYPTO_MAGIC_MISMATCH` | 魔数不是 `YSPK` |
-| -5 | `CRYPTO_VERSION_UNSUPPORTED` | 版本/算法 ID 不认识 |
-| -6 | `CRYPTO_FLAGS_UNKNOWN` | FLAGS 保留位 / RESERVED 非 0 |
-| -7 | `CRYPTO_LENGTH_INCONSISTENT` | 截断 / 长度不符 |
-| -8 | `CRYPTO_KEY_UNWRAP_FAILED` | DK 解封失败 |
-| -9 | `CRYPTO_SIGNATURE_INVALID` | 签名记录/DER 非法 |
-| -10 | `CRYPTO_MANIFEST_INVALID` | 清单结构非法 |
-| -11 | `CRYPTO_CHUNK_ORDER` | 块序错 |
-| -12 | `CRYPTO_CHUNK_ORDER` | 重复块 |
-| -13 | `CRYPTO_CHUNK_MISSING` | 缺块 |
-| -14 | `CRYPTO_CHUNK_ORDER` | 末块标志不符 |
-| -15 | `CRYPTO_CHUNK_AUTH_FAILED` | 块 GCM 认证失败 |
-| -16 | `CRYPTO_MANIFEST_AUTH_FAILED` | 清单认证/一致性 |
-| -17 | `CRYPTO_SIGNATURE_INVALID` | 验签失败 |
-| -18 | `CRYPTO_LENGTH_INCONSISTENT` | 尾部多余字节 |
-| -19 | `CRYPTO_CURVE_INVALID` | 曲线点非法 |
-| -20 | `CRYPTO_CIPHERTEXT_INVALID` | KDF/密文非法 |
-| -21 | `CRYPTO_CODE_INVALID` | 用户码非法 |
-| -22 | `CRYPTO_CODE_EXHAUSTED` | 撞码重试耗尽 |
-| -23 | `CRYPTO_CIPHERTEXT_INVALID` | 密文非法 |
-| **-24** | `CRYPTO_HEADER_INVALID` | 头部字段非法 |
-| **-25** | `CRYPTO_ALG_UNSUPPORTED` | 未知算法 ID |
-| **-26** | `CRYPTO_UNSIGNED` | `SENDER_SIGNED=0` |
-| **-27** | `CRYPTO_LENGTH_INCONSISTENT` | 长度不自洽 |
-| **-28** | `CRYPTO_CHUNK_ORDER` | 块号/末块标志不符 |
-| **-29** | `CRYPTO_CHUNK_AUTH_FAILED` | 块 AEAD 失败 |
-| **-30** | `CRYPTO_CHUNK_MISSING` | 缺块 |
-| **-31** | `CRYPTO_MANIFEST_AUTH_FAILED` | 清单 AEAD 失败 |
-| **-32** | `CRYPTO_DIGEST_MISMATCH` | 明文摘要与清单不符 |
-| **-33** | `CRYPTO_SENDER_MISMATCH` | 调用方给的公钥与包内不符 |
-| -99 | `CRYPTO_INTERNAL` | 内部错误 |
+| -1 | `CRYPTO_BAD_ARGUMENT` | 参数非法 | |
+| -2 | `CRYPTO_BUFFER_TOO_SMALL` | 缓冲区不足（`*out_len` 给所需长度） | |
+| -3 | `CRYPTO_RNG_FAILED` | 随机源失败 / 同一 seed 复用 | |
+| -4 | `CRYPTO_MAGIC_MISMATCH` | 魔数不是 `YSPK` | |
+| -5 | `CRYPTO_VERSION_UNSUPPORTED` | 版本 / 算法 ID 不认识 | |
+| -6 | `CRYPTO_FLAGS_UNKNOWN` | FLAGS 保留位 / RESERVED 非 0 | |
+| -7 | `CRYPTO_TRUNCATED` | **截断**（包长不足） | |
+| -8 | `CRYPTO_KEY_UNWRAP_FAILED` | DK 解封失败 | |
+| -9 | `CRYPTO_SIGNATURE_INVALID` | 签名记录 / DER 非法 | |
+| -10 | `CRYPTO_MANIFEST_INVALID` | 清单结构非法 | |
+| -17 | `CRYPTO_SIGNATURE_INVALID` | 验签失败 | |
+| -18 | `CRYPTO_TRAILING_BYTES` | **尾随字节**（包长超出） | |
+| -19 | `CRYPTO_CIPHERTEXT_INVALID` | 密文 / KDF / 曲线外点密文 | -20, -23 |
+| -21 | `CRYPTO_CODE_INVALID` | 用户码非法 | |
+| -22 | `CRYPTO_CODE_EXHAUSTED` | 撞码重试耗尽 | |
+| -24 | `CRYPTO_HEADER_INVALID` | 头部字段非法 | |
+| -25 | `CRYPTO_ALG_UNSUPPORTED` | 未知算法 ID | |
+| -26 | `CRYPTO_UNSIGNED` | `SENDER_SIGNED=0` | |
+| -27 | `CRYPTO_LENGTH_INCONSISTENT` | **声明互相矛盾**（非截断/非尾随） | |
+| -28 | `CRYPTO_CHUNK_ORDER` | 块序 / 重复块 / 末块标志不符 | -11, -12, -14 |
+| -29 | `CRYPTO_CHUNK_AUTH_FAILED` | 块 AEAD 失败 | -15 |
+| -30 | `CRYPTO_CHUNK_MISSING` | 缺块 | -13 |
+| -31 | `CRYPTO_MANIFEST_AUTH_FAILED` | 清单 AEAD / 一致性 | -16 |
+| -32 | `CRYPTO_DIGEST_MISMATCH` | 明文摘要与清单不符 | |
+| -33 | `CRYPTO_SENDER_MISMATCH` | 调用方给的公钥与包内不符 | |
+| -34 | `CRYPTO_CURVE_INVALID` | 曲线点非法（`-19` 已归密文） | |
+| -99 | `CRYPTO_INTERNAL` | 内部错误 | |
+
+> **名字是唯一权威**（契约 §13.1）：判定、日志、测试一律用 `CRYPTO_*`；首版重复数值
+> 只用于解析旧输入，实现不再产出。三个"长度类"必须分清：
+> `-7 TRUNCATED`（包短了）/ `-18 TRAILING_BYTES`（包长了）/ `-27 LENGTH_INCONSISTENT`
+> （长度字段互相矛盾，例如 `CHUNK_COUNT` 与 `PLAINTEXT_SIZE` 对不上）。
 
 ## 5. 导出清单（30 个函数 + `memory`）
 
@@ -157,6 +155,15 @@ const isContract = ys_version() === 0x00010000 && ys_header_len() === 112
 2. `ys_user_code`：入参仍是 64 字节 `X‖Y`，但**算法口径改为契约口径**——内部补 `0x04`
    后对 65 字节做 SM3，与契约 §15.1 的 `AWQW` 一致。前端传 64 字节不用改。
 3. `ys_pack`：产出 `YSPK/1.0`（清单 `ext=""`、`created_at_ms=0`）；要完整清单字段用 `ys_pack_v1`。
+
+## 5.5 命名与构建约定
+
+- **`_v1` 后缀只表示契约大版本 `YSPK/1.0`**（`ys_pack_v1` / `ys_unpack_v1` /
+  `ys_unpack_meta_v1` 同族），不存在 `_v2`；后续契约小改仍走 `_v1` 语义。
+- **发布构建不含任何布局切换入口**：`ys_set_layout` / `ys_get_layout` / `ys_layout_of`
+  已删除；旧 rune-v1 布局实现也已删除，只有 `YSPK/1.0`（契约 §2.2 规则 7）。
+- 构建 wasm 时**不要设全局 `RUSTFLAGS`/`CC` 覆盖 linker**（会给 wasm32 套 host linker）；
+  只为 x86_64 host target 设 `CARGO_TARGET_X86_64_…_LINKER=gcc`。
 
 ## 6. 迁移说明（给前端 / 测试）
 

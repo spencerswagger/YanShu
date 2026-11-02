@@ -101,8 +101,8 @@ fn delete_middle_chunk() {
     let mut p = Vec::new();
     p.extend_from_slice(&f.pack[..c1]);
     p.extend_from_slice(&f.pack[c2..]);
-    // 包长与 ENVELOPE_LEN 不符 → 长度层先拒绝（不会去"猜"缺了哪块）
-    assert_eq!(err(&f, &p), Error::LengthInconsistent);
+    // 包长不足 → CRYPTO_TRUNCATED（不会去"猜"缺了哪块）
+    assert_eq!(err(&f, &p), Error::Truncated);
     // 若攻击者保留长度、只把中间块的块号改成 0/1，则命中块序层
     let mut q = f.pack.clone();
     q[c1..c1 + 4].copy_from_slice(&0u32.to_be_bytes());
@@ -151,15 +151,10 @@ fn splice_chunk_from_another_pack() {
 fn truncate_pack() {
     let f = build(96, 32);
     for cut in [1usize, 40, 112, f.pack.len() - 20, f.pack.len() - 1] {
-        assert_eq!(
-            err(&f, &f.pack[..cut]),
-            Error::LengthInconsistent,
-            "cut = {}",
-            cut
-        );
+        assert_eq!(err(&f, &f.pack[..cut]), Error::Truncated, "cut = {}", cut);
     }
     // 头部都不完整时也不能 panic / 误判
-    assert_eq!(err(&f, &[]), Error::LengthInconsistent);
+    assert_eq!(err(&f, &[]), Error::Truncated);
 }
 
 /// 旧 rune-v1 布局的字节必须**在版本字段处就被拒**，不能静默解出明文。

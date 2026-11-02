@@ -182,38 +182,34 @@ int32_t ys_pack_v1(const uint8_t *recipient_public /* 64 = X‖Y */, const uint8
 #define YS_ERR_BAD_MAGIC (-4)
 #define YS_ERR_UNSUPPORTED_VERSION (-5)
 #define YS_ERR_BAD_FLAGS (-6)
-#define YS_ERR_TRUNCATED (-7)
+#define YS_ERR_TRUNCATED (-7)            /* CRYPTO_TRUNCATED（首版 -7 正名） */
 #define YS_ERR_BAD_KEY_RECORD (-8)
 #define YS_ERR_BAD_SIGNATURE_RECORD (-9)
 #define YS_ERR_BAD_MANIFEST_RECORD (-10)
-#define YS_ERR_BLOCK_SEQUENCE (-11)
-#define YS_ERR_DUPLICATE_BLOCK (-12)
-#define YS_ERR_MISSING_BLOCK (-13)
-#define YS_ERR_LAST_FLAG_MISMATCH (-14)
-#define YS_ERR_TAG_MISMATCH (-15)
-#define YS_ERR_MANIFEST_MISMATCH (-16)
-#define YS_ERR_SIGNATURE_MISMATCH (-17)
+#define YS_ERR_BAD_SIGNATURE (-17)       /* 验签失败，同 CRYPTO_SIGNATURE_INVALID */
 #define YS_ERR_TRAILING_BYTES (-18)
-#define YS_ERR_BAD_POINT (-19)
-#define YS_ERR_BAD_KDF (-20)
+#define YS_ERR_CIPHERTEXT_INVALID (-19)  /* 首版 -20/-23 是它的别名 */
 #define YS_ERR_BAD_CODE (-21)
 #define YS_ERR_CODE_EXHAUSTED (-22)
-#define YS_ERR_BAD_CIPHERTEXT (-23)
-/* 新增（契约细粒度） */
 #define YS_ERR_HEADER_INVALID (-24)
 #define YS_ERR_ALG_UNSUPPORTED (-25)
 #define YS_ERR_UNSIGNED (-26)
-#define YS_ERR_LENGTH_INCONSISTENT (-27)
-#define YS_ERR_CHUNK_ORDER (-28)
-#define YS_ERR_CHUNK_AUTH_FAILED (-29)
-#define YS_ERR_CHUNK_MISSING (-30)
-#define YS_ERR_MANIFEST_AUTH_FAILED (-31)
+#define YS_ERR_LENGTH_INCONSISTENT (-27) /* 声明互相矛盾（≠ 截断 ≠ 尾随字节） */
+#define YS_ERR_CHUNK_ORDER (-28)         /* 首版 -11/-12/-14 的别名目标 */
+#define YS_ERR_CHUNK_AUTH_FAILED (-29)   /* 首版 -15 的别名目标 */
+#define YS_ERR_CHUNK_MISSING (-30)       /* 首版 -13 的别名目标 */
+#define YS_ERR_MANIFEST_AUTH_FAILED (-31) /* 首版 -16 的别名目标 */
 #define YS_ERR_DIGEST_MISMATCH (-32)
 #define YS_ERR_SENDER_MISMATCH (-33)
+#define YS_ERR_CURVE_INVALID (-34)
 #define YS_ERR_INTERNAL (-99)
 
-#ifdef __cplusplus
-}
-#endif
+/*
+ * 首版重复数值只作**解析别名**，实现不再产出（`ys_error_name` 仍能识别）：
+ *   -11 / -12 / -14 → -28 CHUNK_ORDER；-13 → -30 CHUNK_MISSING；
+ *   -15 → -29 CHUNK_AUTH_FAILED；-16 → -31 MANIFEST_AUTH_FAILED；
+ *   -20 / -23 → -19 CIPHERTEXT_INVALID。
+ * 判定、日志、测试一律用**名字**（`CRYPTO_*`），数值只作兼容。
+ */
 
 #endif /* YANSHU_SM_H */

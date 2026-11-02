@@ -1,15 +1,15 @@
 //! 统一错误类型。
 //!
-//! 两套名字，一套数值：
-//! * **数值（C ABI 契约）**：首版公布的错误码**一个都没有改**；新增语义用新槽位（-24 起），
-//!   老调用方（Web 的 `ERROR_CODES` 表）不受影响。
-//! * **`name()`**：契约 `docs/CRYPTO-PACK.md` §13 的端侧错误名（`CRYPTO_*`），
-//!   给 Gate 的探针与日志用。
-//! * **`legacy_name()`**：首版 ABI 的旧名（`BAD_MAGIC` 等），`ys_error_name` 返回它，
-//!   保证已发布的 Web 绑定查表仍然命中。
+//! **名字是唯一权威，数值只作兼容**（契约 `CRYPTO-PACK §13.1`）。
 //!
-//! 新旧变体是**同一语义的粗细两档**：契约布局用细的（`ChunkAuthFailed`…），
-//! rune-v1 兼容布局用旧的（`TagMismatch`…），数值互不冲突。
+//! * `name()` 返回契约错误名 `CRYPTO_*`；ABI 的 `ys_error_name` / `ys_error_name_v1`
+//!   都返回这一套，与 Rust 侧逐字一致。
+//! * 数值按契约 §13.1 分配：首版重复的值降为**别名**——`-11/-12/-14→-28`、
+//!   `-13→-30`、`-15→-29`、`-16→-31`、`-20/-23→-19`；`-19` 归
+//!   `CRYPTO_CIPHERTEXT_INVALID`，`CRYPTO_CURVE_INVALID` 用新值 `-34`；
+//!   `-99` 保留给内部错误。
+//! * 旧数值仍能被 `ys_error_name()` 解析（见 `ALIASES`），但**不再产出**：
+//!   日志、测试、判定一律用名字。
 
 use core::fmt;
 
@@ -65,23 +65,26 @@ impl Error {
             Error::BadMagic => -4,
             Error::UnsupportedVersion => -5,
             Error::BadFlags => -6,
+            // CRYPTO_TRUNCATED（首版 -7 正名）
             Error::Truncated => -7,
             Error::BadKeyRecord => -8,
             Error::BadSignatureRecord => -9,
             Error::BadManifestRecord => -10,
-            Error::BlockSequence => -11,
-            Error::DuplicateBlock => -12,
-            Error::MissingBlock => -13,
-            Error::LastFlagMismatch => -14,
-            Error::TagMismatch => -15,
-            Error::ManifestMismatch => -16,
+            // 首版重复值 → 规范值（-11/-12/-14 → -28，-13 → -30，-15 → -29，-16 → -31）
+            Error::BlockSequence => -28,
+            Error::DuplicateBlock => -28,
+            Error::MissingBlock => -30,
+            Error::LastFlagMismatch => -28,
+            Error::TagMismatch => -29,
+            Error::ManifestMismatch => -31,
             Error::SignatureMismatch => -17,
             Error::TrailingBytes => -18,
-            Error::BadPoint => -19,
-            Error::BadKdf => -20,
+            // 契约把 -19 定为 CRYPTO_CIPHERTEXT_INVALID；曲线错误改用 -34
+            Error::BadKdf => -19,
+            Error::BadCiphertext => -19,
+            Error::BadPoint => -34,
             Error::BadCode => -21,
             Error::CodeExhausted => -22,
-            Error::BadCiphertext => -23,
             Error::HeaderInvalid => -24,
             Error::AlgUnsupported => -25,
             Error::Unsigned => -26,
@@ -105,7 +108,7 @@ impl Error {
             Error::BadMagic => "CRYPTO_MAGIC_MISMATCH",
             Error::UnsupportedVersion => "CRYPTO_VERSION_UNSUPPORTED",
             Error::BadFlags => "CRYPTO_FLAGS_UNKNOWN",
-            Error::Truncated => "CRYPTO_LENGTH_INCONSISTENT",
+            Error::Truncated => "CRYPTO_TRUNCATED",
             Error::BadKeyRecord => "CRYPTO_KEY_UNWRAP_FAILED",
             Error::BadSignatureRecord => "CRYPTO_SIGNATURE_INVALID",
             Error::BadManifestRecord => "CRYPTO_MANIFEST_INVALID",
@@ -116,7 +119,7 @@ impl Error {
             Error::TagMismatch => "CRYPTO_CHUNK_AUTH_FAILED",
             Error::ManifestMismatch => "CRYPTO_MANIFEST_AUTH_FAILED",
             Error::SignatureMismatch => "CRYPTO_SIGNATURE_INVALID",
-            Error::TrailingBytes => "CRYPTO_LENGTH_INCONSISTENT",
+            Error::TrailingBytes => "CRYPTO_TRAILING_BYTES",
             Error::BadPoint => "CRYPTO_CURVE_INVALID",
             Error::BadKdf => "CRYPTO_CIPHERTEXT_INVALID",
             Error::BadCode => "CRYPTO_CODE_INVALID",
@@ -133,47 +136,6 @@ impl Error {
             Error::DigestMismatch => "CRYPTO_DIGEST_MISMATCH",
             Error::SenderMismatch => "CRYPTO_SENDER_MISMATCH",
             Error::Internal => "CRYPTO_INTERNAL",
-        }
-    }
-
-    /// 首版 ABI 的旧名（Web 已发布的映射表按这套查）。
-    pub fn legacy_name(self) -> &'static str {
-        match self {
-            Error::BadArgument => "BAD_ARGUMENT",
-            Error::BufferTooSmall => "BUFFER_TOO_SMALL",
-            Error::Rng => "RNG",
-            Error::BadMagic => "BAD_MAGIC",
-            Error::UnsupportedVersion => "UNSUPPORTED_VERSION",
-            Error::BadFlags => "BAD_FLAGS",
-            Error::Truncated => "TRUNCATED",
-            Error::BadKeyRecord => "BAD_KEY_RECORD",
-            Error::BadSignatureRecord => "BAD_SIGNATURE_RECORD",
-            Error::BadManifestRecord => "BAD_MANIFEST_RECORD",
-            Error::BlockSequence => "BLOCK_SEQUENCE",
-            Error::DuplicateBlock => "DUPLICATE_BLOCK",
-            Error::MissingBlock => "MISSING_BLOCK",
-            Error::LastFlagMismatch => "LAST_FLAG_MISMATCH",
-            Error::TagMismatch => "TAG_MISMATCH",
-            Error::ManifestMismatch => "MANIFEST_MISMATCH",
-            Error::SignatureMismatch => "SIGNATURE_MISMATCH",
-            Error::TrailingBytes => "TRAILING_BYTES",
-            Error::BadPoint => "BAD_POINT",
-            Error::BadKdf => "BAD_KDF",
-            Error::BadCode => "BAD_CODE",
-            Error::CodeExhausted => "CODE_EXHAUSTED",
-            Error::BadCiphertext => "BAD_CIPHERTEXT",
-            // 新码 → 最接近的旧名，保证 Web 的旧映射表仍能落到有意义的 CRYPTO_*
-            Error::HeaderInvalid => "BAD_FLAGS",
-            Error::AlgUnsupported => "UNSUPPORTED_VERSION",
-            Error::Unsigned => "BAD_SIGNATURE_RECORD",
-            Error::LengthInconsistent => "TRUNCATED",
-            Error::ChunkOrder => "BLOCK_SEQUENCE",
-            Error::ChunkAuthFailed => "TAG_MISMATCH",
-            Error::ChunkMissing => "MISSING_BLOCK",
-            Error::ManifestAuthFailed => "MANIFEST_MISMATCH",
-            Error::DigestMismatch => "MANIFEST_MISMATCH",
-            Error::SenderMismatch => "SIGNATURE_MISMATCH",
-            Error::Internal => "INTERNAL",
         }
     }
 }

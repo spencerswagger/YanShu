@@ -154,9 +154,11 @@ Rust 侧 API 为 `pack::unpack(pack, recipient_sk, Option<&str>)`（第三个参
 
 ## 9. 错误码与名字：数值向后兼容，名字两套
 
-* 数值 `-4..-23` 与首版完全一致；新语义从 `-24` 起。
-* `Error::name()` / `ys_error_name_v1()` → 契约 `CRYPTO_*`；
-  `ys_error_name()` 与 `ys_error_name_v1()` → 同一套 `CRYPTO_*`（不再返回旧名）。
+* **名字唯一权威**（契约 §13.1）：`ys_error_name()` 与 `ys_error_name_v1()` 同输出 `CRYPTO_*`，
+  与 `Error::name()` 逐字一致；旧名不再返回。
+* 数值按 §13.1：`-7` 正名 `CRYPTO_TRUNCATED`（与 `-18 TRAILING_BYTES`、`-27 LENGTH_INCONSISTENT`
+  三分）；`-19` 归 `CRYPTO_CIPHERTEXT_INVALID`（`-20/-23` 是别名）；`CRYPTO_CURVE_INVALID`
+  用新值 `-34`；首版重复值 `-11/-12/-14→-28`、`-13→-30`、`-15→-29`、`-16→-31` 仅作解析别名。
 * 能区分：块序 `CHUNK_ORDER` / 清单 `MANIFEST_MISMATCH`·`MANIFEST_AUTH_FAILED` /
   截断 `TRUNCATED`·`LENGTH_INCONSISTENT` / 缺块 `CHUNK_MISSING`·`MISSING_BLOCK` /
   版本 `UNSUPPORTED_VERSION` / tag `TAG_MISMATCH`·`CHUNK_AUTH_FAILED`。

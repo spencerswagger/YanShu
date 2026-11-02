@@ -126,11 +126,43 @@ badTag[0] ^= 1;
 write(badTagPtr, badTag);
 expectRc(
   e.ys_sm4_gcm_decrypt(keyPtr, noncePtr, 12, aadPtr, aad.length, ctPtr, pt.length, badTagPtr, backPtr),
-  -15,
-  "tampered tag",
+  -29,
+  "tampered tag", // CRYPTO_CHUNK_AUTH_FAILED（首版 -15 的规范值）
 );
 
-// ---- 打包/解包（两种布局）
+// ---- 错误名：唯一格式 CRYPTO_*，旧数值能被解析为同一名字
+{
+  const nPtr = alloc(4);
+  const probeName = (code) => {
+    e.ys_error_name(code, 0, 0, nPtr); // 先问长度
+    const n = dv().getUint32(nPtr, true);
+    const buf = alloc(n);
+    e.ys_error_name(code, buf, n, nPtr);
+    const s = Buffer.from(read(buf, n)).toString("ascii");
+    e.ys_free(buf, n);
+    return s;
+  };
+  const expect = {
+    "-7": "CRYPTO_TRUNCATED",
+    "-18": "CRYPTO_TRAILING_BYTES",
+    "-27": "CRYPTO_LENGTH_INCONSISTENT",
+    "-28": "CRYPTO_CHUNK_ORDER",
+    "-11": "CRYPTO_CHUNK_ORDER", // 首版别名
+    "-29": "CRYPTO_CHUNK_AUTH_FAILED",
+    "-15": "CRYPTO_CHUNK_AUTH_FAILED", // 首版别名
+    "-30": "CRYPTO_CHUNK_MISSING",
+    "-19": "CRYPTO_CIPHERTEXT_INVALID",
+    "-20": "CRYPTO_CIPHERTEXT_INVALID", // 首版别名
+    "-33": "CRYPTO_SENDER_MISMATCH",
+    "-34": "CRYPTO_CURVE_INVALID",
+  };
+  for (const [code, name] of Object.entries(expect)) {
+    const got = probeName(Number(code));
+    if (got !== name) throw new Error(`error_name(${code}) = ${got}, want ${name}`);
+  }
+}
+
+// ---- 打包/解包
 const name = Buffer.from("报告.pdf");
 const mime = Buffer.from("application/pdf");
 const namePtr = alloc(name.length);

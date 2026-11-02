@@ -192,8 +192,8 @@ fn tamper_manifest(f: &mut Fx, mutate: impl FnOnce(&mut Vec<u8>)) {
 #[test]
 fn check_01_minimum_length() {
     let f = build(8, 16);
-    assert_eq!(err(&f, &f.pack[..HDR - 1]), Error::LengthInconsistent);
-    assert_eq!(err(&f, &f.pack[..8]), Error::LengthInconsistent);
+    assert_eq!(err(&f, &f.pack[..HDR - 1]), Error::Truncated);
+    assert_eq!(err(&f, &f.pack[..8]), Error::Truncated);
 }
 
 /// #2 MAGIC
@@ -326,11 +326,8 @@ fn check_12_envelope_length() {
     let f = build(8, 16);
     let mut p = f.pack.clone();
     p.push(0);
-    assert_eq!(err(&f, &p), Error::LengthInconsistent);
-    assert_eq!(
-        err(&f, &f.pack[..f.pack.len() - 1]),
-        Error::LengthInconsistent
-    );
+    assert_eq!(err(&f, &p), Error::TrailingBytes);
+    assert_eq!(err(&f, &f.pack[..f.pack.len() - 1]), Error::Truncated);
 }
 
 /// #13 SM2 解封（错收件人私钥）

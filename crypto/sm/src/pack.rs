@@ -155,7 +155,7 @@ impl Header {
     /// 严格解析（契约 §13 的第 1–11 项）。
     pub fn decode(buf: &[u8]) -> Result<Header> {
         if buf.len() < HEADER_LEN {
-            return Err(Error::LengthInconsistent);
+            return Err(Error::Truncated);
         }
         if buf[OFF_MAGIC..OFF_MAGIC + 4] != MAGIC {
             return Err(Error::BadMagic);
@@ -792,8 +792,12 @@ fn total_envelope_len(header: &Header) -> Result<usize> {
 fn open(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
     let header = Header::decode(pack)?;
     let expected_len = total_envelope_len(&header)?;
-    if pack.len() != expected_len {
-        return Err(Error::LengthInconsistent);
+    // 截断 vs 尾随字节 vs 字段互相矛盾，三者分开（契约 §13.1）
+    if pack.len() < expected_len {
+        return Err(Error::Truncated);
+    }
+    if pack.len() > expected_len {
+        return Err(Error::TrailingBytes);
     }
 
     let mut pos = HEADER_LEN;
@@ -1018,7 +1022,7 @@ fn finish_unpack(pack: &[u8], opened: Opened) -> Result<Unpacked> {
     }
 
     if pos != pack.len() {
-        return Err(Error::LengthInconsistent);
+        return Err(Error::TrailingBytes);
     }
     if data.len() as u64 != header.plaintext_size {
         return Err(Error::LengthInconsistent);

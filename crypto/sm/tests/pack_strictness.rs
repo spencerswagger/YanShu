@@ -172,10 +172,10 @@ fn truncation_and_trailing_are_rejected() {
     for cut in [1usize, 10, HDR, HDR + PUB + WRAP, f.pack.len() - 1] {
         assert!(pack::unpack(&f.pack[..cut], &f.recipient_priv, None).is_err());
     }
-    // 尾部多字节
+    // 尾部多字节 → 尾随字节（与截断、字段矛盾分开）
     let mut p = f.pack.clone();
     p.push(0);
-    assert_eq!(err(&f, &p), Error::LengthInconsistent);
+    assert_eq!(err(&f, &p), Error::TrailingBytes);
 }
 
 #[test]
@@ -246,11 +246,11 @@ fn chunk_order_missing_duplicate() {
     p.extend_from_slice(&f.pack[c2..]);
     assert_eq!(err(&f, &p), Error::ChunkOrder);
 
-    // 直接删掉块 1 的字节 → 包长与 ENVELOPE_LEN 不符，先被长度校验拦下
+    // 直接删掉块 1 的字节 → 包长不足，命中 CRYPTO_TRUNCATED
     let mut p = Vec::new();
     p.extend_from_slice(&f.pack[..c1]);
     p.extend_from_slice(&f.pack[c2..]);
-    assert_eq!(err(&f, &p), Error::LengthInconsistent);
+    assert_eq!(err(&f, &p), Error::Truncated);
 
     // 末块标志被改
     let last = f.chunk_off;

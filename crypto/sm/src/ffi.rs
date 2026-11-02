@@ -201,26 +201,36 @@ static ERROR_TABLE: &[Error] = &[
     Error::Internal,
 ];
 
-fn name_for(code: i32, contract_style: bool) -> &'static str {
+/// 首版重复数值 → 契约 §13.1 的规范值（只用于**解析**旧数值，不再产出）。
+const ALIASES: &[(i32, i32)] = &[
+    (-11, -28), // BLOCK_SEQUENCE      → CHUNK_ORDER
+    (-12, -28), // DUPLICATE_BLOCK     → CHUNK_ORDER
+    (-14, -28), // LAST_FLAG_MISMATCH  → CHUNK_ORDER
+    (-13, -30), // MISSING_BLOCK       → CHUNK_MISSING
+    (-15, -29), // TAG_MISMATCH        → CHUNK_AUTH_FAILED
+    (-16, -31), // MANIFEST_MISMATCH   → MANIFEST_AUTH_FAILED
+    (-20, -19), // BAD_KDF             → CIPHERTEXT_INVALID
+    (-23, -19), // BAD_CIPHERTEXT      → CIPHERTEXT_INVALID
+];
+
+fn canonical_code(code: i32) -> i32 {
+    ALIASES
+        .iter()
+        .find(|(old, _)| *old == code)
+        .map(|(_, new)| *new)
+        .unwrap_or(code)
+}
+
+fn name_for(code: i32) -> &'static str {
     if code == 0 {
         return "OK";
     }
-    match ERROR_TABLE.iter().find(|e| e.code() == code) {
-        Some(e) => {
-            if contract_style {
-                e.name()
-            } else {
-                e.legacy_name()
-            }
-        }
-        None => {
-            if contract_style {
-                "CRYPTO_UNKNOWN"
-            } else {
-                "UNKNOWN"
-            }
-        }
-    }
+    let code = canonical_code(code);
+    ERROR_TABLE
+        .iter()
+        .find(|e| e.code() == code)
+        .map(|e| e.name())
+        .unwrap_or("CRYPTO_UNKNOWN")
 }
 
 /// 错误名（**唯一格式 `CRYPTO_*`**，与 Rust 侧 `Error::name()` 完全一致）。
@@ -234,12 +244,7 @@ pub unsafe extern "C" fn ys_error_name(
     cap: usize,
     out_len: *mut usize,
 ) -> i32 {
-    rc(write_out(
-        name_for(code, true).as_bytes(),
-        out,
-        cap,
-        out_len,
-    ))
+    rc(write_out(name_for(code).as_bytes(), out, cap, out_len))
 }
 
 /// `ys_error_name` 的别名（保留旧符号，输出与之一致）。
