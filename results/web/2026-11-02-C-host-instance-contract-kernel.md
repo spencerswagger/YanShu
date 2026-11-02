@@ -11,8 +11,8 @@
 | 运行标签 | `C-host-instance-contract-kernel` |
 | 日期 | 2026-11-02 |
 | 前端 | `web/`（Vue 3 + Vite dev server，`/v1` 反代到宿主实例） |
-| 中转 | `127.0.0.1:18080`（契约 `v1` / `YSPK/1.0`，chunk 1 MiB，max_plaintext 4 GiB） |
-| 内核 | `80400ec`，sha256 `c1b87d0ad9a8…`（溯源 `public/ys_kernel.build.json`）；`PB_S → AWQW` 已断言，34 函数 / 0 import |
+| 中转 | 宿主 `127.0.0.1:18080`（`yanshu-server-980fc44`，契约 `v1` / `YSPK/1.0`，chunk 1 MiB） |
+| 内核（锚 sha256） | **127 313 B / `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`**（= 冻结产物，head `80400ec` 仅作溯源）；34 函数 / 0 import；`PB_S → AWQW`（64B）/ `X2EH`（误传 65B）均已打印 |
 | 样本 | `ys-e2e-input.bin`，2 506 889 字节，sha256 `4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f` |
 | 分块 | 服务端 `chunk_size=1048576` → **3 块**（2×1 MiB + 409 601 B） |
 | 客户端 | 两个独立 Chrome profile（两个身份） |

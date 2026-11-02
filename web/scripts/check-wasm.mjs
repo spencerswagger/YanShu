@@ -219,6 +219,16 @@ const code65Out = e.ys_alloc(4)
 const code65Rc = e.ys_user_code(write(Uint8Array.from(Buffer.from(PB_S_HEX, 'hex'))), code65Out)
 const code65String = code65Rc === 0 ? Buffer.from(read(code65Out, 4)).toString('ascii') : ''
 
+// check_symbol 同样有 64/65 两个形态：一并打印（与 ys_user_code 属同一类"宽度错位"风险）
+const sym64 = e.ys_alloc(1)
+const sym64Rc = e.ys_check_symbol(write(pbS64), sym64)
+const sym64String = sym64Rc === 0 ? Buffer.from(read(sym64, 1)).toString('ascii') : ''
+const sym65 = e.ys_alloc(1)
+const sym65Rc = typeof e.ys_check_symbol_wire === 'function'
+  ? e.ys_check_symbol_wire(write(Uint8Array.from(Buffer.from(PB_S_HEX, 'hex'))), sym65)
+  : e.ys_check_symbol(write(Uint8Array.from(Buffer.from(PB_S_HEX, 'hex'))), sym65)
+const sym65String = sym65Rc === 0 ? Buffer.from(read(sym65, 1)).toString('ascii') : ''
+
 const signals = {
   '码派生 PB_S → AWQW（64 字节入参）': codeString === 'AWQW',
   'V1 样例包解包成功（§2.3 第 3 条）': v1Sample,
@@ -237,7 +247,18 @@ const signals = {
 console.log('产物：')
 console.log(
   JSON.stringify(
-    { ...facts, packRc, packKeyForm, metaRc, unpackRc, signatureBytes: der?.length ?? null, codeString, code65String },
+    {
+      ...facts,
+      packRc,
+      packKeyForm,
+      metaRc,
+      unpackRc,
+      signatureBytes: der?.length ?? null,
+      codeString,
+      code65String,
+      checkSymbol64: sym64String,
+      checkSymbolWire65: sym65String,
+    },
     null,
     2,
   ),
