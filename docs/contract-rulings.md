@@ -35,12 +35,12 @@
 | R6 | `NAME_LEN = 0`（空文件名）是否合法 | **采纳"允许空名"**：`NAME_LEN=0` 为合法值，`NAME` 占 0 字节、后续偏移照常；读方 MUST 接受、不得因空名拒绝；客户端显示"未命名"并保留扩展名降级展示；落盘名由接收端本地决定。安全上不构成混淆通道（名字不参与加密/寻址，`MANIFEST_PT_LEN` 受清单 AAD 覆盖，服务端本就看不到明文名）；禁止空名只会逼客户端编造假名 | CRYPTO-PACK §8.2、§8.5、§13 #15 | 否 |
 | R7 | "布局/版本可并存"的残留措辞与内核合规判定 | **清理并写死**：契约声明只有一种布局 `YSPK/1.0`，凡"历史布局/其他布局"只用于描述拒绝行为；新增 §2.3 给出内核合规判定的四条判据（`ys_version()==0x00010000`、`ys_header_len()==112`、§15 V1 样例解包成功、改版本字节后必须 `CRYPTO_VERSION_UNSUPPORTED`），并明确"不是桩 ≠ 合规"；`ys_version()` 不参与运行时版本判定，包内版本字段才是权威 | CRYPTO-PACK §2.1、§2.3 | 否 |
 
-| R8 | token 生命周期与吊销缺口（旧实现：只比库内哈希，换 secret 后旧 token 仍 201） | **按实现对齐为 `KID`**：API §1.7 定义凭据版本 `KID`（正整数、**严格单调递增**、**调小/调回拒绝启动**、**未配置拒绝启动**）；校验顺序**先比 `KID` 再比凭据**；`KID` 进派生输入（重签发 ≠ 旧凭据、不复活）但**不进 wire**；给出「运维一次性吊销」5 步标准流程；凭据类错误**只有两个**（`AUTH_TOKEN_INVALID` / `AUTH_TOKEN_STALE`），**不设**凭据级过期码（凭据随传输到期走 410）；7 步可复跑用例（含"只换 secret = INVALID"与"递增 KID = STALE"对照） | API §1.5、§1.3、§1.7、§3、§7.4、§10.1、§11.1、§14 | 否 |
+| R8 | token 生命周期与吊销缺口（旧实现：只比库内哈希，换 secret 后旧 token 仍 201） | **按实现对齐为 `KID`**：`KID` 是**唯一吊销开关**（正整数、严格单调递增、调小/未配置均拒绝启动），**递增即刻生效、无需重启**；校验四类顺序（`KID` → 值 → 有效期 → 传输状态）；`KID` 进派生输入但**不进 wire**，`/v1/config.token_epoch` 与 `KID` 同义；`TOKEN_SECRET` 只作派生盐、**轮换不吊销**；凭据类三码 `STALE`/`INVALID`/`EXPIRED`（上传 6 h / 租约 30 min）；8 步用例含"只换 secret 仍有效"与"超期 = EXPIRED"对照 | API §1.5、§1.3、§1.7、§3、§7.4、§10.1、§11.1、§14 | 否 |
 | R9 | 重签发端点是否保留 | **保留但降级为可选**（API §1.7.5）：① 只认发件人 `PURPOSE 0x08` 签名，禁止凭 `transfer_id`/旧凭据换取；② 幂等（同 `(transfer_id, TOKEN_SECRET, KID)` 返回逐字节相同凭据）+ 双向限速；③ 新凭据用当前 `KID` 派生、与旧凭据逐字节不同，旧凭据永久 `AUTH_TOKEN_STALE`；④ 已传块不重传（先 `GET /status` 取 `missing`）；⑤ **v1 可选能力**，部署方可关闭（`501 FEATURE_DISABLED`） | API §1.7.5、§3、§10.1、§11.1 | 否 |
 
 | R10 | `SIG_INPUT` 缺长度上限（实现自设 512，契约无定义） | **补定义**：`SIG_INPUT_MAX = 109` 字节，由字段上限推导（前缀 7 + PURPOSE 1 + NONCE 32 + 最长字段串 69，最长是 `REGISTER` 的 `CODE‖PUBKEY`）；另设防御性硬上限 `SIG_INPUT_HARD_LIMIT = 512`，仅作 DoS 门、不是合法性边界；超硬上限 → `400 SIG_INPUT_TOO_LONG`；服务端 MUST 逐字段校验（不得用字节上限代替），客户端 MUST 本地按字段上限校验 | API §1.3、§10.1 | 否 |
 
-| R11 | 凭据类错误名字面值反复变更 | **已定稿**：`AUTH_TOKEN_STALE`（版本已过期，`KID` 轮换）/ `AUTH_TOKEN_INVALID`（值不匹配·格式错·不存在，含"只换 secret 未换 KID"）/ `AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受）。传输级过期与终结走 410，凭据类不设过期码；本期**不定义**任何"显式吊销"专用名（留给将来的显式吊销列表语义） | API §1.7.4、§10.1 | 否 |
+| R11 | 凭据类错误名字面值反复变更 | **已定稿**：凭据类三码 —— `AUTH_TOKEN_STALE`（`KID` 轮换）/ `AUTH_TOKEN_INVALID`（值不匹配·格式错·不存在）/ `AUTH_TOKEN_EXPIRED`（上传 6 h / 租约 30 min）；签名类 `AUTH_SIGNATURE_INVALID` 仅用于签名本身；传输终结走 `410`。本期**不定义**任何"显式吊销"专用名（留给将来的显式吊销列表语义） | API §1.7.4、§10.1 | 否 |
 
 **K3 已撤销**：凭据版本机制（`KID`）已落地，不存在"版本机制缺失"这类偏离；凭据错误名以契约定稿 `AUTH_TOKEN_STALE` 为准。
 
@@ -56,7 +56,8 @@
 | 4 | `POST /v1/transfers/{id}/token`（`PURPOSE 0x08` 签名）换 `tokenB` | `200`，且 `tokenB ≠ tokenA` |
 | 5 | 用 `tokenB` 打 `PUT /prelude` | `201` 或 `204`（已传块不重传） |
 | 6 | 同一 `(TOKEN_SECRET, KID)` 下重复第 4 步 | `200`，返回**与 `tokenB` 逐字节相同**（幂等） |
-| 7 | 另起一传输：**只换 `TOKEN_SECRET`、不动 `KID`** 后打旧凭据 | `401 AUTH_TOKEN_INVALID`（与第 3 步的 `REVOKED` 区分） |
+| 7 | 另起一传输：**只换 `TOKEN_SECRET`、不动 `KID`** 后打旧凭据 | **仍然有效**（200/201/204），与第 3 步形成对照 |
+| 8 | 构造已过期凭据（或把有效期调短）后调用 | `401 AUTH_TOKEN_EXPIRED`（与 410 传输终结区分） |
 
 判据：第 3 步必须 401（不许 201/410），第 5 步不许要求重传已完成块，第 6 步必须逐字节相同；任一步不符即 FAIL。
 
@@ -67,7 +68,7 @@
 | # | 现状 | 契约要求 | 状态 |
 |---:|---|---|---|
 | K1 | 内嵌内核曾用错构建入口产出 `8b89dd7f…`（130,653 B），与冻结产物 `c1b87d0a…`（127,313 B）不同字节 | 根因已查明（从成员 crate 目录构建会绕过 workspace 锁文件与 release profile），**已从偏离登记升级为契约硬规则**：`CRYPTO-PACK` §18 规定唯一构建命令、冻结 sha256、以及"只比 sha256"的判定方式 | **已升级为契约规则（§18），结案** |
-| K2 | **`AUTH_TOKEN_EXPIRED` 为预留名，v1 不实现**（凭据类生效码只有 `AUTH_TOKEN_STALE` 与 `AUTH_TOKEN_INVALID` 两个） | 传输级过期返回 `410 TRANSFER_EXPIRED`；下载租约到期归 `AUTH_TOKEN_INVALID`；上传凭据有效期 = 传输 `expires_at`。凭据类不另设过期码 | 登记保留（预留，本期不做） |
+| K2 | `AUTH_TOKEN_EXPIRED` 已由实现提供（上传 6 h / 租约 30 min） | 已回 `API §10.1` 正文作为 v1 生效码；与 `410 TRANSFER_EXPIRED` 的分界写死（凭据超期 401 / 传输终结 410） | **结案（已入正文）** |
 | K4 | 内核二进制曾**未被 git 跟踪**：根 `.gitignore` 的 `*.wasm` 让 `git add -A` 静默跳过 `server/kernel/yanshu_sm.wasm`，仓库里从来没有这份内核，别人 clone 下来拿不到 | 内核资产 MUST 以 **git blob** 形式存在于仓库：`git cat-file blob HEAD:server/kernel/yanshu_sm.wasm` 的 sha256 == 冻结值 `c1b87d0a…7259f`（127,313 B）。**仅工作区有文件不算交付**（修法：`server/.gitignore` 加 `!kernel/yanshu_sm.wasm`） | 已修复，陷阱登记保留 |
 | K5 | **构建入口决定字节**：从成员目录 `crypto/sm` 构建会绕过 workspace 的 `Cargo.lock` 与 `[profile.release]`（`opt-level=3`/`lto=true`/`codegen-units=1`），得 130,653 B / `8b89dd7f…`；从 `crypto/` 用 `-p yanshu-sm` 才是 127,313 B / `c1b87d0a…` | 唯一正确命令：`cd crypto && cargo build --release --target wasm32-unknown-unknown -p yanshu-sm`；**不要**从成员 crate 目录构建。规范条文见 `CRYPTO-PACK` §18 | 已固化，陷阱登记保留 |
 
