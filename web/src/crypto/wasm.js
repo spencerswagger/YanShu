@@ -87,12 +87,20 @@ export class WasmKernel {
     this.headerLen = has('ys_header_len') ? exports.ys_header_len() : 0
     // 「是不是契约布局」必须按特征检测，不能只看"不是桩"：五项全过才算契约布局。
     // 这些特征与 scripts/check-wasm.mjs、契约 §2/§4/§9/§10 一致。
+    // 6 参自证解包在不同轮次里叫过 `_v1` / `_v2`：按"存在且 arity=6"探测，名字变了也不用改业务
+    const selfUnpackName = ['ys_unpack_v2', 'ys_unpack_v1'].find(
+      (n) => has(n) && exports[n].length === 6,
+    )
+    this.selfUnpackName = selfUnpackName || null
+    this.selfUnpackMetaName = selfUnpackName
+      ? `ys_unpack_meta${selfUnpackName.slice('ys_unpack'.length)}`
+      : null
     this.contractSignals = {
       header112: this.headerLen === 112,
       version1: version === ABI_VERSION,
       signDer: has('ys_sm2_sign_der'),
       packV1: has('ys_pack_v1'),
-      selfUnpack: has('ys_unpack_v1') && exports.ys_unpack_v1.length === 6,
+      selfUnpack: Boolean(selfUnpackName),
     }
     this.layoutFailedSignals = Object.entries(this.contractSignals)
       .filter(([, ok]) => !ok)
@@ -112,8 +120,8 @@ export class WasmKernel {
       signDer: this.contractSignals.signDer,
       packV1: this.contractSignals.packV1,
       // 6 参 = 包内自证来源（契约 P1 新原型）；7 参 = 过渡期"按发送方码校验"那一版
-      selfUnpack: this.contractSignals.selfUnpack && has('ys_unpack_meta_v1'),
-      codeUnpack: has('ys_unpack_v1') && exports.ys_unpack_v1.length === 7,
+      selfUnpack: this.contractSignals.selfUnpack && has(this.selfUnpackMetaName || ''),
+      codeUnpack: ['ys_unpack_v2', 'ys_unpack_v1'].some((n) => has(n) && exports[n].length === 7),
       errorNameV1: has('ys_error_name_v1'),
     }
     if (this.layout !== 'contract') {
@@ -513,10 +521,11 @@ export class WasmKernel {
     try {
       let json
       if (args.mode === 'self') {
+        const fn = this.selfUnpackMetaName
         json = this.#outCall(
-          'ys_unpack_meta_v1',
+          fn,
           (out, cap, outLen) =>
-            this.exports.ys_unpack_meta_v1(args.p.ptr, args.p.len, args.priv.ptr, out, cap, outLen),
+            this.exports[fn](args.p.ptr, args.p.len, args.priv.ptr, out, cap, outLen),
           1024,
         )
       } else if (args.mode === 'code') {
@@ -548,9 +557,10 @@ export class WasmKernel {
     const args = this.#unpackArgs({ pack, recipientPrivate, senderPublic, senderCode })
     try {
       if (args.mode === 'self') {
+        const fn = this.selfUnpackName
         return this.#outCall(
-          'ys_unpack_v1',
-          (out, cap, outLen) => this.exports.ys_unpack_v1(args.p.ptr, args.p.len, args.priv.ptr, out, cap, outLen),
+          fn,
+          (out, cap, outLen) => this.exports[fn](args.p.ptr, args.p.len, args.priv.ptr, out, cap, outLen),
           pack.length + 4096,
         )
       }

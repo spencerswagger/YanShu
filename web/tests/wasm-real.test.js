@@ -64,8 +64,9 @@ test('真内核：0 import、导出齐全、版本/包头/块大小可读', { sk
   assert.equal(typeof kernel.exports.ys_get_layout, 'undefined')
   // 原型钉死：ys_unpack 7 参（第 4 参公钥可选）、ys_unpack_v1 6 参（自证）
   assert.equal(kernel.exports.ys_unpack.length, 7)
-  assert.equal(kernel.exports.ys_unpack_v1.length, 6)
-  assert.equal(kernel.exports.ys_unpack_meta_v1.length, 6)
+  // 6 参自证原型：不同轮次叫过 _v1 / _v2，按 arity 探测
+  assert.ok(['ys_unpack_v1', 'ys_unpack_v2'].some((n) => kernel.exports[n]?.length === 6))
+  assert.equal(kernel.capabilities.selfUnpack, true)
   const selfTest = kernel.selfTest()
   assert.equal(selfTest.ok, true, `自检失败：${JSON.stringify(selfTest.checks)}`)
   assert.deepEqual(selfTest.checks, { version: true, header: true, roundtrip: true, versionGate: true })
@@ -159,6 +160,17 @@ test('真内核：打包 → 切分 → 拼回 → 解包，明文一致；改�
     () => kernel.unpack({ pack: mixedPack, recipientPrivate: bob.privateKey, senderPublic: alice.publicKey }),
     (err) => /^CRYPTO_/.test(err.code),
   )
+})
+
+test('真内核：码派生与契约 §15.1 向量一致（PB_S → AWQW / 校验 X）', { skip }, async () => {
+  const kernel = await instantiateKernel(readFileSync(wasmPath))
+  const PB_S = Uint8Array.from(
+    Buffer.from(
+      '04bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d',
+      'hex',
+    ),
+  )
+  assert.equal(kernel.codeOf(PB_S), 'AWQW', '内核应按 65 字节（补 0x04）派生码')
 })
 
 test('真内核：解包不需要发送方公钥（包内 SENDER_PUB 自证）', { skip }, async () => {
