@@ -22,16 +22,106 @@ server/
 └── internal/testutil/      # 集成测试夹具（独立 schema）
 ```
 
-## 跑起来
+## 跑起来（本机实测过的步骤）
+
+依赖：Go 1.27、PostgreSQL 17。**migrations 在启动时自动执行**（内嵌 SQL + advisory lock），
+不需要单独跑迁移命令；库只要求给一个能建表的 schema。
+
+```sh
+# 0) 基础 DSN（口令用环境变量给，别写进文件）
+BASE_DSN='postgres://yanshu_dev:***@127.0.0.1:5432/yanshu_dev?sslmode=disable'
+
+# 1) 建 schema（不建就会落到 DSN 里 search_path 指定的/默认的 public）
+psql "$BASE_DSN" -c 'create schema if not exists yanshu_dev'
+
+# 2) 起服务（stub-allow 仅用于联调/验收；生产用默认的 stub-deny 或接入 sm2）
+cd server
+YANSHU_DATABASE_URL="$BASE_DSN&search_path=yanshu_dev" \
+YANSHU_BLOB_DIR=./data/blobs \
+YANSHU_ADDR=127.0.0.1:8080 \
+YANSHU_VERIFIER=stub-allow \
+YANSHU_TOKEN_SECRET="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
+go run ./cmd/yanshu-server
+
+# 3) 探活（另开一个终端）
+curl -fsS http://127.0.0.1:8080/healthz
+```
+
+本仓库已验证的环境：PostgreSQL 17 @ `127.0.0.1:5432`，独立 schema（如 `yanshu_core_e2e`），
+`YANSHU_BLOB_DIR` 指向临时目录；`go build` + 起服务 + 下面的投递命令一次跑通。
+
+## 一条命令投递（验收/Gate 用）
+
+`cmd/deliver` 是投递驱动：它只搬运**已加密的 `.yspk` 包**，不做加解密、不解析清单、不碰私钥。
+按 `docs/CRYPTO-PACK.md` 切出 prelude 与块切片，按 `docs/API.md` 走完
+注册 → 建传输 → 传 prelude/块 → complete → 凭码查询 → 取件 → ack。
 
 ```sh
 cd server
-export YANSHU_DATABASE_URL='postgres://yanshu_dev:***@127.0.0.1:5432/yanshu_dev?sslmode=disable'
-export YANSHU_BLOB_DIR='./data/blobs'
-export YANSHU_ADDR=':8080'
-export YANSHU_TOKEN_SECRET='<random>'
-go run ./cmd/yanshu-server
+go build -o bin/deliver ./cmd/deliver
+
+# 只投递、保留密文（Gate 检索用）
+bin/deliver --base-url http://127.0.0.1:8080 \
+  --yspk /tmp/sample.yspk \
+  --no-ack \
+  --blob-dir ./data/blobs \
+  --dsn 'postgres://...&search_path=yanshu_dev' \
+  --log ./logs/server.log \
+  --json-out /tmp/delivery.json
+
+# 全流程（含 ack，结束后密文被物理删除）
+bin/deliver --base-url http://127.0.0.1:8080 --yspk /tmp/sample.yspk
 ```
+
+| 参数 | 说明 |
+|---|---|
+| `--yspk` | **必填**，端侧产出的加密包路径 |
+| `--base-url` | 服务端地址，默认 `http://127.0.0.1:8080` |
+| `--recipient-code` | 收件人码；不给则临时生成一个并注册 |
+| `--recipient-pubkey` | 收件人公钥 base64url（收件人未注册时用；会校验与码一致） |
+| `--sender-code` | 可选，用于核对包内 `SENDER_PUB` 派生的码 |
+| `--no-ack` | 取件后不 ack，保留密文给 Gate 检索 |
+| `--blob-dir` | 服务端的 `YANSHU_BLOB_DIR`，用于打印/校验存储路径 |
+| `--dsn` | 服务端 DSN，用于打印 `database` / `schema` |
+| `--json-out` | 结果写 JSON |
+| `--sm3-cmd` | 外部 SM3 命令（hex 进 hex 出），用于与端侧实现对齐 |
+
+输出（示例）：
+
+```
+=== DELIVERY ===
+sender_code=0KHJ
+recipient_code=57YV
+transfer_id=e36350a11e7a44642b1fefdba019c12c
+chunk_count=1
+chunk_size=1024
+plaintext_size=48
+prelude_len=503
+ciphertext_bytes=567
+state=LEASED acked=false
+blob_dir=/tmp/blobs
+storage_path=/tmp/blobs/e3/e36350a11e7a44642b1fefdba019c12c
+database=yanshu_test schema=yanshu_core_e2e
+log=/tmp/logs/server.log
+================
+```
+
+退出码：`0` 成功 / `1` 业务失败 / `2` 用法错误 / `3` 服务不可达 / `4` 服务端验签未就绪
+（用 `YANSHU_VERIFIER=stub-allow` 启动即可）。
+
+注意：
+- 本工具用**占位签名**，只能配合 `stub-allow`；接真实 SM2 验签后需改真签名。
+- 连续跑两次会生成两个不同的 `transfer_id`，互不冲突；`--no-ack` 的包会留到 TTL 清理。
+
+### 给自动化脚本的 `--deliver-cmd`
+
+```sh
+<repo>/server/bin/deliver --base-url http://127.0.0.1:18080 --yspk <PACK> --no-ack \
+  --blob-dir <BLOB_DIR> --dsn '<DSN>' --json-out <OUT_JSON>
+```
+
+判定：退出码 `0` 即投递成功；`--json-out` 里的 `transfer_id` / `storage_path` / `schema`
+可直接作为后续检索的入参。
 
 ### 环境变量
 
