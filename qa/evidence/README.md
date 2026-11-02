@@ -1,5 +1,7 @@
 # qa/evidence · 验收证据脚本
 
+> **验收冻结 head：`031e95b`** —— wasm 127,313 B / sha256 `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`；一键重跑：`qa/evidence/check_all.sh <rune-crate> <workdir>`。
+
 两条证据的**可复跑脚本**：① 服务端无明文/无文件名；② 密文篡改必报错。
 
 > **当前状态（2026-11-02 首夜·三轮）**

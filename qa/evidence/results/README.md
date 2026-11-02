@@ -15,21 +15,30 @@ results/
 
 ## 今晚验收证据一览（收口索引）
 
-| 文件 | 对象（head） | 产物 sha256 | 认证 | 入口类型 | 一句话结论 |
-|---|---|---|---|---|---|
-| `contract-v1/c1b87d0a-evidence2-freeze.md` | 端侧 `80400ec`（**冻结 head**） | `c1b87d0a…c97259f`（127,313B） | — | wasm-production | 证据二 6/6 + 11/11 + 变体 18/18，未报错 0；用户码 4 入口一致 |
-| `contract-v1/2026-11-02-host-binary-980fc44.md` | 服务端 `08d40e7`（含 `980fc44` 旧记录） | 二进制 sha256 `275fc463…` | **真 sm2** | native-api | run #5 三处零命中；token 三态：201 → 轮换后 **401 `AUTH_SIGNATURE_INVALID`** → 新 token 201 |
-| `contract-v1/2026-11-02-prelude-meta.md` | 端侧 `031e95b`（= 冻结 `80400ec` 同一产物） | `c1b87d0a…`（127,313B） | — | wasm-production | prelude-only 能读且标注 `data_verified:false`；整包入口拒绝半包；篡改来源/清单必失败（6/6） |
-| `contract-v1/c1b87d0a-user-code-consistency.md` | 端侧 `233805a`（= 冻结 `80400ec` 同一产物 `c1b87d0a…`） | `c1b87d0a…`（127,313B） | — | wasm + 原生 | 26/26：用户码 5 组×4 入口全等、校验位 4 入口一致、**反向宽度用例（65B 喂 64B 得 X2EH≠AWQW）**、归一化 14 组；并实测三 head 证明「代码真修过」 |
-| `contract-v1/2026-11-02-user-code-consistency.md` | 端侧 `f1ef9f9` | — | — | wasm + 原生 | 20/20 通过；P0 定位为驱动调用约定 bug |
-| `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | 服务端 `08d40e7` + 端侧 `0f33a15` | — | **真 sm2** | native-api | 存储/DB/日志三处零命中，对照 1/1/1/0 |
-| `contract-v1/2026-11-02-evidence1-core-run4-logfile.md` | 服务端 `28d75b0` | — | stub-allow | — | 日志改 `YANSHU_LOG_FILE`/`LOG_DIR`；含 LEASED vs CONSUMED 残留对比 |
-| `contract-v1/2026-11-02-evidence1-core-run3-core-deliver.md` | 服务端 `2bc7dae` | — | stub-allow | — | 投递改用 Core 官方 `deliver` |
-| `contract-v1/2026-11-02-evidence1-core-run2-logdir.md` | 服务端 `2bc7dae` | — | stub-allow | — | 内建按日滚动日志复扫 |
-| `contract-v1/2026-11-02-evidence1-core-c3c2fc9.md` | 服务端 `c3c2fc9` | — | stub-allow | — | **初步证据 run #1**（stdout 重定向日志） |
-| `contract-v1/2026-11-02-evidence2-contract-v1-wasm.md` | 端侧 `0f33a15` | `9df8b8c3…`（125,839B） | — | wasm-production | 早一版生产路径结果（保留对照） |
-| `contract-v1/2026-11-02-evidence2-contract-v1.md` | 端侧 `de6d6e1` | — | — | native-api | 测试入口版（保留对照） |
-| `rune-v1-noncontract/2026-11-02-evidence2-rune-v1.md` | 端侧 `12b3d94`（旧布局） | — | — | 测试入口 | **非契约实现，不作验收** |
+冻结 head：**`031e95b`**；产物：**127,313 B** / sha256
+`c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`；
+`ys_version()=0x00010000`、`ys_header_len()=112`、34 函数 + memory = 35 导出 / 0 import。
+（本表"实际构建自"一列写明各份证据当时的构建提交；`80400ec..031e95b` 内核源码零改动，
+产物同字节，所以不需要重跑。）
+
+| 文件 | 冻结 head | 实际构建自 | 产物 sha256 | 认证 | 入口类型 | 可复跑命令 | 一句话结论 |
+|---|---|---|---|---|---|---|---|
+| `contract-v1/c1b87d0a-evidence2-freeze.md` | `031e95b` | `80400ec` | `c1b87d0a…c97259f` | — | wasm-production | `qa/evidence/run_evidence2_wasm.sh <rune-crate> <workdir>` | 证据二 6/6 + 11/11 + 变体 18/18，未报错 0 |
+| `contract-v1/c1b87d0a-user-code-consistency.md` | `031e95b` | `80400ec` | `c1b87d0a…c97259f` | — | wasm + 原生 | `python3 qa/evidence/check_code_consistency.py --wasm <wasm> --ys-tool <ys-tool> [--base-url …]` | 26/26：四形态 `PB_S=AWQW`、校验位 `X`、反向 65→64 得 `X2EH`、归一化 14 组 |
+| `contract-v1/2026-11-02-prelude-meta.md` | `031e95b` | `031e95b` | `c1b87d0a…c97259f` | — | wasm-production | `python3 qa/evidence/check_prelude_meta.py --wasm <wasm>` | prelude-only 能读且 `data_verified:false`；整包入口拒绝半包；篡改必失败（6/6） |
+| `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | 无（服务端证据） | 服务端 `08d40e7` / 端侧 `0f33a15` | 二进制 `275fc463…6af55` | **真 sm2** | native-api | `YS_EV1_VERIFIER=sm2 YS_EV1_LOG_MODE=dir YS_DELIVER_BIN=core-deliver qa/evidence/run_evidence1_core.sh <core-src> <rune-crate> <wd>` | 存储/DB/日志三处零命中，对照 1/1/1/0 |
+| `contract-v1/2026-11-02-host-binary-980fc44.md` | 无 | 服务端 `08d40e7`（含 `980fc44` 旧记录） | 二进制 `275fc463…6af55` | 真 sm2 / stub | native-api | `python3 qa/evidence/check_token_lifecycle.py --binary <bin> --dsn "<DSN>" --ys-tool <tool>` | 二进制三件套；token 三态 201→401→201 |
+| `contract-v1/2026-11-02-evidence1-core-run4-logfile.md` | 无 | 服务端 `28d75b0` | — | stub-allow | — | `YS_EV1_LOG_MODE=file … run_evidence1_core.sh` | 日志改 `YANSHU_LOG_FILE`/`LOG_DIR`；LEASED vs CONSUMED 残留对比 |
+| `contract-v1/2026-11-02-evidence1-core-run3-core-deliver.md` | 无 | 服务端 `2bc7dae` | — | stub-allow | — | `YS_DELIVER_BIN=core-deliver … run_evidence1_core.sh` | 投递改用 Core 官方 `deliver` |
+| `contract-v1/2026-11-02-evidence1-core-run2-logdir.md` | 无 | 服务端 `2bc7dae` | — | stub-allow | — | `YS_EV1_LOG_MODE=dir … run_evidence1_core.sh` | 内建按日滚动日志复扫 |
+| `contract-v1/2026-11-02-evidence1-core-c3c2fc9.md` | 无 | 服务端 `c3c2fc9` | — | stub-allow | — | 同上（`YS_EV1_LOG_MODE=stdout`） | **初步证据 run #1** |
+| `contract-v1/2026-11-02-evidence2-contract-v1-wasm.md` | 无 | 端侧 `0f33a15` | `9df8b8c3…` | — | wasm-production | `run_evidence2_wasm.sh <rune@0f33a15> <wd>` | 早一版生产路径（保留对照） |
+| `contract-v1/2026-11-02-evidence2-contract-v1.md` | 无 | 端侧 `de6d6e1` | — | — | native-api | `run_evidence2_contract.sh` | 测试入口版（保留对照） |
+| `rune-v1-noncontract/2026-11-02-evidence2-rune-v1.md` | 无 | 端侧 `12b3d94` | — | — | 测试入口 | —（布局已删除，`--layout rune-v1` 现报 `LAYOUT_UNAVAILABLE` 退出 4） | **非契约实现，不作验收** |
+
+一键全跑：`qa/evidence/check_all.sh <rune-crate> <workdir> [--base-url URL]`
+（构建 → 两个自测 → 用户码一致性 26/26 → prelude 元数据 6/6 → 证据二 6/6 + 11/11，
+末尾打印产物字节数与 sha256）。
 
 规矩：同一结论只留一份；重跑加新文件不覆盖；非契约/旧 head 的必须写明"不作验收"；
 文件名 + head + sha256 三者齐了才算可追溯。

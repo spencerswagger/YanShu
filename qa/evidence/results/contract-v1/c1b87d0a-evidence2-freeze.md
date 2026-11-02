@@ -7,7 +7,7 @@
 
 
 - 日期：2026-11-02
-- **冻结 head**：`feat/endcrypto-wasm@80400ec`
+- **冻结 head（正式）**：`feat/endcrypto-wasm@**031e95b**`；本份实际构建自 `80400ec`，两者 `crypto/sm/src` 与 `Cargo.toml` **零改动**、产物**同字节**（127,313B / 同一 sha256）
 - wasm 产物：**127,313 字节**，sha256 `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`
 - `ys_version()`：`0x00010000`（0.1.0）
 - 入口类型：**`wasm-production`**（`--entry-kind production`，走 `ys_pack_v1` / `ys_unpack_v1`）

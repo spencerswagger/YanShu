@@ -1,7 +1,7 @@
 # prelude-only 元数据语义验收（"能看，但必须标明未校验"）
 
 - 日期：2026-11-02
-- 对象：端侧 `feat/endcrypto-wasm@031e95b`（wasm **127,313B**，sha256
+- **冻结 head（正式）**：`feat/endcrypto-wasm@**031e95b**`（本份即在该提交上构建）（wasm **127,313B**，sha256
   `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`，`ys_version()=0x00010000`）
 - 与冻结 head `80400ec` 是**同一份产物**（sha256 相同），本项无需在旧 head 重跑
 - 脚本：`qa/evidence/check_prelude_meta.py`（PASS/FAIL + 退出码）
