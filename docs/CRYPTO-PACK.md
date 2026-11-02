@@ -1112,3 +1112,38 @@ fa34635f1d3ac2729ac5987eb59e01928457f325b4b51ca85a177813c5c5ddf7
 - `FLAGS` 的 bit2..bit31。
 - `MANIFEST_PT` 尾部追加字段（靠 `DIGEST_TABLE_LEN` 之后的位置检查 + 版本号门控；v1 读到尾部多余字节即拒绝）。
 - `NAME_MODE = 0x01`（打码文件名）的正式交互。
+
+---
+
+## 18. 端侧内核构建与产物规则（验收硬要求）
+
+### 18.1 唯一正确的构建命令
+
+```sh
+cd crypto && cargo build --release --target wasm32-unknown-unknown -p yanshu-sm
+```
+
+- 必须在 **workspace 根的 `crypto/` 目录**执行，并用 `-p yanshu-sm` 指定成员 crate。
+- **MUST NOT** 从成员目录（如 `crypto/sm`）构建：那会绕过 workspace 的 `Cargo.lock` 与 `[profile.release]`（`opt-level=3`、`lto=true`、`codegen-units=1`），产出字节与冻结产物不同（实测 130,653 B / `8b89dd7f…` 对 127,313 B / `c1b87d0a…`）。行为可能一致，但**验收不可信**。
+
+### 18.2 冻结产物
+
+| 项 | 值 |
+|---|---|
+| `sha256` | `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f` |
+| 大小 | `127313` 字节 |
+| 目标 | `wasm32-unknown-unknown`，**0 import**，§2.3 所列必需导出齐备 |
+| 自报版本 | `ys_version() == 0x00010000`，`ys_header_len() == 112` |
+
+### 18.3 判定方式（唯一可靠）
+
+- **只比 `sha256`**：MUST NOT 用 commit 号、导出个数、`ys_version()` 或"能跑通"代替。同一 commit 跨环境/跨构建入口重建可能得到不同字节，commit 号相同**不足以**说明同源。
+- 服务端内嵌的内核 MUST 与该 `sha256` **逐字节相同**；启动日志 MUST 打印所加载内核的路径与版本（示例：`sm2 verifier loaded kernel=… version=0x00010000`），供现场复核。
+- 任何字节变化（重编、换 rustc/cargo 版本、改 profile、改构建入口）都视为**新产物**：必须重新冻结、更新本节 `sha256`，并重跑 §15 样例、GmSSL 交叉验证与端侧向量套件后，才可用于验收。
+
+### 18.4 复核清单（可复跑）
+
+1. 按 §18.1 构建，`sha256` 与 §18.2 比对；
+2. 起服务，日志出现内核加载行且 `version` 一致；
+3. 用 §15.2 的 V1 样例解包成功；把 `HEADER[4]` 改 `0x02` 后解包必须 `CRYPTO_VERSION_UNSUPPORTED`（§2.3 四条判据）；
+4. `sha256` 不符即 FAIL——**不得**以"行为一致 / 向量都过"放行。
