@@ -240,7 +240,9 @@ const isContract = ys_version() === 0x00010000 && ys_header_len() === 112
 > ⚠️ 用户码派生：传 64 字节 `X‖Y` 用 `ys_user_code`；传 65 字节 wire 用
 > `ys_user_code_wire`。**把 65 字节缓冲传给 64 字节接口会得到不同的码**（内核会按
 > `0x04‖X[0..63]` 再补一个 `0x04`），这是历史 P0 的来源，已加
-> `vectors/user-code-vectors.json` + 双侧断言钉死。`check_symbol` 同理。
+> `vectors/user-code-vectors.json` + 双侧断言钉死（`cargo test` 里跑两条：
+> `tests/ffi_user_code.rs` 断言原生 FFI，`tests/wasm_user_code.rs` 用 Node 加载
+> 实际 wasm 产物断言同一份向量）。`check_symbol` 同理。
 
 **65 字节含 `0x04` 只出现在输出/包内**：包内 `SENDER_PUB`、`WRAPPED_KEY` 的 C1、
 `ys_unpack_meta*` JSON 的 `sender_pub`。其余**所有入参公钥都是 64 字节 `X‖Y`**。
