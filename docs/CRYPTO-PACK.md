@@ -90,6 +90,8 @@
 
 **版本字符串**（用于 API、日志、UI、错误提示的唯一规范写法）：`YSPK/1.0`，即 `MAGIC` 的 ASCII + `/` + `VERSION_MAJOR` 十进制 + `.` + `VERSION_MINOR` 十进制。
 
+**只有一种布局**：`YSPK/1.0`。本文任何出现"历史布局 / 其他布局 / 可选布局"的地方，都只用于描述"必须拒绝"的行为，不构成可选项；实现里也不存在运行时选择布局的开关（见 §2.2 第 7 条）。
+
 ### 2.2 向前兼容规则（硬规则）
 
 1. **未知大版本 MUST 拒绝**。接收方读到 `VERSION_MAJOR != 0x01` 时，MUST 立即以 `CRYPTO_VERSION_UNSUPPORTED` 失败，**不得**尝试按 v1 解析、不得"尽力而为"。
@@ -99,6 +101,21 @@
 5. **保留位 MUST 为 0**：`HEADER` 的 `RESERVED` 区、`FLAGS` 的保留位、块头的 `RESERVED` 字节，写方 MUST 写 0；读方 MUST 校验为 0，否则拒绝（`CRYPTO_HEADER_INVALID` / `CRYPTO_FLAGS_UNKNOWN`）。这是为了防止"老实现静默忽略新语义"。
 6. **不做版本协商**。不存在"探测对方支持哪个版本"的握手，包自己声明版本，不匹配就失败。
 7. **可发布构建不得带"运行时切换布局"**：能产出非 `YSPK/1.0` 包字节的构建（历史临时布局等）MUST 只存在于测试/开发环境；发布构建里唯一的包布局就是 `YSPK/1.0`，且版本以包内版本字段为准，不由符号名决定。
+
+### 2.3 端侧内核"是否符合契约"的判定写法（推荐）
+
+前端与门禁要用内核自报的信息判断"这颗 wasm 是不是契约实现"，**不能只凭"它不是桩"**。推荐下面四条全中才算合规：
+
+| # | 判据 | 期望 |
+|---:|---|---|
+| 1 | `ys_version()` | `0x00010000`（高 16 位 = `VERSION_MAJOR`，低 16 位 = `VERSION_MINOR`） |
+| 2 | `ys_header_len()` | `112` |
+| 3 | 冒烟：解包 §15.2 的 V1 样例（522 字节） | 成功，且解密结果 == `hello` |
+| 4 | 冒烟：把该样例 `HEADER[4]` 改成 `0x02` 后再解包 | `CRYPTO_VERSION_UNSUPPORTED` |
+
+补充：wasm 模块 MUST 无 import（纯计算），导出集 MUST 含契约必需符号；界面上的"契约内核"标签，显示条件应是**上面四条全过**，而不是"不是桩就显示合规"。
+
+`ys_version()` 只说明"这颗内核对哪个版本实现"，**包版本判定的唯一权威仍是包内的 `VERSION_MAJOR/MINOR`**（§2.2）：运行时不得用 `ys_version()` 代替解包时的版本校验。
 
 ---
 
@@ -227,7 +244,7 @@ ENVELOPE_LEN     = PRELUDE_LEN + Σ_{i<n} (32 + PT_LEN(i))
 
 | bit | 名称 | 含义 | v1 |
 |---:|---|---|---|
-| 0 | `NAME_OBFUSCATED` | 清单内文件名为客户端打码后的标签（`NAME_MODE = 0x01`），非真实文件名 | 生产恒 `0` |
+| 0 | `NAME_OBFUSCATED` | 清单内文件名为客户端打码后的标签（`NAME_MODE = 0x01`），非真实文件名。**MUST 与清单 `NAME_MODE` 相等**；不等即整包非法（`CRYPTO_MANIFEST_INVALID`，校验位置见 §13 #15） | 生产恒 `0` |
 | 1 | `SENDER_SIGNED` | 包内含有效 `SIG_SEC`。v1 **MUST 为 1**；为 0 时接收方 MUST 拒绝（`CRYPTO_UNSIGNED`） | 恒 `1` |
 | 2..31 | `RESERVED` | MUST 为 0 | 全 0 |
 
@@ -429,14 +446,14 @@ offset len 字段
 |---:|---:|---|---|---|
 | 0 | 4 | `MAGIC` | bytes | `59 53 4D 31`（`YSM1`） |
 | 4 | 1 | `MANIFEST_VERSION` | u8 | `0x01` |
-| 5 | 1 | `NAME_MODE` | u8 | `0x00` = 清单内是真文件名；`0x01` = 打码标签（配合 `FLAGS.NAME_OBFUSCATED`） |
+| 5 | 1 | `NAME_MODE` | u8 | `0x00` = 清单内是真文件名；`0x01` = 打码标签。**MUST 等于 `FLAGS.NAME_OBFUSCATED`**，不等即整包非法（§13 #15） |
 | 6 | 1 | `DIGEST_ALG` | u8 | `0x01` = SM3 |
 | 7 | 1 | `DIGEST_LEN` | u8 | `0x20`（32） |
 | 8 | 8 | `FILE_SIZE` | u64be | 必须等于头里的 `PLAINTEXT_SIZE` |
 | 16 | 4 | `CHUNK_SIZE` | u32be | 必须等于头里的 `CHUNK_SIZE` |
 | 20 | 4 | `CHUNK_COUNT` | u32be | 必须等于头里的 `CHUNK_COUNT` |
 | 24 | 8 | `CREATED_AT` | u64be | Unix 毫秒（UTC），发送方本地时间 |
-| 32 | 2 | `NAME_LEN` | u16be | 0..255 |
+| 32 | 2 | `NAME_LEN` | u16be | 0..255；**`0` 合法**（空文件名，规则见 §8.5） |
 | 34 | `NAME_LEN` | `NAME` | utf8 | §3.3 规则 |
 | 34+N | 2 | `MIME_LEN`（记 `M`） | u16be | 1..127 |
 | 36+N | `M` | `MIME` | ascii | §3.3 规则 |
@@ -457,6 +474,19 @@ offset len 字段
 `DIGEST[i] = SM3( 第 i 块明文 )`，明文即切片后的原始字节（不含任何头、不含长度前缀）。接收方在 GCM 认证通过后 MUST 复算并比对，不符报 `CRYPTO_DIGEST_MISMATCH`。
 
 **易错点（写死）**：摘要取**明文块**——不是 `CHUNK_CT`、不是 `CHUNK_CT ‖ TAG`、不是整条块记录。这三种口径算出来的值完全不同，跨实现对照时以本文为准。
+
+### 8.5 空文件名（`NAME_LEN = 0`）
+
+**协议层允许空文件名**：`NAME_LEN = 0` 是合法值，`NAME` 字段占 0 字节，后续偏移照常（`MIME_LEN` 落在 offset 34）。
+
+| 角色 | 要求 |
+|---|---|
+| 写方 | `NAME_LEN == 0` 时 `NAME_MODE` MUST 为 `0x00`，且 `FLAGS.NAME_OBFUSCATED` MUST 为 0（空名没有"打码"语义，禁止用该组合制造口径分歧） |
+| 读方 | MUST 接受空名并正常解包；**不得**因文件名为空而拒绝（`CRYPTO_MANIFEST_INVALID` 只用于结构/长度/一致性非法） |
+| 客户端展示 | 空名显示"未命名"；`EXT` 仍可非空，按扩展名做降级展示（图标/类型提示） |
+| 落盘命名 | 落盘文件名完全由接收端本地决定（含去重），不来自清单、不参与寻址 |
+
+**安全说明（为什么允许空名）**：文件名只是展示信息，既不参与加密也不参与寻址，服务端也从未见过明文名（清单在 `MANIFEST_SEC` 密文内）。`MANIFEST_PT_LEN` 被清单 AAD（§7.3）覆盖，长度本身是被认证的——因此"空名"不构成混淆通道；反过来，禁止空名只会逼客户端编造假名字（如 `unnamed.bin`），把展示问题变成假数据问题。
 
 ---
 
@@ -628,7 +658,7 @@ KEK_MANIFEST = HKDF-SM3(DK, KDF_SALT, "YANSHU/v1/manifest-key", 16)
 | 12 | `ENVELOPE_LEN` 等于 §4.2 计算值：**不足** → `CRYPTO_TRUNCATED`；**多出**（尾随字节）→ `CRYPTO_TRAILING_BYTES`；计算所用字段自相矛盾 → `CRYPTO_LENGTH_INCONSISTENT` | 见左列 |
 | 13 | SM2 解封 `WRAPPED_KEY` → 得 32 字节 `DK` | `CRYPTO_KEY_UNWRAP_FAILED` |
 | 14 | HKDF 派生 `KEK_MANIFEST`，解 `MANIFEST_SEC`（AAD 见 §7.3） | `CRYPTO_MANIFEST_AUTH_FAILED` |
-| 15 | `MANIFEST_PT` 的 `MAGIC=="YSM1"`、`MANIFEST_VERSION==1`、`DIGEST_ALG==1`、`DIGEST_LEN==32` | `CRYPTO_MANIFEST_INVALID` |
+| 15 | `MANIFEST_PT` 的 `MAGIC=="YSM1"`、`MANIFEST_VERSION==1`、`DIGEST_ALG==1`、`DIGEST_LEN==32`、`NAME_MODE ∈ {0x00,0x01}` 且**与 `FLAGS.NAME_OBFUSCATED` 相等**（`NAME_LEN==0` 时 `NAME_MODE` MUST 为 `0x00`，§8.5） | `CRYPTO_MANIFEST_INVALID` |
 | 16 | 清单内 `FILE_SIZE / CHUNK_SIZE / CHUNK_COUNT` 与头一致；`DIGEST_TABLE_LEN == CHUNK_COUNT*32`；字符串长度前缀不越界 | `CRYPTO_LENGTH_INCONSISTENT` |
 | 17 | SM2 验签 `SIG_SEC` over `SIG_INPUT`（§10.2） | `CRYPTO_SIGNATURE_INVALID` |
 | 18 | `Crockford(SM3(SENDER_PUB))[0..4)` == 元数据中的发送方码 | `CRYPTO_SENDER_MISMATCH` |
