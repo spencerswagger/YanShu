@@ -38,6 +38,12 @@ test('真内核：0 import、导出齐全、版本/包头/块大小可读', { sk
   assert.equal(kernel.mode, 'wasm')
   assert.equal(kernel.isRealCrypto, true)
   assert.equal(kernel.version, 0x00010000)
+  assert.equal(kernel.headerLen, 112, '契约布局 HEADER 112')
+  assert.equal(kernel.layout, 'contract')
+  // 新原型：6 参自证解包 + DER 签名 + v1 打包
+  assert.equal(kernel.capabilities.selfUnpack, true, 'ys_unpack_v1 应为 6 参自证原型')
+  assert.equal(kernel.capabilities.signDer, true)
+  assert.equal(kernel.capabilities.packV1, true)
   assert.ok([40, 112].includes(kernel.headerLen), `包头 ${kernel.headerLen}`)
   assert.ok(kernel.blockSize >= 16 && kernel.blockSize <= 64 * 1024 * 1024)
   assert.ok(kernel.notes.length >= 0)
@@ -124,6 +130,35 @@ test('真内核：打包 → 切分 → 拼回 → 解包，明文一致；改�
   const mixedPack = kernel.joinPack({ prelude, slices: mixed, plaintextSize: data.length, chunkSize: kernel.blockSize })
   assert.throws(
     () => kernel.unpack({ pack: mixedPack, recipientPrivate: bob.privateKey, senderPublic: alice.publicKey }),
+    (err) => /^CRYPTO_/.test(err.code),
+  )
+})
+
+test('真内核：解包不需要发送方公钥（包内 SENDER_PUB 自证）', { skip }, async () => {
+  const kernel = await instantiateKernel(readFileSync(wasmPath))
+  kernel.blockSize = 4096
+  const alice = kernel.generateIdentity()
+  const bob = kernel.generateIdentity()
+  const data = new Uint8Array(3000).map((_, i) => (i * 17) & 0xff)
+  const pack = kernel.pack({
+    data,
+    name: 'self.bin',
+    mime: 'application/octet-stream',
+    recipientPublic: bob.publicKey,
+    senderPrivate: alice.privateKey,
+    blockSize: kernel.blockSize,
+  })
+  // 只给收件人私钥：既不给发送方公钥、也不给发送方码
+  const meta = kernel.unpackMeta({ pack, recipientPrivate: bob.privateKey })
+  assert.equal(meta.sender_code, kernel.codeOf(alice.publicKey), '包内公钥派生的发送方码')
+  const plain = kernel.unpack({ pack, recipientPrivate: bob.privateKey })
+  assert.deepEqual([...plain], [...data])
+
+  // 换掉包内 SENDER_PUB 任一字节 → 必须失败（来源不可伪造）
+  const tampered = new Uint8Array(pack)
+  tampered[112 + 10] ^= 0x01 // SENDER_PUB 段内第 10 字节（HEADER 之后）
+  assert.throws(
+    () => kernel.unpack({ pack: tampered, recipientPrivate: bob.privateKey }),
     (err) => /^CRYPTO_/.test(err.code),
   )
 })

@@ -13,15 +13,15 @@
 | 日期 | 2026-11-02 |
 | 前端 | `web/`（Vue 3 + Vite，dev server，`/v1` 反代到 Core） |
 | 中转 | Core `yanshu-server`（`127.0.0.1:8080`，`search_path=yanshu_web`，`YANSHU_BLOB_DIR` 独立目录） |
-| 内核 | 契约布局 wasm（HEADER 112），构建自 `feat/endcrypto-wasm` 最新提交 |
+| 内核 | 契约布局 wasm（HEADER 112），构建自 `feat/endcrypto-wasm` `dbd66c4`（`ys_version()=0x00010000`、30 导出、0 import、`ys_unpack_v1` 6 参自证） |
 | 界面标签 | `真实加密 · 契约布局（YSPK/1.0）` |
 | 样本 | 与证据 A **同一份**：2 506 889 字节，sha256 `4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f` |
 | 客户端 | 两个独立 Chrome profile |
 
 ## 流程
 
-A 端：注册（真码）→ 建包 → prelude + 3 块 PUT → complete → 界面「已发送」。
-B 端：待收（`GET /v1/inbox`）→ 取 prelude（开租约）→ 逐块 GET → 端侧验签解密 → 落盘 → `ack`。
+A 端：注册（真码）→ 建包（`ys_pack_v1`，清单写实 `ext`/`created_at`）→ prelude + 3 块 PUT → complete → 界面「已发送」。
+B 端：待收（`GET /v1/inbox`）→ 取 prelude（开租约）→ 逐块 GET → 端侧验签解密（`ys_unpack_v1` 只给私钥，来源由包内 `SENDER_PUB` 自证）→ 落盘 → `ack`。
 
 ## 结果
 

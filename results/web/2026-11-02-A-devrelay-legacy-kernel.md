@@ -11,7 +11,7 @@
 | 日期 | 2026-11-02 |
 | 前端 | `web/`（Vue 3 + Vite，dev server） |
 | 中转 | `web/relay/dev-relay.mjs`（dev relay） |
-| 内核 | 旧布局 wasm（HEADER 40），构建自 `feat/endcrypto-wasm` 契约返工前的提交 |
+| 内核 | 旧布局 wasm（HEADER 40），构建自 `feat/endcrypto-wasm` 契约返工前的提交 `12b3d94`（`ys_version()=0x00010000`、24 导出、0 import） |
 | 界面标签 | `真实加密 · 旧布局内核（待对齐契约）`（页面顶部另有红条：不能作为契约验收） |
 | 样本 | `ys-e2e-input.bin`，2 506 889 字节，sha256 `4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f` |
 | 客户端 | 两个独立 Chrome profile（= 两个身份，IndexedDB 隔离） |

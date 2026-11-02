@@ -7,11 +7,15 @@
     "sha256": "4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f",
     "file": "ys-e2e-input.bin"
   },
-  "startedAt": "2026-11-02T16:27:56.262Z",
+  "startedAt": "2026-11-02T16:31:28.599Z",
   "kernel": "真实加密 · 契约布局（YSPK/1.0）",
   "layout": "contract-112",
-  "codeA": "P206",
-  "codeB": "F9QQ",
+  "kernelBuild": {
+    "commit": "dbd66c4",
+    "ysVersion": "0x00010000"
+  },
+  "codeA": "27HK",
+  "codeB": "MTFK",
   "sent": true,
   "received": true,
   "downloaded": [
@@ -21,12 +25,6 @@
   "downloadSha256": "4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f",
   "bytesEqual": true,
   "downloadName": "ys-e2e-input.bin",
-  "finishedAt": "2026-11-02T16:28:04.012Z",
-  "ok": true,
-  "acceptance": true,
-  "note": "Core 真服务 + 契约布局内核；服务端仍 stub-allow 不验签，验签后需复跑",
-  "artifacts": {
-    "screenshots": "outbound/screenshots/B-core-contract-kernel-*.png",
-    "markdown": "results/web/2026-11-02-B-core-contract-kernel.md"
-  }
+  "finishedAt": "2026-11-02T16:31:36.663Z",
+  "ok": true
 }

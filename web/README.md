@@ -72,6 +72,30 @@ web/
 └── tests/
 ```
 
+## 内核产物来源与校验（可复现）
+
+产物不入库（根 `.gitignore` 忽略 `*.wasm`），所以每次都要拿**具体 commit** 重建，并核对下列五项：
+
+```bash
+# 仓库根
+git fetch origin
+git archive origin/feat/endcrypto-wasm | tar -x -C /tmp/ys-kernel
+cd /tmp/ys-kernel/crypto
+CARGO_TARGET_DIR=/tmp/ys-kernel-target \
+  cargo build --release --target wasm32-unknown-unknown -p yanshu-sm
+cd web && YS_WASM=/tmp/ys-kernel-target/wasm32-unknown-unknown/release/yanshu_sm.wasm npm run wasm:sync
+```
+
+| 校验项 | 期望（契约版） |
+|---|---|
+| 构建 commit | `feat/endcrypto-wasm` 的 head（本轮实测 `dbd66c4`） |
+| `ys_version()` | `0x00010000` |
+| `ys_header_len()` | `112`（单一契约格式，无布局切换） |
+| 导出/导入 | 30 个函数导出、**0 import** |
+| `ys_unpack_v1` arity | `6`（只给私钥，来源由包内 `SENDER_PUB` 自证） |
+
+`npm test` 会断言这些项（`tests/wasm-real.test.js` 第 1 例），产物不对就红。
+
 ## 端侧内核绑定（`crypto/include/yanshu_sm.h`）
 
 - **内存**：`ys_alloc` / `ys_free`（长度必须一致），指针是线性内存偏移；字符串按"指针+长度"传，不假设 C 字符串。
