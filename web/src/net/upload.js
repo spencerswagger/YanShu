@@ -7,8 +7,10 @@
  * - 上传顺序照 API.md §6：`POST /transfers` → `PUT prelude` → `PUT chunks/{i}` → `POST complete`；
  * - 续传照 §6.5 / §8.3：`GET /status` 的 `bitmap/missing` 决定只补哪些块。
  *
- * 已知边界（内核当前是整包接口 `ys_pack`）：整份文件要进内存，所以有 `maxPackSize` 上限；
- * 超过上限提示等流式接口（Ark 已把"流式分块 API"列入 v1 不做的排期）。
+ * 凭证自愈（真 `sm2` 环境会真的发生）：
+ * - 服务端递增 `TOKEN_EPOCH` / 轮换 secret 后，旧 `upload_token` 会返回 `401`（`AUTH_TOKEN_STALE` 等）；
+ * - 这里不把用户卡死：**重新创建一次传输并用同一个包会话重传**，界面提示"凭证失效，正在重建传输…"；
+ * - 下载侧的租约失效在 `download.js` 里重开租约处理。
  */
 import { config } from '../config.js'
 import { CryptoError } from '../crypto/errors.js'
@@ -33,20 +35,7 @@ const report = (onProgress, patch) => onProgress?.(patch)
  * @param {File|Blob} p.file        要发的文件
  * @param {{code:string, nickname:string, publicKey:Uint8Array}} p.recipient
  */
-export async function sendFile(params) {
-  // 服务端重启会让 upload_token 立即失效（token secret 变化）：401 时自动重建一次传输
-  try {
-    return await sendOnce({ ...params, attempt: 1 })
-  } catch (err) {
-    if (!err?.authFailed || params.signal?.aborted) throw err
-    info('上传凭证失效（服务端可能重启），自动重建传输', { status: err.status })
-    params.onProgress?.({ phase: 'creating', done: 0, total: 0, message: '凭证失效，正在重建传输…' })
-    return sendOnce({ ...params, attempt: 2 })
-  }
-}
-
-async function sendOnce({ api, kernel, session, file, recipient, onProgress, signal, pendingStore, ttlSeconds, maxDownloads, attempt }) {
-  void attempt
+export async function sendFile({ api, kernel, session, file, recipient, onProgress, signal, pendingStore, ttlSeconds, maxDownloads }) {
   const name = file.name || 'file'
   const mime = file.type || 'application/octet-stream'
 
@@ -71,88 +60,31 @@ async function sendOnce({ api, kernel, session, file, recipient, onProgress, sig
   })
 
   const chunkSize = kernel.blockSize || config.chunkSize
-  // 会话式包装在 JS 侧：prelude + 第 i 块切片 + 可导出/恢复（内核只提供整包接口）
   const packSession = kernel.openPackSession({ pack, plaintextSize: data.length, chunkSize })
-  const { prelude, slices, preludeLen, chunkCount } = packSession
-  const preludeSm3 = kernel.sm3(prelude)
-
-  report(onProgress, { phase: 'creating', done: 0, total: data.length, message: '创建传输' })
-  const created = await api.createTransfer({
-    recipient_code: recipient.code,
-    plaintext_size: data.length,
-    chunk_size: chunkSize,
-    chunk_count: chunkCount,
-    prelude_len: preludeLen,
-    prelude_sm3: b64uEncode(preludeSm3),
-    ttl_seconds: ttlSeconds ?? config.defaultTtlSeconds,
-    max_downloads: maxDownloads ?? config.defaultMaxDownloads,
-    idempotency_key: idempotencyKey(),
-  })
-
-  const transferId = created.transfer_id
-  const uploadToken = created.upload_token
-
-  await pendingStore?.put(transferId, {
-    kind: 'send',
-    transferId,
-    uploadToken,
-    recipientCode: recipient.code,
-    recipientNickname: recipient.nickname,
-    fileName: name,
-    fileSize: data.length,
-    chunkSize,
-    chunkCount,
-    preludeLen,
-    preludeSm3: b64uEncode(preludeSm3),
-    // 会话快照（整包是密文）：≤ maxPersistPack 才留，刷新后靠它恢复
-    session: pack.length <= config.maxPersistPack ? packSession.export() : null,
-    packSize: pack.length,
-    createdAt: Date.now(),
-    state: 'UPLOADING',
-  })
-
-  report(onProgress, { phase: 'uploading', done: 0, total: data.length, message: '上传 prelude' })
-  await api.putPrelude({ transferId, uploadToken, prelude })
-
-  const missing = await fetchMissing(api, transferId, uploadToken, chunkCount)
-  await uploadSlices({ api, transferId, uploadToken, slices, chunkCount, missing, onProgress, signal })
-
-  report(onProgress, { phase: 'completing', done: data.length, total: data.length, message: '标记完成' })
-  const done = await api.complete({ transferId, uploadToken })
-  await pendingStore?.put(transferId, {
-    kind: 'send',
-    transferId,
-    uploadToken,
-    recipientCode: recipient.code,
-    recipientNickname: recipient.nickname,
-    fileName: name,
-    fileSize: data.length,
-    chunkSize,
-    chunkCount,
-    preludeLen,
-    preludeSm3: b64uEncode(preludeSm3),
-    createdAt: Date.now(),
-    state: done?.json?.state || 'READY',
-    doneAt: Date.now(),
-  })
-  packSession.close()
-  info('发送完成', { bytes: data.length, chunks: chunkCount })
-  report(onProgress, { phase: 'done', done: data.length, total: data.length, message: '已发送' })
-  return {
-    transferId,
-    uploadToken,
-    recipientCode: recipient.code,
-    fileName: name,
-    fileSize: data.length,
-    chunkCount,
-    preludeLen,
-    state: done?.json?.state,
+  try {
+    return await uploadSession({
+      api,
+      kernel,
+      packSession,
+      pack,
+      name,
+      mime,
+      fileSize: data.length,
+      recipient,
+      onProgress,
+      signal,
+      pendingStore,
+      ttlSeconds,
+      maxDownloads,
+    })
+  } finally {
+    packSession.close()
   }
 }
 
 /**
- * 续传：本机存着密文包时，直接从 `/status` 的缺失块补齐。
- * 没有包（文件太大或清理过）就只能重发——整包接口没法重建会话。
+ * 续传：本机存着包会话快照时，用新 token / 旧快照把剩下的块补齐。
+ * 若旧 token 已失效（401），自动重建一次传输再传（凭证自愈）。
  */
 export async function resumeSend({ api, kernel, session, record, onProgress, signal, pendingStore }) {
   if (!record?.session) {
@@ -161,33 +93,164 @@ export async function resumeSend({ api, kernel, session, record, onProgress, sig
     throw err
   }
   const packSession = kernel.resumePackSession(record.session)
-  const { prelude, slices, chunkCount } = packSession
-  const status = await api.uploadStatus({ transferId: record.transferId, uploadToken: record.uploadToken })
-  if (status?.state && status.state !== 'UPLOADING') {
-    await pendingStore?.put(record.transferId, { ...record, state: status.state })
-    return { transferId: record.transferId, state: status.state, resumed: false }
+  try {
+    return await uploadSession({
+      api,
+      kernel,
+      packSession,
+      pack: packSession.pack,
+      name: record.fileName,
+      mime: record.mime || 'application/octet-stream',
+      fileSize: record.fileSize,
+      recipient: { code: record.recipientCode, nickname: record.recipientNickname, publicKey: null },
+      onProgress,
+      signal,
+      pendingStore,
+      resume: { transferId: record.transferId, uploadToken: record.uploadToken },
+    })
+  } finally {
+    packSession.close()
   }
-  if (!status?.prelude_received) {
-    await api.putPrelude({ transferId: record.transferId, uploadToken: record.uploadToken, prelude })
-  }
-  const missing = status?.bitmap
-    ? missingIndexes(decodeBitmap(status.bitmap, chunkCount))
-    : await fetchMissing(api, record.transferId, record.uploadToken, chunkCount)
+}
 
-  await uploadSlices({
-    api,
-    transferId: record.transferId,
-    uploadToken: record.uploadToken,
-    slices,
-    chunkCount,
-    missing,
-    onProgress,
-    signal,
-  })
-  const done = await api.complete({ transferId: record.transferId, uploadToken: record.uploadToken })
-  packSession.close()
-  await pendingStore?.put(record.transferId, { ...record, state: done?.json?.state || 'READY', doneAt: Date.now() })
-  return { transferId: record.transferId, state: done?.json?.state, resumed: true, missing: missing.length }
+/**
+ * 传输编排主体（发送与续传共用）。凭证失效时最多重建一次。
+ */
+async function uploadSession({
+  api,
+  kernel,
+  packSession,
+  pack,
+  name,
+  mime,
+  fileSize,
+  recipient,
+  onProgress,
+  signal,
+  pendingStore,
+  ttlSeconds,
+  maxDownloads,
+  resume,
+}) {
+  const { prelude, slices, preludeLen, chunkCount } = packSession
+  const preludeSm3 = kernel.sm3(prelude)
+
+  let attempt = 0
+  for (;;) {
+    attempt += 1
+    try {
+      // ① 续传：先按旧 token 探进度；拿不到（401）就直接进入重建
+      let transferId
+      let uploadToken
+      let missing = [...Array(chunkCount).keys()]
+      let needPrelude = true
+
+      if (resume && attempt === 1) {
+        transferId = resume.transferId
+        uploadToken = resume.uploadToken
+        const status = (await api.uploadStatus({ transferId, uploadToken })) || {}
+        if (status.state && status.state !== 'UPLOADING') {
+          await pendingStore?.put(transferId, { ...(await pendingStore?.get(transferId)), state: status.state })
+          return { transferId, state: status.state, resumed: false }
+        }
+        needPrelude = !status.prelude_received
+        if (status.bitmap) missing = missingIndexes(decodeBitmap(status.bitmap, chunkCount))
+        else if (Array.isArray(status.missing)) {
+          missing = []
+          for (const r of status.missing) for (let i = r.start; i < r.start + r.count; i++) missing.push(i)
+        }
+        report(onProgress, {
+          phase: 'uploading',
+          done: 0,
+          total: fileSize,
+          message: `续传：还缺 ${missing.length} 块`,
+        })
+      } else {
+        report(onProgress, { phase: 'creating', done: 0, total: fileSize, message: '创建传输' })
+        const created = await api.createTransfer({
+          recipient_code: recipient.code,
+          plaintext_size: fileSize,
+          chunk_size: packSession.chunkSize,
+          chunk_count: chunkCount,
+          prelude_len: preludeLen,
+          prelude_sm3: b64uEncode(preludeSm3),
+          ttl_seconds: ttlSeconds ?? config.defaultTtlSeconds,
+          max_downloads: maxDownloads ?? config.defaultMaxDownloads,
+          idempotency_key: idempotencyKey(),
+        })
+        transferId = created.transfer_id
+        uploadToken = created.upload_token
+        await pendingStore?.put(transferId, {
+          kind: 'send',
+          transferId,
+          uploadToken,
+          recipientCode: recipient.code,
+          recipientNickname: recipient.nickname,
+          fileName: name,
+          mime,
+          fileSize,
+          chunkSize: packSession.chunkSize,
+          chunkCount,
+          preludeLen,
+          preludeSm3: b64uEncode(preludeSm3),
+          session: pack.length <= config.maxPersistPack ? packSession.export() : null,
+          packSize: pack.length,
+          createdAt: Date.now(),
+          state: 'UPLOADING',
+        })
+      }
+
+      if (needPrelude) {
+        report(onProgress, { phase: 'uploading', done: 0, total: fileSize, message: '上传 prelude' })
+        await api.putPrelude({ transferId, uploadToken, prelude })
+      }
+      if (attempt === 1 && !resume) {
+        missing = await fetchMissing(api, transferId, uploadToken, chunkCount)
+      }
+      await uploadSlices({ api, transferId, uploadToken, slices, chunkCount, missing, onProgress, signal })
+
+      report(onProgress, { phase: 'completing', done: fileSize, total: fileSize, message: '标记完成' })
+      const done = await api.complete({ transferId, uploadToken })
+      await pendingStore?.put(transferId, {
+        kind: 'send',
+        transferId,
+        uploadToken,
+        recipientCode: recipient.code,
+        recipientNickname: recipient.nickname,
+        fileName: name,
+        mime,
+        fileSize,
+        chunkSize: packSession.chunkSize,
+        chunkCount,
+        preludeLen,
+        preludeSm3: b64uEncode(preludeSm3),
+        createdAt: Date.now(),
+        state: done?.json?.state || 'READY',
+        doneAt: Date.now(),
+      })
+      info('发送完成', { bytes: fileSize, chunks: chunkCount })
+      report(onProgress, { phase: 'done', done: fileSize, total: fileSize, message: '已发送' })
+      return {
+        transferId,
+        uploadToken,
+        recipientCode: recipient.code,
+        fileName: name,
+        fileSize,
+        chunkCount,
+        preludeLen,
+        state: done?.json?.state,
+      }
+    } catch (err) {
+      // 凭证失效（token 轮换 / EPOCH 递增 / 服务端重启）→ 重建一次，用同一个包会话重传
+      if (attempt === 1 && err?.authFailed && !signal?.aborted) {
+        info('上传凭证失效，自动重建传输', { status: err.status })
+        report(onProgress, { phase: 'creating', done: 0, total: fileSize, message: '凭证失效，正在重建传输…' })
+        resume = null
+        continue
+      }
+      throw err
+    }
+  }
 }
 
 async function fetchMissing(api, transferId, uploadToken, chunkCount) {
@@ -222,5 +285,3 @@ async function uploadSlices({ api, transferId, uploadToken, slices, chunkCount, 
     { concurrency: config.uploadConcurrency, signal },
   )
 }
-
-export { decodeBitmap, missingIndexes }

@@ -33,6 +33,20 @@
 
 （原始输出：`notes/c2-auth-checks.mjs` 的运行结果 `results/web/c1b87d0a-sm2-auth-branches.json`。）
 
+## 凭证失效自愈（EPOCH 1→2 实测）
+
+宿主当前 `YANSHU_TOKEN_EPOCH=1`，无法在宿主上构造 stale；用**同一交付二进制（`06c9f56` 构建）+ 同一冻结内核**在本地做了一次真实验：
+
+1. A 上传到第 2 块时人为中断，留下 `pending` 记录与旧 `upload_token`；
+2. 停服 → `YANSHU_TOKEN_EPOCH=2` 重启（token 轮换）；
+3. 旧 token 直接打 `GET /transfers/{id}/status` → **HTTP 401**，原始响应体：
+   `{"error":{"code":"AUTH_TOKEN_STALE","message":"upload token was revoked by a key version rotation; create a new transfer","request_id":"…"}}`
+4. 走客户端 `resumeSend` → **自动重建传输并重传**（无需用户操作）→ `state: READY`；
+5. B 端取回 `heal.bin` 12 000 字节，**逐字节一致**。
+
+结果：`results/web/c1b87d0a-sm2-token-heal.json`。分支说明：客户端按 `err.authFailed`（任意 401 / `AUTH_*`）触发，
+不依赖具体错误名，因此服务端把名字从 `AUTH_TOKEN_STALE` 改成别的也不会失效。
+
 ## 标签与产物核对
 
 - `npm run wasm:check`：`ys_user_code` 64B=`AWQW` / 65B=`X2EH`；`ys_check_symbol` 64B=`X` / wire-65=`X`（四值同屏）。
