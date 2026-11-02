@@ -56,6 +56,16 @@ upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖
 - secret 轮换过 → 重算值 ≠ 原值，服务端不会把一个不可用的 token 发出去，返回 `409 TRANSFER_STATE_CONFLICT`，
   客户端重建传输即可（新传输拿新 token）。
 
+## 3.4 为什么旧版本看到的是 201（commit 时间线）
+
+| commit | token 校验方式 | 换 secret 后旧 token |
+|---|---|---|
+| `9065eb8` 及更早 | 只比 `SM3(token)` 与库内哈希 | **仍然有效（201）** |
+| `08d40e7` | 按当前密钥**重算** + 比对 | 失效（401 `AUTH_TOKEN_INVALID`） |
+| `fa479d9` | 加 kid：行内 kid 必须等于当前 kid | 失效（401 `AUTH_TOKEN_STALE`） |
+
+所以"换 secret 后 201"是 `9065eb8` 的**预期行为**，不是同一份实现的矛盾。
+
 ## 3.5 运维：如何一次性吊销全部 upload_token（三步）
 
 ```sh
@@ -77,6 +87,17 @@ upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖
 `AUTH_TOKEN_STALE` = 版本被轮换，客户端应**重建传输**；`AUTH_TOKEN_INVALID` = token 值不对，
 客户端应检查是不是串了传输；`AUTH_SIGNATURE_INVALID` 只用于签名不被接受。
 **没有 `AUTH_TOKEN_EXPIRED`**：过期是传输级语义（`410 TRANSFER_EXPIRED`）。
+
+### 自动化对照脚本（给验收）
+
+```sh
+server/scripts/token-rotation-check.sh \
+  --bin ./bin/yanshu-server --deliver ./bin/deliver \
+  --yspk /tmp/sample.yspk --dsn '<DSN 含 search_path>' --blob /tmp/blobs
+```
+
+脚本自己起停服务四轮（基线 / 只换 secret / 只换 kid / 两个都换），每组都断言
+"旧 token 拒 + 新 token 200"，输出 PASS/FAIL 并以退出码收口。
 
 > kid 的"单调递增"是运维约定（服务端只做等值比较，不解析序数）；如果要服务端强制递增，
 > 需要契约先定义 kid 的格式与历史版本存储，v1 不做。

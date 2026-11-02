@@ -63,6 +63,7 @@ type options struct {
 	timeout      time.Duration
 	senderKey    string
 	recipientKey string
+	printToken   bool
 }
 
 func main() {
@@ -88,6 +89,8 @@ func run(argv []string) int {
 	fs.DurationVar(&opt.timeout, "timeout", 60*time.Second, "单次 HTTP 超时")
 	fs.StringVar(&opt.senderKey, "sender-sk", "", "发送方 SM2 私钥（32 字节 hex 或裸文件）；给真签名时必填")
 	fs.StringVar(&opt.recipientKey, "recipient-sk", "", "接收方 SM2 私钥；给真签名时必填")
+	fs.BoolVar(&opt.printToken, "print-upload-token", false,
+		"把 upload_token 打到 stderr（仅用于 token 轮换对照，属敏感凭据，别进报告）")
 	if err := fs.Parse(argv); err != nil {
 		return exitUsage
 	}
@@ -174,6 +177,11 @@ func run(argv []string) int {
 	if err != nil {
 		return reportErr(err)
 	}
+	if opt.printToken {
+		// 只给轮换对照脚本用：token 是能力凭据，默认不输出、不写 JSON。
+		fmt.Fprintf(os.Stderr, "WARN: printing upload token to stderr (test only)\nupload_token=%s\n", created.UploadToken)
+	}
+
 	// 4) 传 prelude 与块。
 	if err := cli.putPrelude(created.UploadToken, created.TransferID, env.Prelude); err != nil {
 		return reportErr(err)

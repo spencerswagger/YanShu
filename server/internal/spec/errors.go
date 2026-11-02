@@ -91,6 +91,7 @@ var errStatus = map[ErrorCode]int{
 	ErrAuthChallengeInvalid: http.StatusUnauthorized,
 	ErrAuthCodeMismatch:     http.StatusUnauthorized,
 	ErrAuthTokenStale:       http.StatusUnauthorized,
+	ErrAuthTokenInvalid:     http.StatusUnauthorized,
 
 	ErrSignalPeerMismatch: http.StatusForbidden,
 	ErrNotTransferParty:   http.StatusForbidden,
@@ -143,6 +144,7 @@ var errMessage = map[ErrorCode]string{
 	ErrAuthChallengeInvalid: "challenge is expired, used or purpose mismatch",
 	ErrAuthCodeMismatch:     "X-YS-Code does not match the signed code",
 	ErrAuthTokenStale:       "upload token was revoked by a key rotation; create a new transfer",
+	ErrAuthTokenInvalid:     "upload token is invalid for this transfer",
 
 	ErrSignalPeerMismatch: "signal peers do not match the transfer",
 	ErrNotTransferParty:   "authenticated credential is not a party of this transfer",
