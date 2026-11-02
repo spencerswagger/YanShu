@@ -115,14 +115,20 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 				a.internalError(w, r, "get idempotent transfer", err)
 				return
 			}
-			token, err := a.tokens.UploadToken(existing.ID)
+			cur, err := a.store.CurrentTokenKID(ctx)
+			if err != nil {
+				a.internalError(w, r, "current token kid", err)
+				return
+			}
+			token, err := a.tokens.UploadToken(existing.ID, cur)
 			if err != nil {
 				a.internalError(w, r, "derive upload token", err)
 				return
 			}
 			// 幂等重放要返回同一个 token；secret 轮换过就重建不出来，
 			// 这时不能把不可用的 token 发出去，让客户端重建传输。
-			if !a.tokens.Derives(token, existing.ID, existing.UploadTokenSM3) {
+			if existing.UploadTokenKID != strconv.FormatInt(cur, 10) ||
+				!auth.ValidateHash(token, existing.UploadTokenSM3) {
 				a.log.Warn("idempotency replay after token rotation", "transferId", existing.ID)
 				fail(w, r, spec.ErrTransferStateConflict)
 				return
@@ -164,7 +170,12 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, "transfer id", err)
 		return
 	}
-	token, err := a.tokens.UploadToken(transferID)
+	kid, err := a.store.CurrentTokenKID(ctx)
+	if err != nil {
+		a.internalError(w, r, "current token kid", err)
+		return
+	}
+	token, err := a.tokens.UploadToken(transferID, kid)
 	if err != nil {
 		a.internalError(w, r, "upload token", err)
 		return
@@ -183,6 +194,7 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(time.Duration(ttl) * time.Second),
 		UploadTokenSM3: auth.UploadTokenHash(token),
+		UploadTokenKID: strconv.FormatInt(kid, 10),
 		UploaderIP:     ip,
 	})
 	if err != nil {
@@ -544,14 +556,19 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 		return store.Transfer{}, false
 	}
 	// 判定顺序（先凭据后状态）：
-	// ① token 与库内哈希都对不上 → AUTH_TOKEN_INVALID（伪造/串了传输）
-	if !auth.ValidateHash(token, t.UploadTokenSM3) {
-		writeError(w, r, apiError{code: spec.ErrAuthTokenInvalid})
+	// ① KID 不符 → AUTH_TOKEN_STALE（KID 是唯一吊销开关，与 secret 无关）
+	kid, err := a.store.CurrentTokenKID(r.Context())
+	if err != nil {
+		a.internalError(w, r, "current token kid", err)
 		return store.Transfer{}, false
 	}
-	// ② 哈希对得上、但当前密钥派生不出同一个值 → 密钥轮换导致失效 → AUTH_TOKEN_REVOKED
-	if !a.tokens.Derives(token, t.ID, t.UploadTokenSM3) {
-		writeError(w, r, apiError{code: spec.ErrAuthTokenRevoked})
+	if t.UploadTokenKID != strconv.FormatInt(kid, 10) {
+		writeError(w, r, apiError{code: spec.ErrAuthTokenStale})
+		return store.Transfer{}, false
+	}
+	// ② token 与库内哈希对不上 → AUTH_TOKEN_INVALID
+	if !auth.ValidateHash(token, t.UploadTokenSM3) {
+		writeError(w, r, apiError{code: spec.ErrAuthTokenInvalid})
 		return store.Transfer{}, false
 	}
 	// ③ 凭据过期（上传 token 6h）→ AUTH_TOKEN_EXPIRED

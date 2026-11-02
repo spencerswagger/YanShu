@@ -34,8 +34,11 @@ type Config struct {
 	// TrustProxyHeaders 为 true 时从 X-Forwarded-For 取客户端 IP。
 	TrustProxyHeaders bool
 
-	// TokenSecret 是 upload_token 的 HMAC 密钥。
+	// TokenSecret 是 upload_token 的 HMAC 密钥（只作派生盐）。
 	TokenSecret []byte
+	// TokenKID 是 token 的密钥版本（严格单调递增；唯一吊销开关）。
+	TokenKID    string
+	TokenKIDNum int64
 
 	// 对外配置（GET /v1/config）。
 	STUNURLs []string
@@ -118,6 +121,19 @@ func Load() (Config, error) {
 	if secret := os.Getenv("YANSHU_TOKEN_SECRET"); secret != "" {
 		c.TokenSecret = []byte(secret)
 	}
+	kidRaw := os.Getenv("YANSHU_TOKEN_KID")
+	if kidRaw == "" {
+		kidRaw = os.Getenv("YANSHU_TOKEN_EPOCH") // 兼容旧变量名
+	}
+	if kidRaw == "" {
+		kidRaw = "1"
+	}
+	n, err := strconv.ParseInt(kidRaw, 10, 64)
+	if err != nil || n <= 0 {
+		return Config{}, fmt.Errorf("config: YANSHU_TOKEN_KID must be a positive decimal integer (got %q)", kidRaw)
+	}
+	c.TokenKID = strconv.FormatInt(n, 10)
+	c.TokenKIDNum = n
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: YANSHU_DATABASE_URL is required")
 	}

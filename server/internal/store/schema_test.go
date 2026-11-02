@@ -23,12 +23,13 @@ var expectedColumns = map[string][]string{
 		"max_downloads", "plaintext_size", "prelude_len", "prelude_received",
 		"prelude_sm3", "received_chunks", "recipient_code", "sender_code", "state",
 		"terminal_at", "terminal_reason", "total_ciphertext_bytes", "transfer_id",
-		"updated_at", "upload_token_sm3", "uploader_ip",
+		"updated_at", "upload_token_sm3", "upload_token_kid", "uploader_ip",
 	},
 	"transfer_chunks":    {"chunk_index", "ciphertext_sm3", "length", "stored_at", "transfer_id"},
 	"transfer_downloads": {"acked_at", "created_at", "download_id", "lease_expires_at", "transfer_id"},
 	"idempotency_keys":   {"created_at", "expires_at", "key_hash", "request_fingerprint", "sender_code", "transfer_id"},
 	"audit_events":       {"bytes", "id", "ip", "method", "path", "request_id", "status", "ts"},
+	"token_kid_state":    {"id", "kid", "updated_at"},
 }
 
 func TestSchemaColumnWhitelist(t *testing.T) {

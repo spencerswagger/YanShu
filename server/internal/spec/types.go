@@ -38,6 +38,8 @@ type ConfigResponse struct {
 	STUNURLs          []string     `json:"stun_urls"`
 	WSURL             *string      `json:"ws_url"`
 	Limits            ConfigLimits `json:"limits"`
+	// TokenEpoch 是当前只读的 KID（契约 §1.7 的 token_epoch；本实现里就是 KID）。
+	TokenEpoch int64 `json:"token_epoch"`
 }
 
 // ConfigLimits 是 /v1/config 里暴露的限速额度（API.md §4.1）。

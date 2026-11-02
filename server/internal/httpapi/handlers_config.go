@@ -12,6 +12,10 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if !a.validateQuery(w, r) {
 		return
 	}
+	kid, err := a.store.CurrentTokenKID(r.Context())
+	if err != nil {
+		kid = a.cfg.TokenKIDNum
+	}
 	var wsURL *string
 	if a.cfg.WSURL != "" {
 		u := a.cfg.WSURL
@@ -25,6 +29,7 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 		MaxTTLSeconds:     spec.MaxTTLSeconds,
 		STUNURLs:          a.cfg.STUNURLs,
 		WSURL:             wsURL,
+		TokenEpoch:        kid,
 		Limits: spec.ConfigLimits{
 			CodeLookupPerMin:      spec.DefaultLimits.CodeLookupPerIP.Max,
 			ChallengePerMin:       spec.DefaultLimits.ChallengePerIP.Max,
