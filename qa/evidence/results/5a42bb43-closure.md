@@ -8,7 +8,7 @@
 > **证据来源总说明**
 > - `[宿主]` = 在 `http://127.0.0.1:18080` 真 `sm2` 实例上取得（产物 **`4eda665` / `cc117070…`**、内核 `c1b87d0a…`、`YANSHU_TOKEN_EPOCH=1`）。
 > - `[本地]` = 在沙盒自建实例上取得，**非宿主实例**；对应产物 `5a42bb43…`(head `06c9f56`)、`db58ae47…`(head `8223096`)、`a302dccf…`(head `4b3babd`)。
-> - **浏览器端到端未交付**（前端未响应），由 Gate 以 **API 等价代跑**（见「④b」「④c」），强度＝协议层闭环、**未覆盖前端实现**。
+> - **浏览器端到端已交付**（Web，见「④e」）（见「④b」「④c」），强度＝协议层闭环、**未覆盖前端实现**。
 
 ## 一、产物三件套
 
@@ -116,7 +116,8 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 
 ## ④b · API 等价端到端（**非浏览器**，Gate 用 API 直接执行）
 
-> **性质说明**：本节**替代**未交付的浏览器端到端。强度 = **协议层闭环**（真加密包 → 上传 → 凭码取回 →
+> **性质说明**：本节与「④e 浏览器双端」（Web）构成**两路并行验证**、互相印证，不是"替代"。
+> 本节强度 = **协议层闭环**（真加密包 → 上传 → 凭码取回 →
 > 真解密 → 逐字节一致 → ack 后 410），**未覆盖前端实现**（UI、浏览器 WebCrypto/WASM 加载、IndexedDB 私钥等）。
 > 执行人：Gate；时间：2026-11-02；实例：**宿主** `http://127.0.0.1:18080`（真 `sm2`，产物 `4eda665`）。
 
@@ -144,7 +145,7 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 
 > 标注：**宿主 `http://127.0.0.1:18080`，产物 `4eda665`（`cc117070de08bd34f52055af48bb4e28f475bdd4f71b55f705a6420cc7e571f9`），
 > 内核 `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`，`YANSHU_VERIFIER=sm2`，`YANSHU_TOKEN_EPOCH=1`。**
-> 执行人：Gate（**代跑**，浏览器端到端未交付）。
+> 执行人：Gate（**独立复测**；浏览器双端另有 Web 的「④e」）。
 
 | 步 | 动作 | 结果 |
 |---|---|---|
@@ -169,7 +170,7 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 
 ## ④d · 三条前端专属行为的 **API 等价**验证（非浏览器，Gate 代跑）
 
-> 说明：浏览器端到端由前端负责但**未交付**，以下用 API 直接执行等价动作，强度＝协议层；
+> 说明：以下用 API 直接执行前端那三条等价动作，强度＝协议层；浏览器实物路径见「④e」（Web 交付）。
 > **真实 SM2 签名**由内核 `ys_sm2_sign_der` 产生（DER 70–72B，默认 userID），服务端 `sm2` 实例真验签。
 
 **执行环境**：宿主 `http://127.0.0.1:18080`（`4eda665` / `cc117070…`、内核 `c1b87d0a…`、真 `sm2`）。
@@ -371,14 +372,30 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 4. **旧 head 不可交付**：`97d156c`、`b516cc6` 内核为空 blob（0 B）；`fa479d9` 缺 `0002` 迁移。
 5. **跨版本 token 不兼容**：`4eda665`（`u64be`+`v2`）与 `06c9f56`（`u32be`+`v1`）不同；换产物失效在传 token（数据无损）。
 
-## 附：附件 sha256 与"已澄清项"（与 `FINAL-closure-4eda665.md` 一致）
+## 六、附件清单（路径 + sha256 + 生成者 + 是否宿主实例）
 
-被引用文件的完整 sha256 见 **`qa/evidence/results/FINAL-closure-4eda665.md` §5**（含 Web 的五份：
-`c1b87d0a-closure-web.md` `31cb989c…`、`c1b87d0a-sm2-e2e.md` `8e7feffa…`、`.json` `bb6911db…`、
-`c1b87d0a-sm2-token-heal.json` `1c7ad78b…`、`c1b87d0a-sm2-auth-branches.json` `173173b5…`）。
+> sha256 全部由 `sha256sum <file>` 现算（2026-11-02 本轮）。判定规则：`relay`/`server` 字段写
+> `core-host-18080-sm2` 或 `host 127.0.0.1:18080` 的才是**宿主实例**；含 `06c9f56`/本地端口的是本地演练。
 
-**已澄清项**（不计入偏差）：`AUTH_CODE_MISMATCH` 曾被前端误报为 `AUTH_SIGNATURE_INVALID`——正确构造
-（`SIG_INPUT` 用头码 `PAWW` 签名、路径改 `AWQW`）实测返回 **401 `AUTH_CODE_MISMATCH`**，与契约一致；
-复现：`cd web && node scripts/repro-code-mismatch.mjs`。**以本结论为准。**
+| # | 路径 | sha256 | 生成者 | 宿主实例？ |
+|---|---|---|---|---|
+| 1 | `results/web/c1b87d0a-sm2-e2e.md` | `8e7feffac259601cdf21b4650119ff2b6e0c4bf83b85c462c3e62636dae706e5` | Web | **是**（`core-host-18080-sm2`） |
+| 2 | `results/web/c1b87d0a-sm2-e2e.json` | `bb6911db4e4ee1ad9d886b0ca992fed4021d1ee877277d196c5a4be5b68707aa` | Web | **是** |
+| 3 | `results/web/c1b87d0a-sm2-auth-branches.json` | `173173b5a34adc6f2b0b1f064466555228af460f27b3e96bee07f7c9debc1950` | Web | **是** |
+| 4 | `results/web/c1b87d0a-closure-web.md` | `31cb989c1481719bdf00756297ba901618a5effbca2e081df70824d9cb92b7d7` | Web | **是**（主体宿主；其中「401 自愈」节标注为非宿主） |
+| 5 | `results/web/c1b87d0a-closure-browser.json` | `8383996c4fdc7d2125bc03d115171bf72cced77865c4edec8189a4fa6f9d656f` | Web | **是**（`core-host-18080-sm2`、`acceptance:true`） |
+| 6 | `results/web/c1b87d0a-closure-node.json` | `cd4b657f38652af580bedd55bfc9e3a42cfb2ff98476b3fe230a5a02bbca7f2a` | Web | **是**（`server: "host 127.0.0.1:18080 (real sm2)"`；⚠ 其中 `code_mismatch` 一条为**构造错误**，见 §7 已证伪项） |
+| 7 | `results/web/c1b87d0a-sm2-token-heal.json` | `1c7ad78bd88b373a3a96d39abef737badc846eefe94697c2e96e596947deafa1` | Web | **否**——本地 `06c9f56` 演练（`TOKEN_EPOCH 1→2` 构造） |
+| 8 | `qa/evidence/results/cc117070-final-closure.md` | `d1c1114fa6497a39fcbf438a8bc126613b0b4be06595f768fb803ca52c43cf31` | Gate | **是**（`4eda665` / `cc117070…`） |
+| 9 | `qa/evidence/results/db58ae47-closure.md` | `05200157655564a82b2a2023bfae1e8d0f14055fd68725f5d1e7ed759322d464` | Gate | **否**（本地 `8223096`） |
+| 10 | `qa/evidence/results/cc117070-secret-and-expiry.md` | `b4f23cfad86e4d289be9fb6971d06f97a8e8ac1a57126e0ce4e749bcc28a56cd` | Gate | **是** |
+| 11 | `qa/evidence/results/2026-11-02-head-matrix.md` | `8ce501428baa632949d7eb3876108399fe243031517d9e8ee31d5a978458a157` | Gate | **否**（候选对比，静态材料） |
+| 12 | `qa/evidence/results/5a42bb43-closure.md` | `3bfdbaf77a5900cfc3a78d41499449808115ea131845a12c89e3103904d15db2`（**加入本节前的值**，本节写入后自身哈希会变，属正常） | Gate | 混合（**本文件**，逐节已标 `[宿主]`/`[本地]`） |
 
-**契约↔实现**：契约 `910cad8` 已把 `SIG_INPUT_TOO_LONG` 写回 `§10.1`，parity **PASS（14 码一一对应）**。
+## 七、已证伪 / 已撤回（不计入偏差）
+
+**`AUTH_CODE_MISMATCH` 一行结论**：把 `PATCH /v1/codes/AWQW` 的路径码改成 `AWQW`、而 `X-YS-Code` 与签名都仍按**头码 `PAWW`** 构造时，宿主 `18080`（`4eda665`、真 `sm2`）返回 **401 `AUTH_CODE_MISMATCH`**，原文
+`{"error":{"code":"AUTH_CODE_MISMATCH","message":"X-YS-Code does not match the signed code","request_id":"…"}}` —— 与契约一致；
+前端此前那条 `AUTH_SIGNATURE_INVALID` 属**构造错误**（签名与头码不同源，验签先行失败），已撤回，偏差清单以本文件为准。
+
+复现：`cd web && node scripts/repro-code-mismatch.mjs`（期望 `401 AUTH_CODE_MISMATCH`）。
