@@ -143,7 +143,7 @@ var errMessage = map[ErrorCode]string{
 	ErrAuthSignatureInvalid: "signature verification failed",
 	ErrAuthChallengeInvalid: "challenge is expired, used or purpose mismatch",
 	ErrAuthCodeMismatch:     "X-YS-Code does not match the signed code",
-	ErrAuthTokenStale:       "upload token was revoked by a key rotation; create a new transfer",
+	ErrAuthTokenStale:       "upload token is stale: its key version is no longer accepted; create a new transfer",
 	ErrAuthTokenInvalid:     "upload token is invalid for this transfer",
 
 	ErrSignalPeerMismatch: "signal peers do not match the transfer",
