@@ -11,10 +11,8 @@
  *
  * ## ABI 变更（Owl 授权的 P1）
  * 只有两个导出改了签名（来源改为包内自证）：
- *   旧：ys_unpack(pack, pack_len, recipient_priv, sender_pub, out, cap, out_len)
- *   新：ys_unpack(pack, pack_len, recipient_priv, out, cap, out_len)
- *   旧：ys_unpack_meta(pack, pack_len, recipient_priv, sender_pub, out, cap, out_len)
- *   新：ys_unpack_meta(pack, pack_len, recipient_priv, out, cap, out_len)
+ * 没有破坏性变更：ys_unpack / ys_unpack_meta 的 7 参原型保留，第 4 个入参（发送方公钥）
+ * 变成**可选**（NULL 表示不传）；新增 6 参的 ys_unpack_v2 / ys_unpack_meta_v2 供新代码用。
  * 其余 23 个导出签名未变。新增：ys_pack_v1 / ys_sm2_sign_der / ys_check_symbol /
  * ys_error_name_v1。
  *
@@ -121,15 +119,24 @@ int32_t ys_pack(const uint8_t *recipient_public /* 64 */, const uint8_t *sender_
                 size_t data_len, uint8_t *out, size_t out_cap, size_t *out_len);
 
 /*
- * 解包（P1：来源自证）。验签用包内 SENDER_PUB，发送方 4 位码由它派生，
- * 调用方不需要（也不能）再传公钥。
+ * 解包（首版 7 参原型，保留）。sender_public 可选：传 NULL/0 表示不比对；
+ * 非空则与包内 SENDER_PUB 比对（不一致 → -33 CRYPTO_SENDER_MISMATCH）。
+ * 验签始终用包内公钥，调用方**不再需要**提供公钥。
  */
 int32_t ys_unpack(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private /* 32 */,
-                  uint8_t *out, size_t out_cap, size_t *out_len);
+                  const uint8_t *sender_public_or_null /* 64，可传 0 */, uint8_t *out,
+                  size_t out_cap, size_t *out_len);
 
-/* 只解清单（不解数据块），JSON 里含 sender_code / sender_pub（来自包内） */
+/* 只解清单（同上，sender_public 可选），JSON 含 sender_code / sender_pub（来自包内） */
 int32_t ys_unpack_meta(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
-                       uint8_t *out, size_t out_cap, size_t *out_len);
+                       const uint8_t *sender_public_or_null, uint8_t *out, size_t out_cap,
+                       size_t *out_len);
+
+/* P1 新原型（6 参）：来源完全由包内 SENDER_PUB 自证，不给公钥。新代码建议用这两个。 */
+int32_t ys_unpack_v2(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
+                     uint8_t *out, size_t out_cap, size_t *out_len);
+int32_t ys_unpack_meta_v2(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
+                          uint8_t *out, size_t out_cap, size_t *out_len);
 
 /* 打包（完整参数）：多一个 ext 与 created_at_ms（u64） */
 int32_t ys_pack_v1(const uint8_t *recipient_public /* 64 */, const uint8_t *sender_private,

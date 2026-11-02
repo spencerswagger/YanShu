@@ -933,6 +933,20 @@ pub fn unpack_with_code(
     unpack(pack, recipient_private, Some(expected_sender_code))
 }
 
+/// 解包并额外核对调用方手里的发送方公钥（64 字节 `X‖Y`）。
+/// 验签仍然是包内公钥做的，这里只是多一道"是不是同一个人"的比对。
+pub fn unpack_expect_sender(
+    pack: &[u8],
+    recipient_private: &[u8; 32],
+    sender_public: &[u8; 64],
+) -> Result<Unpacked> {
+    let opened = open(pack, recipient_private)?;
+    if opened.sender_public[1..] != sender_public[..] {
+        return Err(Error::SenderMismatch);
+    }
+    finish_unpack(pack, opened)
+}
+
 /// 不做发送方校验的解包（仅测试/内部用）。
 pub fn unpack_unchecked(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Unpacked> {
     let opened = open(pack, recipient_private)?;

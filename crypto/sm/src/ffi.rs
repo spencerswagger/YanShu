@@ -610,9 +610,36 @@ pub unsafe extern "C" fn ys_pack(
     })())
 }
 
-/// 解包。来源由包内 `SENDER_PUB` 自证（验签 + 派生发送方码），**不再需要调用方传公钥**。
+/// 解包（首版 7 参原型，保留）。
+///
+/// `sender_public` 现在**可选**：传 `0`/NULL 表示不传；非空则与包内 `SENDER_PUB` 比对
+/// （不一致 → `CRYPTO_SENDER_MISMATCH`）。验签始终用包内公钥。
+/// 新代码建议直接用 [`ys_unpack_v2`]（6 参，无公钥入参）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_unpack(
+    pack: *const u8,
+    pack_len: usize,
+    recipient_private: *const u8,
+    sender_public: *const u8,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    rc((|| {
+        let bytes = as_slice(pack, pack_len)?;
+        let sk = fixed::<32>(recipient_private)?;
+        let data = if sender_public.is_null() {
+            pack::unpack(bytes, &sk, None)?.data
+        } else {
+            pack::unpack_expect_sender(bytes, &sk, &fixed::<64>(sender_public)?)?.data
+        };
+        write_out(&data, out, out_cap, out_len)
+    })())
+}
+
+/// 解包（P1 新原型，6 参）：来源完全由包内 `SENDER_PUB` 自证，不给公钥。
+#[no_mangle]
+pub unsafe extern "C" fn ys_unpack_v2(
     pack: *const u8,
     pack_len: usize,
     recipient_private: *const u8,
@@ -621,19 +648,23 @@ pub unsafe extern "C" fn ys_unpack(
     out_len: *mut usize,
 ) -> i32 {
     rc((|| {
-        let bytes = as_slice(pack, pack_len)?;
-        let sk = fixed::<32>(recipient_private)?;
-        let data = pack::unpack(bytes, &sk, None)?.data;
+        let data = pack::unpack(
+            as_slice(pack, pack_len)?,
+            &fixed::<32>(recipient_private)?,
+            None,
+        )?
+        .data;
         write_out(&data, out, out_cap, out_len)
     })())
 }
 
-/// 只解清单（不解数据块），输出 JSON 元信息（含包内 `SENDER_PUB` 派生的发送方码）。
+/// 只解清单（首版 7 参原型，保留）。`sender_public` 可选（NULL 表示不比对）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_unpack_meta(
     pack: *const u8,
     pack_len: usize,
     recipient_private: *const u8,
+    sender_public: *const u8,
     out: *mut u8,
     out_cap: usize,
     out_len: *mut usize,
@@ -642,6 +673,29 @@ pub unsafe extern "C" fn ys_unpack_meta(
         let bytes = as_slice(pack, pack_len)?;
         let sk = fixed::<32>(recipient_private)?;
         let opened = pack::open_only(bytes, &sk)?;
+        if !sender_public.is_null() {
+            let sp = fixed::<64>(sender_public)?;
+            if opened.sender_public[1..] != sp[..] {
+                return Err(Error::SenderMismatch);
+            }
+        }
+        let json = meta_json(&opened.header, &opened.manifest, &opened.sender_public);
+        write_out(json.as_bytes(), out, out_cap, out_len)
+    })())
+}
+
+/// 只解清单（P1 新原型，6 参）。
+#[no_mangle]
+pub unsafe extern "C" fn ys_unpack_meta_v2(
+    pack: *const u8,
+    pack_len: usize,
+    recipient_private: *const u8,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    rc((|| {
+        let opened = pack::open_only(as_slice(pack, pack_len)?, &fixed::<32>(recipient_private)?)?;
         let json = meta_json(&opened.header, &opened.manifest, &opened.sender_public);
         write_out(json.as_bytes(), out, out_cap, out_len)
     })())

@@ -124,10 +124,16 @@ info=`YANSHU/v1/{chunk,manifest}-key`。不再有第二套格式，也不会混�
 
 ## 8. C ABI 变更（Owl 授权的 P1）
 
-| 导出 | 旧签名 | 新签名 |
+| 导出 | 首版 | 现在 |
 |---|---|---|
-| `ys_unpack` | `(pack, pack_len, recipient_priv, sender_pub, out, cap, out_len)` | `(pack, pack_len, recipient_priv, out, cap, out_len)` |
-| `ys_unpack_meta` | `(pack, pack_len, recipient_priv, sender_pub, out, cap, out_len)` | `(pack, pack_len, recipient_priv, out, cap, out_len)` |
+| `ys_unpack` | `(pack, len, priv, sender_pub, out, cap, out_len)` | 同原型，第 4 参**可选**（NULL = 不传；非空则与包内比对） |
+| `ys_unpack_meta` | `(pack, len, priv, sender_pub, out, cap, out_len)` | 同原型，第 4 参可选 |
+| `ys_unpack_v2` | — | **新增** `(pack, len, priv, out, cap, out_len)` |
+| `ys_unpack_meta_v2` | — | **新增** `(pack, len, priv, out, cap, out_len)` |
+
+选这个形状的原因：wasm 调函数时**多余的实参会被静默丢弃**——如果直接把 7 参改成 6 参，
+旧调用会整体错位一位（`out` 收到公钥指针、`out_len` 收到一个容量数字），是内存踩踏而不是
+编译错。保留 7 参原型 + 可选入参，旧调用点原样能跑；新代码用 `_v2`。
 
 其余 23 个导出签名未变。新增 4 个导出：`ys_pack_v1`（清单 `ext`/`created_at`）、
 `ys_sm2_sign_der`（契约 DER 签名）、`ys_check_symbol`（第 5 位校验字符，仅 UI 防误）、

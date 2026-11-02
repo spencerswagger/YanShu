@@ -168,17 +168,24 @@ function packOnce() {
   return { ptr: p, len: n, bytes: read(p, n) };
 }
 
-function unpackOnce(packPtr, packLen, outCap) {
-  const out = alloc(outCap);
-  let rc = e.ys_unpack(packPtr, packLen, recipientPrivPtr, out, outCap, lenPtr);
+function unpackCall(fn, extraArg, packPtr, packLen, out, cap) {
+  if (extraArg === null) return fn.call(e, packPtr, packLen, recipientPrivPtr, out, cap, lenPtr);
+  return fn.call(e, packPtr, packLen, recipientPrivPtr, extraArg, out, cap, lenPtr);
+}
+
+function unpackOnce(packPtr, packLen, outCap, useV2 = true, senderArg = null) {
+  const fn = useV2 ? e.ys_unpack_v2 : e.ys_unpack;
+  const extra = useV2 ? null : senderArg;
+  let out = alloc(outCap);
+  let rc = unpackCall(fn, extra, packPtr, packLen, out, outCap);
   if (rc === -2) {
     const need = dv().getUint32(lenPtr, true);
     e.ys_free(out, outCap);
-    const o2 = alloc(need);
-    rc = e.ys_unpack(packPtr, packLen, recipientPrivPtr, o2, need, lenPtr);
+    out = alloc(need);
+    rc = unpackCall(fn, extra, packPtr, packLen, out, need);
     check(rc, "ys_unpack retry");
-    const got = read(o2, dv().getUint32(lenPtr, true));
-    e.ys_free(o2, need);
+    const got = read(out, dv().getUint32(lenPtr, true));
+    e.ys_free(out, need);
     return got;
   }
   check(rc, "ys_unpack");
@@ -193,13 +200,25 @@ if (e.ys_header_len() !== 112) throw new Error(`header len ${e.ys_header_len()} 
   const pk = packOnce();
   const plain = unpackOnce(pk.ptr, pk.len, 8192);
   if (hex(plain) !== hex(data)) throw new Error("contract unpack mismatch");
+  // 首版 7 参原型：传公钥 / 传 NULL 都必须还能用（不能因签名变更静默踩内存）
+  if (hex(unpackOnce(pk.ptr, pk.len, 8192, false, senderPubPtr)) !== hex(data)) {
+    throw new Error("legacy ys_unpack(pub) mismatch");
+  }
+  if (hex(unpackOnce(pk.ptr, pk.len, 8192, false, 0)) !== hex(data)) {
+    throw new Error("legacy ys_unpack(NULL) mismatch");
+  }
 
   // meta（带发送方公钥）
-  let rc = e.ys_unpack_meta(pk.ptr, pk.len, recipientPrivPtr, 0, 0, lenPtr);
-  expectRc(rc, -2, "meta probe");
+  // v2（6 参）与首版（7 参，公钥可选）都要能取到元信息
+  let rc = e.ys_unpack_meta_v2(pk.ptr, pk.len, recipientPrivPtr, 0, 0, lenPtr);
+  expectRc(rc, -2, "meta v2 probe");
   const need = dv().getUint32(lenPtr, true);
   const mp = alloc(need);
-  check(e.ys_unpack_meta(pk.ptr, pk.len, recipientPrivPtr, mp, need, lenPtr), "meta");
+  check(e.ys_unpack_meta_v2(pk.ptr, pk.len, recipientPrivPtr, mp, need, lenPtr), "meta v2");
+  const mp2 = alloc(need);
+  check(e.ys_unpack_meta(pk.ptr, pk.len, recipientPrivPtr, 0, mp2, need, lenPtr), "meta legacy(NULL)");
+  const mp3 = alloc(need);
+  check(e.ys_unpack_meta(pk.ptr, pk.len, recipientPrivPtr, senderPubPtr, mp3, need, lenPtr), "meta legacy(pub)");
   const meta = JSON.parse(Buffer.from(read(mp, need)).toString("utf8"));
   if (meta.name !== "报告.pdf" || meta.size !== data.length) throw new Error(`meta ${JSON.stringify(meta)}`);
   if (meta.sender_code !== code) throw new Error(`sender_code ${meta.sender_code} != ${code}`);
@@ -210,14 +229,14 @@ if (e.ys_header_len() !== 112) throw new Error(`header len ${e.ys_header_len()} 
   const tp = alloc(tampered.length);
   write(tp, tampered);
   const out = alloc(8192);
-  if (e.ys_unpack(tp, tampered.length, recipientPrivPtr, out, 8192, lenPtr) === 0) {
+  if (e.ys_unpack_v2(tp, tampered.length, recipientPrivPtr, out, 8192, lenPtr) === 0) {
     throw new Error("tampered sender pub must fail");
   }
   // 改块密文 → 必失败
   const tampered2 = new Uint8Array(pk.bytes);
   tampered2[tampered2.length - 1] ^= 1;
   write(tp, tampered2);
-  if (e.ys_unpack(tp, tampered2.length, recipientPrivPtr, out, 8192, lenPtr) === 0) {
+  if (e.ys_unpack_v2(tp, tampered2.length, recipientPrivPtr, out, 8192, lenPtr) === 0) {
     throw new Error("tampered chunk must fail");
   }
   e.ys_free(tp, tampered.length);
