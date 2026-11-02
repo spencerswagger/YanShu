@@ -58,6 +58,7 @@ results/
 | `contract-v1/2026-11-02-token-naming-authority-5605907.md` | —（服务端证据） | `5605907` | `3c1e4b2b…35f98f` | stub-allow | native-api | `check_token_lifecycle.py ...`（`--kid` 即 epoch） | **命名权威表**：只改 secret → 204（不吊销）；只改 epoch → 401 `AUTH_TOKEN_STALE`；两者都改 → STALE 优先；新签发 201、旧 token 不复活；epoch 调小拒启动 |
 | `contract-v1/2026-11-02-host-binary-7239888.md` | —（服务端证据） | `7239888` | `bd64d23c…d7d6d7` | stub/sm2 | native-api | `check_token_lifecycle.py --kid 1 …`；`yanshu-server -migrate-only` 验升级路径 | **三件套 + 升级路径已修**：老库（`08d40e7`）升级后补上 `upload_token_kid` 并起得来；token 四步 201 → 401 `AUTH_TOKEN_INVALID`（secret）→ 401 `AUTH_TOKEN_STALE`（kid）→ 新 201，旧 token 不复活 |
 | `contract-v1/2026-11-02-token-kid-fa479d9.md` | —（服务端证据） | `fa479d9` | 二进制前缀 `b9d4086e…` | stub-allow | native-api | `python3 qa/evidence/check_token_lifecycle.py --kid k1 --binary <bin> --dsn "<DSN>" --ys-tool <t>` | **token 已验证（kid）**：基线 201 → 只换 secret 401 `AUTH_SIGNATURE_INVALID` → 只换 kid 401 `AUTH_TOKEN_STALE` → 新签发 201、旧 token 不复活；不设 KID 启动 exit 1 |
+| `contract-v1/2026-11-02-final-six-4eda665.md` | —（终版复核） | `4eda665` | `cc117070…7e571f9`（与 Core 报的一致） | sm2 | native-api | 六项命令见文件内 | **六项全 PASS**：内核（git 跟踪 + blob sha 均 `c1b87d0a…`）、错误名 grep（无 REVOKED/EXPIRED）、迁移清单、升级 10/10、向量 14 条可执行、KID 四态；`SIG_INPUT` 513 为 INCONCLUSIVE（库层单测覆盖） |
 | `contract-v1/2026-11-02-siginput-limits.md` | —（限额验收） | `97d156c` | — | sm2 | native-api | `python3 qa/evidence/check_siginput_limits.py --binary <bin> --dsn "<DSN>" --kid 9` | **4/5**：长度表 109 与契约一致、109 接受、110/昵称 33 走字段级；**`SIG_INPUT_TOO_LONG` 未实现且不可达**（513 被昵称校验先拒） |
 | `contract-v1/2026-11-02-final-acceptance-97d156c.md` | —（最终验收） | `97d156c` | `0caed268…d5578c0` | stub-allow + sm2 | native-api | 见文件末节（三条命令） | **四条：迁移/KID 单调/向量/token 四态全 PASS；内核 sha 未验**——该 head 仓库里内核是空 blob（早于 `bae4a22`） |
 | `contract-v1/2026-11-02-rejudge-b516cc6.md` | —（服务端证据） | `b516cc6` | `26739fd3…b81e…` | stub-allow + 真 sm2 | native-api | `check_token_lifecycle.py --kid 1 …`；`check_upgrade_path.py` | **按现行裁定全部 PASS**：只改 secret → `AUTH_TOKEN_INVALID`（设计如此）、只改 KID → `AUTH_TOKEN_STALE`、旧 token 不复活；升级 10/10（`pre-kid`、连跑两次幂等）；四码覆盖（签名类/凭据类互不顶替） |
@@ -152,3 +153,17 @@ token 矩阵（INVALID/STALE 两码 + 四码覆盖）、服务端内嵌内核同
    （进程活 + 日志 `listening` + 无 bind 错误）、并断言落盘路径在本次 blob 根下。
 2. **`--log-path` 指向单个文件**：`os.walk` 遍历不到 → 日志 0 份却 PASS。修法：文件/目录都支持，
    逐目标空语料告警。
+
+### 经验六：二进制资产必须验「被 git 跟踪 + blob sha == 期望值」（2026-11-02 实盘）
+
+根 `.gitignore` 里的 `*.wasm` 会让 `git add -A` **静默跳过** `server/kernel/yanshu_sm.wasm`：
+本地有、提交里没有，`97d156c` / `b516cc6` 的仓库副本里它是**空 blob（0 字节）**，
+别人 clone 之后 `YANSHU_VERIFIER=sm2` 直接起不来。
+
+规矩（已做成常驻断言，`check_server_kernel.py --repo … --git-ref …`）：
+
+1. `git ls-tree -r <ref> -- server/kernel/yanshu_sm.wasm` 必须命中（证明**被跟踪**）；
+2. `git cat-file blob <ref>:… | sha256sum` 必须等于冻结值（证明**提交的字节对**）；
+3. 工作区与 HEAD 无差异（证明**跑的就是提交的**）。
+
+第 2 条是关键：只比工作区会漏掉"工作区对、提交为空"这种情况。

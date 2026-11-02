@@ -58,7 +58,9 @@ fi
 if [ -n "${YS_SERVER_DIR:-}" ]; then
     echo "== 3a/5 服务端内嵌内核 sha256 =="
     set +e
-    python3 "$here/check_server_kernel.py" --server-dir "$YS_SERVER_DIR" | tail -4
+    python3 "$here/check_server_kernel.py" --server-dir "$YS_SERVER_DIR" \
+        ${YS_REPO_DIR:+--repo "$YS_REPO_DIR"} ${YS_GIT_REF:+--git-ref "$YS_GIT_REF"} \
+        ${YS_VECTORS_DIR:+--vectors-dir "$YS_VECTORS_DIR"} | tail -6
     rc_kernel=$?
     set -e
 else

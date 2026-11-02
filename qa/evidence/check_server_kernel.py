@@ -126,11 +126,47 @@ def run_vector_suite(wasm: Path, vd: Path) -> bool:
     return ok
 
 
+def check_git_tracking(repo: Path, expect_sha: str, ref: str = "HEAD") -> bool:
+    """二进制资产必须（1）被 git 跟踪（2）blob 与工作区同字节且等于冻结值。
+
+    这条防的是真实事故：根 `.gitignore` 的 `*.wasm` 会让 `git add -A` **静默跳过**内核，
+    仓库里根本没有这个文件，别人 clone 后 `YANSHU_VERIFIER=sm2` 起不来。
+    """
+    rel = "server/kernel/yanshu_sm.wasm"
+    ok = True
+
+    p = subprocess.run(["git", "-C", str(repo), "ls-tree", "-r", "--name-only", ref, "--", rel],
+                       capture_output=True, text=True)
+    tracked = p.stdout.strip() == rel
+    print(f"{'PASS' if tracked else 'FAIL'}  被 git 跟踪（{rel} @ {ref}）" +
+          ("" if tracked else "——可能被 .gitignore 忽略（git add -A 会静默漏提交）"))
+    ok = ok and tracked
+
+    blob = subprocess.run(["git", "-C", str(repo), "cat-file", "blob", f"{ref}:{rel}"],
+                          capture_output=True)
+    if blob.returncode != 0:
+        print(f"FAIL  读不出 HEAD blob（{rel}）：{blob.stderr.decode()[:80]}")
+        return False
+    got = hashlib.sha256(blob.stdout).hexdigest()
+    same = got == expect_sha
+    print(f"{'PASS' if same else 'FAIL'}  HEAD blob sha256 == 冻结值（{len(blob.stdout):,} 字节 / {got[:16]}…）")
+    ok = ok and same
+
+    wt = subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--", rel],
+                        capture_output=True, text=True)
+    clean = wt.stdout.strip() == ""
+    print(f"{'PASS' if clean else 'WARN'}  工作区与 HEAD 一致（未提交改动：{wt.stdout.strip() or '无'}）")
+    return ok
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="服务端内嵌内核是否等于冻结产物")
     ap.add_argument("--server-dir", required=True, help="源码根（其下有 server/kernel/yanshu_sm.wasm）")
     ap.add_argument("--expect-sha", default=None,
                     help="只认这一个 sha（默认走白名单 + 向量套件）")
+    ap.add_argument("--git-ref", default="HEAD", help="要核的提交（默认 HEAD）")
+    ap.add_argument("--repo", default=None,
+                    help="源码仓库路径；给了就额外验「被 git 跟踪 + blob sha == 冻结值」")
     ap.add_argument("--vectors-dir", default=None,
                     help="冻结向量目录（含 user-code-vectors.json / normalize-vectors.json / sm2-verify-vectors.json）；"
                          "给了就跑向量套件")
@@ -181,6 +217,12 @@ def main(argv=None) -> int:
               f"{'memory' if info.get('hasMemory') else '无 memory'}（期望 {FROZEN_FUNCS} + memory）")
         ok_meta = ok_v and ok_f
 
+    ok_git = True
+    if args.repo:
+        ok_git = check_git_tracking(Path(args.repo), args.expect_sha or FROZEN_SHA, args.git_ref)
+    else:
+        print("SKIP  git 跟踪/blob sha（未给 --repo）")
+
     ok_vec = True
     if args.vectors_dir:
         vd = Path(args.vectors_dir)
@@ -188,7 +230,7 @@ def main(argv=None) -> int:
     else:
         print("SKIP  向量套件（未给 --vectors-dir）")
 
-    ok = ok_sha and ok_meta and ok_vec
+    ok = ok_sha and ok_meta and ok_vec and ok_git
     print("-" * 88)
     print("结论：" + ("PASS —— 服务端加载的就是验收过的那份产物" if ok else
                     "FAIL —— 内嵌内核与冻结产物不一致（先换成冻结产物，再看其他证据）"))
