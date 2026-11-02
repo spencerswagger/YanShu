@@ -108,6 +108,33 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 这条正是 `06c9f56` 相对 `4eda665`/`d8d90a2`/`4514848` 的 P0 差异：那几个 head 在"跑过删列版的库恢复"场景里，
 历史行 `uploader_ip` 为 NULL 时读传输会 **500 INTERNAL**；本版正常返回。
 
+
+## ④b · API 等价端到端（**非浏览器**，Gate 用 API 直接执行）
+
+> **性质说明**：本节**替代**未交付的浏览器端到端。强度 = **协议层闭环**（真加密包 → 上传 → 凭码取回 →
+> 真解密 → 逐字节一致 → ack 后 410），**未覆盖前端实现**（UI、浏览器 WebCrypto/WASM 加载、IndexedDB 私钥等）。
+> 执行人：Gate；时间：2026-11-02；实例：**宿主** `http://127.0.0.1:18080`（真 `sm2`，产物 `4eda665`）。
+
+| 步 | 动作 | 状态码 / 结果 |
+|---|---|---|
+| ① | 建包（`ys_pack_v1`，wasm 真加密） | 2,507,553 B，3 块（1 MiB） |
+| ② | 投递（`deliver --sender-sk --recipient-sk` 真签名） | `ok=true`、`state=LEASED`、`chunks=3`，code `7759` |
+| ③ | 凭码查询 `GET /v1/codes/7759` | **200**（186 B） |
+| ④ | `GET /prelude` | **200**，568 B，带 `X-Ys-Download-Id` |
+| ⑤ | `GET /chunks/{0,1,2}` | **200 / 200 / 200**，1,048,592 / 1,048,592 / 409,753 B |
+| ⑥ | 服务端字节 vs 本地密文 | **prelude 一致 = True，三块一致 = True** |
+| ⑦ | `ys_unpack_v1` 真解密（用服务端取回的字节重建包） | 落盘 **2,506,889 B** |
+| ⑧ | 两端 sha256 | 落盘 `5ccada48061ab5e4f97507f87691d80030340cac5bcdb0270c2b3d7c291db6d7` = 源文件 —— **逐字节一致** |
+| ⑨ | `ack` | `acked=true`、`state=CONSUMED` |
+| ⑩ | ack 后再取 prelude / chunks/0 | **410 `TRANSFER_CONSUMED`**（原文如下） |
+
+```json
+{"error":{"code":"TRANSFER_CONSUMED","message":"transfer has been consumed","request_id":"…"}}
+```
+
+**复跑**：`qa/evidence/adapters/wasm_pack_probe.mjs`（pack/unpack）+ `server/bin/deliver`（`--sender-sk/--recipient-sk`），
+取回与比对脚本见本节步骤 ③–⑧（等价于 `results/web/c1b87d0a-closure-web.md` 的 API 版本）。
+
 ## 三、KID 矩阵（逐字错误名与 message）
 
 | 步 | 场景 | 状态 | 错误名 / message |
