@@ -50,6 +50,7 @@ results/
 | 证据文件 | 服务端 | 二进制 sha256 | 认证 | 可复跑命令 | 结论 |
 |---|---|---|---|---|---|
 | `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | `08d40e7` | `275fc463…6af55` | **真 sm2** | `YS_EV1_VERIFIER=sm2 YS_EV1_LOG_MODE=dir YS_DELIVER_BIN=core-deliver qa/evidence/run_evidence1_core.sh …` | **闭合**：存储/DB/日志三处零命中，对照 1/1/1/0 |
+| `contract-v1/2026-11-02-token-kid-fa479d9.md` | —（服务端证据） | `fa479d9` | 二进制前缀 `b9d4086e…` | stub-allow | native-api | `python3 qa/evidence/check_token_lifecycle.py --kid k1 --binary <bin> --dsn "<DSN>" --ys-tool <t>` | **token 已验证（kid）**：基线 201 → 只换 secret 401 `AUTH_SIGNATURE_INVALID` → 只换 kid 401 `AUTH_TOKEN_STALE` → 新签发 201、旧 token 不复活；不设 KID 启动 exit 1 |
 | `contract-v1/2026-11-02-kid-and-kernel-sha.md` | `ab4279a`/`9bce5bb`/`739293a` | 各自现编 | stub-allow | `check_token_lifecycle.py --kid k1 …`；`check_server_kernel.py --server-dir <src> --vectors-dir <vec>` | token 三态已验证（201→401→201，待统一错误名）；内嵌内核已换冻结产物、白名单+向量套件全 PASS；老库缺 `upload_token_kid` 列（唯一真 BLOCKED） |
 | `contract-v1/2026-11-02-host-binary-980fc44.md` | `08d40e7` | `275fc463…6af55` | 真 sm2 / stub | `python3 qa/evidence/check_token_lifecycle.py --binary <bin> …` | 二进制三件套；token 三态 201→401→201 |
 | `contract-v1/2026-11-02-evidence1-core-run4-logfile.md` | `28d75b0` | — | stub-allow | `YS_EV1_LOG_MODE=file … run_evidence1_core.sh` | 日志改 `YANSHU_LOG_FILE`/`LOG_DIR`；LEASED vs CONSUMED 残留对比 |
@@ -75,9 +76,9 @@ token 轮换（kid → `AUTH_TOKEN_REVOKED`）。
 
 1. **已有 schema 升级缺 `upload_token_kid` 列**（迁移只有 `CREATE TABLE IF NOT EXISTS`、无 ALTER）——
    宿主已有库会踩；等 Core 补幂等 ALTER 迁移 + 升级路径测试（**唯一真 BLOCKED**）。
-2. **token 错误名待统一**（功能已验证，非阻塞）：`08d40e7` 上三态 201 → 401 → 201 成立，
-   只是 401 的名字在 `ab4279a` 是 `AUTH_SIGNATURE_INVALID`、`9bce5bb` 是 `AUTH_TOKEN_STALE`，
-   按裁定应统一为 `AUTH_TOKEN_REVOKED`；改完复测即可闭合。
+2. **token 错误名待归一**（功能已验证，非阻塞）：`fa479d9` 上四步成立——
+   只换 kid → `AUTH_TOKEN_STALE`、新签发 201、旧 token 不复活；只换 secret 仍报
+   `AUTH_SIGNATURE_INVALID`，Core 后续提交已改为 `AUTH_TOKEN_INVALID`，届时复测即闭合。
 
 其余项全部闭合：证据二（生产路径 6/6 + 11/11 + 变体 18/18）、用户码/校验位四形态 26/26 + 反向用例、
 prelude-only 6/6、证据一（存储/DB/日志零命中 + 三组阳性对照，含真 `sm2`）、
