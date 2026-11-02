@@ -1,0 +1,23 @@
+{
+  "name": "yanshu-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "雁书 YanShu 前端（Vue 3 + Vite）：端侧加密 → 中转 → 端侧解密",
+  "scripts": {
+    "dev": "vite",
+    "dev:stub": "VITE_YS_CRYPTO=stub-fake vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "relay": "node relay/dev-relay.mjs",
+    "test": "node --test tests/*.test.js",
+    "check": "node --test tests/*.test.js && vite build"
+  },
+  "dependencies": {
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.0",
+    "vite": "^5.4.0"
+  }
+}
