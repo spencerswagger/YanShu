@@ -12,6 +12,12 @@ import (
 // SignPrefix 是鉴权签名输入的域分隔串（API.md §1.3）。
 const SignPrefix = "YSAUTH1"
 
+// PackSignPrefix 是**包签名**的域分隔串（CRYPTO-PACK §10.2）。
+//
+// 服务端只验认证签名（YSAUTH1），从不构造包签名（YSSIG1）；这里保留常量只为明确
+// "两个域不可混用"，并让测试能断言两者不同。误用会让验签永远失败且很难查。
+const PackSignPrefix = "YSSIG1"
+
 // SignInput 长度约束。
 const (
 	NonceLen      = 32

@@ -73,6 +73,22 @@ func TestDeriveCodeVector(t *testing.T) {
 	}
 }
 
+// 易错点自查：码派生必须覆盖 65 字节公钥（含 0x04），不能用 64 字节 X‖Y。
+func TestDeriveCodeUses65ByteKey(t *testing.T) {
+	pubHex := "04bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b1" +
+		"16f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d"
+	pub, err := hex.DecodeString(pubHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if DeriveCode(pub) != "AWQW" {
+		t.Fatalf("65-byte derive = %s, want AWQW", DeriveCode(pub))
+	}
+	if DeriveCode(pub[1:]) == "AWQW" {
+		t.Fatal("64-byte body must derive a different code (the 0x04 prefix is part of the hash)")
+	}
+}
+
 func TestNormalizeCode(t *testing.T) {
 	ok := map[string]string{
 		"AWQW":   "AWQW",

@@ -101,6 +101,54 @@ func (k kernelCall) signDER(t *testing.T, priv, msg []byte) []byte {
 
 func bgCtx() context.Context { return context.Background() }
 
+// rawVerify 调内核的 `ys_sm2_verify`（裸 R‖S 64 字节），返回 1/0/负数。
+func (k kernelCall) rawVerify(t *testing.T, pub64, msg, raw64 []byte) int32 {
+	t.Helper()
+	fn := k.v.mod.ExportedFunction("ys_sm2_verify")
+	if fn == nil {
+		t.Fatal("missing ys_sm2_verify")
+	}
+	pubPtr := k.allocBytes(t, pub64)
+	defer k.free(t, pubPtr, len(pub64))
+	msgPtr := k.allocBytes(t, msg)
+	defer k.free(t, msgPtr, len(msg))
+	sigPtr := k.allocBytes(t, raw64)
+	defer k.free(t, sigPtr, len(raw64))
+	res, err := fn.Call(bgCtx(), uint64(pubPtr), uint64(msgPtr), uint64(len(msg)), uint64(sigPtr))
+	if err != nil || len(res) == 0 {
+		t.Fatalf("ys_sm2_verify: %v", err)
+	}
+	return int32(uint32(res[0]))
+}
+
+// derToRaw 把 DER SEQUENCE{r,s} 拆成 64 字节 R‖S（测试辅助；服务端不自己解 DER 给内核用）。
+func derToRaw(t *testing.T, der []byte) []byte {
+	t.Helper()
+	if len(der) < 8 || der[0] != 0x30 {
+		t.Fatalf("bad DER")
+	}
+	body := der[2:]
+	readInt := func(b []byte) ([]byte, []byte) {
+		if len(b) < 2 || b[0] != 0x02 {
+			t.Fatalf("bad DER int")
+		}
+		n := int(b[1])
+		if len(b) < 2+n {
+			t.Fatalf("bad DER len")
+		}
+		v := b[2 : 2+n]
+		for len(v) > 32 && v[0] == 0x00 {
+			v = v[1:]
+		}
+		out := make([]byte, 32)
+		copy(out[32-len(v):], v)
+		return out, b[2+n:]
+	}
+	r, rest := readInt(body)
+	ss, _ := readInt(rest)
+	return append(r, ss...)
+}
+
 // 端侧签 → Go 验 + 端侧验。
 func TestKernelSignsGoVerifies(t *testing.T) {
 	v := newTestVerifier(t)
@@ -122,6 +170,14 @@ func TestKernelSignsGoVerifies(t *testing.T) {
 	}
 	if err := v.Verify(pub65, msg, der); err != nil {
 		t.Fatalf("端侧内核未验过自己的签名: %v", err)
+	}
+	// 裸 R‖S 入口也必须一致（ys_sm2_verify）。
+	raw := derToRaw(t, der)
+	if !gm.VerifySM2(pub65, msg, raw) {
+		t.Fatal("Go 未验过端侧裸签名")
+	}
+	if rc := k.rawVerify(t, pub64, msg, raw); rc != 1 {
+		t.Fatalf("内核 ys_sm2_verify(raw) = %d, want 1", rc)
 	}
 
 	// 改一字节消息必须两边都拒。
@@ -159,6 +215,9 @@ func TestGoSignsKernelVerifies(t *testing.T) {
 	}
 	if !gm.VerifySM2DER(pub65, msg, der) {
 		t.Fatal("Go 未验过自己的签名")
+	}
+	if rc := k.rawVerify(t, pub64, msg, derToRaw(t, der)); rc != 1 {
+		t.Fatalf("内核 ys_sm2_verify(raw) = %d, want 1", rc)
 	}
 
 	// 换公钥必须两边都拒。

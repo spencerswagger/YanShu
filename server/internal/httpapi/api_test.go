@@ -502,6 +502,10 @@ func TestTransferLifecycle(t *testing.T) {
 		if resp.status != http.StatusOK || !bytes.Equal(resp.body, want) {
 			t.Fatalf("get chunk %d: %d", i, resp.status)
 		}
+		// 易错点自查：密文摘要头是非契约扩展，本实现直接不返回，客户端不能依赖它。
+		if got := resp.header.Get("X-YS-Ciphertext-Sm3"); got != "" {
+			t.Fatalf("chunk response must not expose non-contract digest header, got %q", got)
+		}
 	}
 
 	// ack：扣 1 次、达上限 → CONSUMED。
@@ -771,6 +775,38 @@ func TestLookupRateLimitAndLockout(t *testing.T) {
 	e.wantError(resp, spec.ErrCodeLocked)
 	if resp.header.Get(spec.HeaderRetryAfter) == "" {
 		t.Fatal("CODE_LOCKED must carry Retry-After")
+	}
+}
+
+// 裁决 G2：CHUNKS_MISSING 的明细放在 details.missing，不再放错误体顶层。
+func TestChunksMissingUsesDetails(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.createTransfer(sender, recipient, f, nil)
+	if resp := e.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusCreated {
+		t.Fatalf("put prelude: %d %s", resp.status, resp.body)
+	}
+
+	resp := e.do(http.MethodPost, spec.CompletePath(tr.TransferID), nil,
+		map[string]string{spec.HeaderUploadToken: tr.UploadToken})
+	e.wantError(resp, spec.ErrChunksMissing)
+
+	var raw map[string]any
+	if err := json.Unmarshal(resp.body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, hasTop := raw["missing"]; hasTop {
+		t.Fatal("missing must live under details, not at the top level")
+	}
+	details, ok := raw["details"].(map[string]any)
+	if !ok {
+		t.Fatalf("details missing: %s", resp.body)
+	}
+	missing, ok := details["missing"].([]any)
+	if !ok || len(missing) == 0 {
+		t.Fatalf("details.missing empty: %s", resp.body)
 	}
 }
 

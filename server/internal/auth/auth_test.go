@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -195,5 +196,29 @@ func TestNewID(t *testing.T) {
 	other, _ := NewID()
 	if id == other {
 		t.Fatal("id collision")
+	}
+}
+
+// 易错点自查：两套签名域不可混用，且 ZA 不拼进 SIG_INPUT。
+func TestSignDomainSeparation(t *testing.T) {
+	if SignPrefix != "YSAUTH1" {
+		t.Fatalf("auth prefix = %q", SignPrefix)
+	}
+	if PackSignPrefix != "YSSIG1" {
+		t.Fatalf("pack prefix = %q", PackSignPrefix)
+	}
+	if SignPrefix == PackSignPrefix {
+		t.Fatal("auth and pack signature domains must differ")
+	}
+	nonce := make([]byte, 32)
+	input := BuildSignInput(0x05, nonce, []byte("AWQW"))
+	if string(input[:7]) != "YSAUTH1" {
+		t.Fatalf("SIG_INPUT starts with %q", input[:7])
+	}
+	if len(input) != 7+1+32+4 {
+		t.Fatalf("SIG_INPUT length = %d, want exactly prefix+purpose+nonce+fields (no ZA)", len(input))
+	}
+	if bytes.Contains(input, []byte("YSSIG1")) {
+		t.Fatal("SIG_INPUT contains the pack-signature prefix")
 	}
 }

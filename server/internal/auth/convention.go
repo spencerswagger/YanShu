@@ -1,6 +1,14 @@
 package auth
 
-// 验签口径（从端侧源码读出来的，不再等口头确认）。
+// 验签口径（契约书面口径 + 端侧源码交叉确认）。
+//
+// 契约依据：`docs/CRYPTO-PACK.md` §10.2 与 `docs/API.md` §1.3（同一口径）：
+//   1. ID   = "1234567812345678"（16 字节 ASCII，国标默认）
+//   2. ENTL = 0x0080（128 bit，u16be）
+//   3. ZA   = SM3(ENTL ‖ ID ‖ a ‖ b ‖ xG ‖ yG ‖ xA ‖ yA)，xA/yA 是**签名者公钥**坐标
+//   4. e    = SM3(ZA ‖ SIG_INPUT)；ZA 由算法内部参与，**不拼进 SIG_INPUT**
+//   5. 域前缀 YSAUTH1（认证）/ YSSIG1（包签名）**不可混用**
+// 这四点（1-4）错任何一处，两边签验就永远过不了，且报错帮不上忙。
 //
 // 依据：分支 `feat/endcrypto-wasm` @ `95a24ace625ba6194a17c48ac7038ea8ae90b954`
 //   - `crypto/sm/src/sm2.rs:21`   `DEFAULT_ID = b"1234567812345678"`
