@@ -9,15 +9,15 @@
   },
   "acceptance": true,
   "note": "Core 真服务（9065eb8）+ 契约布局内核（e9f8254）；服务端仍 stub-allow 不验签，验签后需复跑",
-  "startedAt": "2026-11-02T16:36:15.575Z",
-  "kernel": "真实加密 · 契约布局（YSPK/1.0）",
+  "startedAt": "2026-11-02T16:38:33.566Z",
+  "kernel": "真实加密 · 契约布局内核（YSPK/1.0）",
   "layout": "contract-112",
   "kernelBuild": {
     "commit": "e9f8254",
     "ysVersion": "0x00010000"
   },
-  "codeA": "0DBB",
-  "codeB": "8QGY",
+  "codeA": "N123",
+  "codeB": "KGZP",
   "sent": true,
   "received": true,
   "downloaded": [
@@ -27,6 +27,6 @@
   "downloadSha256": "4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f",
   "bytesEqual": true,
   "downloadName": "ys-e2e-input.bin",
-  "finishedAt": "2026-11-02T16:36:23.395Z",
+  "finishedAt": "2026-11-02T16:38:41.720Z",
   "ok": true
 }

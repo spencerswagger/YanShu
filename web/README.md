@@ -84,6 +84,12 @@ YS_KERNEL_REF=<sha> npm run wasm:rebuild
 `scripts/rebuild-wasm.mjs` 会依次做：`git fetch` → 解析 ref 的 commit → `git archive` 导出到临时目录（不动工作区、不建 worktree）
 → `cargo build --release --target wasm32-unknown-unknown -p yanshu-sm`（独立 target 目录）→ 实例化核验 → 写产物与溯源。
 
+随时核验手上这个产物（不重建、只检查）：
+
+```bash
+npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局特征逐项 true/false
+```
+
 **核验不通过就不产出产物**（任一项失败直接非 0 退出）：
 
 | 校验项 | 期望 |
@@ -93,6 +99,10 @@ YS_KERNEL_REF=<sha> npm run wasm:rebuild
 | `ys_header_len()` | `112`（单一契约格式，无布局切换） |
 | `ys_unpack_v1` arity | `6`（只给私钥，来源由包内 `SENDER_PUB` 自证） |
 | `ys_sm2_sign_der` / `ys_pack_v1` | 必须存在 |
+
+**界面标签按"五项契约特征"判定，不是"不是桩就算合规"**：`header112` / `version1`（`ys_version()===0x00010000`）/
+`signDer`（有 `ys_sm2_sign_der`）/ `packV1` / `selfUnpack`（`ys_unpack_v1` 6 参）——全过才显示
+「真实加密 · 契约布局内核（YSPK/1.0）」，否则显示「真实加密 · 非契约布局内核（待对齐）」并在红条里列出缺哪项。
 
 产物落在 `public/ys_kernel.wasm`，同时写 `public/ys_kernel.build.json`：
 `{commit, builtAt, sha256, bytes, imports, exports, ysVersion, headerLen, unpackV1Arity}`。

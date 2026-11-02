@@ -56,9 +56,17 @@ test('真内核：0 import、导出齐全、版本/包头/块大小可读', { sk
   assert.equal(kernel.isRealCrypto, true)
   assert.equal(kernel.version, 0x00010000)
   assert.equal(kernel.headerLen, 112, '契约布局 HEADER 112')
-  assert.equal(kernel.layout, 'contract')
+  assert.equal(kernel.layout, 'contract', '五项契约特征全过才允许标成契约布局')
+  assert.deepEqual(kernel.layoutFailedSignals, [], `失败特征：${kernel.layoutFailedSignals.join(',')}`)
   // 新原型：6 参自证解包 + DER 签名 + v1 打包
   assert.equal(kernel.capabilities.selfUnpack, true, 'ys_unpack_v1 应为 6 参自证原型')
+  assert.deepEqual(kernel.contractSignals, {
+    header112: true,
+    version1: true,
+    signDer: true,
+    packV1: true,
+    selfUnpack: true,
+  })
   assert.equal(kernel.capabilities.signDer, true)
   assert.equal(kernel.capabilities.packV1, true)
   assert.ok([40, 112].includes(kernel.headerLen), `包头 ${kernel.headerLen}`)

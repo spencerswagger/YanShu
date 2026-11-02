@@ -48,19 +48,19 @@ const kernelLayout = computed(() => kernel.value?.layout || '')
 const kernelLabel = computed(() => {
   if (kernelMode.value === 'wasm') {
     return kernelLayout.value === 'contract'
-      ? '真实加密 · 契约布局（YSPK/1.0）'
-      : '真实加密 · 旧布局内核（待对齐契约）'
+      ? '真实加密 · 契约布局内核（YSPK/1.0）'
+      : '真实加密 · 非契约布局内核（待对齐）'
   }
   if (kernelMode.value === 'stub-fake') return '开发桩（未加密）'
   if (kernelMode.value === 'unavailable') return '内核未就绪'
   return '加载中'
 })
-const layoutWarning = computed(
-  () =>
-    kernelMode.value === 'wasm' &&
-    kernelLayout.value !== 'contract' &&
-    '当前内核是契约返工前的旧布局（HEADER 40 / 公钥 64 字节 / r‖s 签名）：加密是真的，但结果不能作为 YSPK/1.0 契约的验收。',
-)
+const layoutFailed = computed(() => kernel.value?.layoutFailedSignals || [])
+const layoutWarning = computed(() => {
+  if (kernelMode.value !== 'wasm' || kernelLayout.value === 'contract') return ''
+  const why = layoutFailed.value.length ? `缺：${layoutFailed.value.join('、')}` : '特征检测未通过'
+  return `当前内核不是契约布局（${why}）：加密是真的，但结果不能作为 YSPK/1.0 契约的验收。`
+})
 
 function syncSession() {
   const s = identityManager.value?.session

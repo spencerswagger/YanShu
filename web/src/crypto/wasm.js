@@ -84,12 +84,24 @@ export class WasmKernel {
     }
     this.version = version
     const has = (name) => typeof exports[name] === 'function'
-    this.layoutId = has('ys_get_layout') ? exports.ys_get_layout() : undefined
-    this.headerLen = has('ys_header_len') ? exports.ys_header_len() : 112
-    // 布局名只影响 UI 标注与切分策略；密码学一律由内核决定
-    this.layout = this.layoutId === 1 || this.headerLen === 40 ? 'legacy-40' : 'contract'
+    this.headerLen = has('ys_header_len') ? exports.ys_header_len() : 0
+    // 「是不是契约布局」必须按特征检测，不能只看"不是桩"：五项全过才算契约布局。
+    // 这些特征与 scripts/check-wasm.mjs、契约 §2/§4/§9/§10 一致。
+    this.contractSignals = {
+      header112: this.headerLen === 112,
+      version1: version === ABI_VERSION,
+      signDer: has('ys_sm2_sign_der'),
+      packV1: has('ys_pack_v1'),
+      selfUnpack: has('ys_unpack_v1') && exports.ys_unpack_v1.length === 6,
+    }
+    this.layoutFailedSignals = Object.entries(this.contractSignals)
+      .filter(([, ok]) => !ok)
+      .map(([name]) => name)
+    this.layout = this.layoutFailedSignals.length === 0 ? 'contract' : 'legacy-40'
     this.layoutLabel =
-      this.layout === 'contract' ? '契约布局 YSPK/1.0（HEADER 112）' : '旧布局（HEADER 40，非契约，仅供联调）'
+      this.layout === 'contract'
+        ? '契约布局 YSPK/1.0（HEADER 112 / DER / 包内公钥自证）'
+        : `非契约布局（缺：${this.layoutFailedSignals.join('、')}）`
     this.blockSize = has('ys_default_chunk_size')
       ? exports.ys_default_chunk_size()
       : has('ys_default_block_size')
@@ -97,15 +109,15 @@ export class WasmKernel {
         : 1048576
     this.segmenter = segmenterFor(this.headerLen)
     this.capabilities = {
-      signDer: has('ys_sm2_sign_der'),
-      packV1: has('ys_pack_v1'),
+      signDer: this.contractSignals.signDer,
+      packV1: this.contractSignals.packV1,
       // 6 参 = 包内自证来源（契约 P1 新原型）；7 参 = 过渡期"按发送方码校验"那一版
-      selfUnpack: has('ys_unpack_v1') && has('ys_unpack_meta_v1') && exports.ys_unpack_v1.length === 6,
+      selfUnpack: this.contractSignals.selfUnpack && has('ys_unpack_meta_v1'),
       codeUnpack: has('ys_unpack_v1') && exports.ys_unpack_v1.length === 7,
       errorNameV1: has('ys_error_name_v1'),
     }
     if (this.layout !== 'contract') {
-      this.notes.push(`内核当前是${this.layoutLabel}；契约验收前必须切回契约布局`)
+      this.notes.push(`内核${this.layoutLabel}；契约验收前必须换成契约布局产物`)
     }
     const missingOptional = OPTIONAL_EXPORTS.filter((n) => !has(n))
     if (missingOptional.length) this.notes.push(`缺少可选导出：${missingOptional.join(', ')}`)
