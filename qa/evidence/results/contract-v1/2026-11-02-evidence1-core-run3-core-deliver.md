@@ -47,7 +47,7 @@ qa/evidence/run_evidence1_core.sh <core-src> <rune-crate> /tmp/ys-ev1
 | 目标 | 语料量 | 强信号命中 |
 |---|---|---|
 | 存储 `<BLOB_DIR>/6a/6a149164589b726626cc674835da1ce8/{prelude,chunks/*}` | 3 文件 / 2241B | 0 |
-| PostgreSQL `yanshu_test`…`gate_ev1` | 8 表 / 283 行 | 0 |
+| PostgreSQL `yanshu_test`…`gate_ev1` | 8 表（7 业务 + 1 记账）/ 283 行 | 0 |
 | 内建日志 `yanshu-server-2026-11-02.log` | 1 份 / 3035B | 0 |
 
 阳性对照：存储注入 → 1、日志注入 → 1、DB 注入 → 1、复原 → 0。

@@ -3,7 +3,7 @@
 - 日期：2026-11-02
 - 对象：服务端 `feat/server-skeleton` @ `2bc7dae`（内建日志落地 `9065eb8` 起），
   配端侧 `feat/endcrypto-wasm` @ `dbd66c4` 打的真契约包（2 块，2273B）
-- 表结构基线：`c3c2fc9` 的 `0001_init.sql`（8 张表），**本轮实测未变**
+- 表结构基线：`c3c2fc9` 的 `0001_init.sql` —— **7 张业务表** + `schema_migrations` 记账表（共 8），**本轮实测未变**
 - 库：`yanshu_test` 的独立 schema `gate_ev1`
 - 日志：**服务端自己写的** `YANSHU_LOG_DIR/yanshu-server-YYYY-MM-DD.log`
   （本轮 `yanshu-server-2026-11-02.log`，2734B），不再是"部署重定向的 stdout"
@@ -38,7 +38,7 @@ qa/evidence/run_evidence1_core.sh <core-src> <rune-crate> <workdir>
 | 目标 | 语料量 | 强信号命中 | 结论 |
 |---|---|---|---|
 | 存储目录 | 3 文件 / 2242B | 0 | PASS |
-| PostgreSQL `yanshu_test`…`gate_ev1` | 8 表 / 233 行 | 0 | PASS |
+| PostgreSQL `yanshu_test`…`gate_ev1` | 8 表（7 业务 + 1 记账）/ 233 行 | 0 | PASS |
 | **内建日志** `yanshu-server-2026-11-02.log` | 1 份 / 2734B | 0 | PASS |
 
 阳性对照：存储注入 → exit 1；日志注入（往当日滚动文件追加一行带文件名）→ exit 1；

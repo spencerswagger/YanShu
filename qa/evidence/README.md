@@ -84,7 +84,8 @@ python3 qa/evidence/scan_plaintext.py \
 * 存储根目录：`YANSHU_BLOB_DIR`（默认 `./data/blobs`），布局
   `<root>/<pkg[0:2]>/<pkg>/prelude`、`…/chunks/<index>`（`server/internal/blob/disk.go`）
 * 数据库：`YANSHU_DATABASE_URL`
-* 表/列白名单来自 `server/internal/store/migrations/0001_init.sql`；检索前先核对：
+* 表/列白名单 = **7 张业务表**（`0001_init.sql`）+ **1 张迁移记账表** `schema_migrations`
+  （`store.go` 里建、只有 version/applied_at，**不是业务表**）；检索前先核对：
   **缺表 → PENDING（服务端没跑起来）；出现基线之外的任何表/列 → FAIL（exit 1）并打印差异**，
   防止实现方改表后白名单静默放过。基线与 commit 记在 `CORE_SCHEMA_BASELINE` 并写进结果文件
 

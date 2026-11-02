@@ -21,7 +21,7 @@ qa/evidence/run_evidence1_core.sh <core-src> <rune-crate> /tmp/ys-ev1
 | 目标 | 语料量 | 强信号命中 |
 |---|---|---|
 | 存储 `<BLOB_DIR>/c2/c2cc9f…/{prelude,chunks/*}` | 3 文件 / 2242B | 0 |
-| PostgreSQL `yanshu_test`…`gate_ev1` | 8 表 / 373 行 | 0 |
+| PostgreSQL `yanshu_test`…`gate_ev1` | 8 表（7 业务 + 1 记账）/ 373 行 | 0 |
 | **`YANSHU_LOG_FILE`** `server-file.log` | 1 份 / 3119B | 0 |
 
 阳性对照（存储注入 / 日志注入 / DB 注入 / 复原）全部按预期：1 / 1 / 1 / 0。
@@ -46,7 +46,7 @@ qa/evidence/run_evidence1_core.sh <core-src> <rune-crate> /tmp/ys-ev1
 Core 确认 `deliver` 支持 `--dsn "${PG_DSN}&search_path=<schema>"`（pgx 侧已能解析），
 脚本默认参数随即补上 `--dsn {dsn}`，并新增**存储落点断言**（驱动报的 `storage_path`
 必须落在本次 `blob_dir` 下且非空）。复跑结果：存储 3 文件 / 2242B、日志 1 份 / 3119B、
-DB 8 表 / 474 行，**三处零命中**，阳性对照 1/1/1/0，退出码 0。
+DB 8 表（7 业务 + 1 记账）/ 474 行，**三处零命中**，阳性对照 1/1/1/0，退出码 0。
 
 ## 边界（仍然有效）
 
@@ -85,7 +85,7 @@ qa/evidence/run_evidence1_core.sh <core@9065eb8> <rune-crate> /tmp/ys-ev1
 | 目标 | 语料量 | 命中 |
 |---|---|---|
 | 存储 | 3 文件 / 2240B | 0 |
-| PostgreSQL `gate_ev1` | 8 表 / 571 行 | 0 |
+| PostgreSQL `gate_ev1` | 8 表（7 业务 + 1 记账）/ 571 行 | 0 |
 | **轮转日志** `yanshu-server-2026-11-02.log` | 1 份 / 3132B | 0 |
 
 阳性对照 1/1/1/0（**日志那条注入的就是轮转文件本身**），退出码 0。

@@ -139,7 +139,8 @@ CORE_LOG_DIR_ENV = "YANSHU_LOG_DIR"
 # 白名单基线：对齐到哪个 commit 的 migrations（表结构变了就要改这里，并在结果文件写明）
 CORE_SCHEMA_BASELINE = "feat/server-skeleton@c3c2fc9 (server/internal/store/migrations/0001_init.sql)"
 
-CORE_SCHEMA = {
+# 7 张业务表 + 1 张迁移记账表（schema_migrations 由 store.go 建，不是 migrations 文件里的）
+CORE_BUSINESS_TABLES = {
     # 对齐 feat/server-skeleton @ c3c2fc9（server/internal/store/migrations/0001_init.sql）
     "codes": {"code", "public_key", "nickname", "registered_at", "updated_at"},
     "auth_challenges": {"challenge_id", "purpose", "nonce", "expires_at", "used"},
@@ -156,9 +157,15 @@ CORE_SCHEMA = {
     "idempotency_keys": {"key_hash", "sender_code", "request_fingerprint",
                          "transfer_id", "created_at", "expires_at"},
     "audit_events": {"id", "ts", "method", "path", "status", "bytes", "ip", "request_id"},
-    # 迁移记账表（server/internal/store/store.go 里建），只有版本号与时间
+}
+
+# 迁移记账表：由 server/internal/store/store.go 建（不在 0001_init.sql 里），
+# 只有版本号与时间，**不是业务表**。基线共 7 业务 + 1 记账 = 8 张。
+CORE_BOOKKEEPING_TABLES = {
     "schema_migrations": {"version", "applied_at"},
 }
+
+CORE_SCHEMA = {**CORE_BUSINESS_TABLES, **CORE_BOOKKEEPING_TABLES}
 
 
 # --------------------------------------------------------------------------- #
@@ -1220,7 +1227,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"[schema] {note}")
         if extra:
             # 白名单外的表/列一律 FAIL：否则实现方改表时，白名单会静默放过
-            print(f"[FAIL] schema 漂移：基线 {CORE_SCHEMA_BASELINE} 之外还有 "
+            print(f"[FAIL] schema 漂移：基线 {CORE_SCHEMA_BASELINE}"
+                  f"（{len(CORE_BUSINESS_TABLES)} 张业务表 + {len(CORE_BOOKKEEPING_TABLES)} 张迁移记账表）之外还有 "
                   f"{len(extra)} 处（见上面 [schema] 行）——先确认是契约变更还是多余字段",
                   file=sys.stderr)
             return EXIT_HIT

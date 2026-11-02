@@ -9,8 +9,10 @@
 - 对象：服务端 `feat/server-skeleton` @ `c3c2fc9`（PR #3），配端侧 `feat/endcrypto-wasm`
   @ `dbd66c4` 打出的**真契约包**（`YSPK/1.0`，2 块，2273B，prelude 549B）
 - 表结构基线：`feat/server-skeleton@c3c2fc9` 的 `0001_init.sql`
-  （8 张表：`codes` / `auth_challenges` / `transfers` / `transfer_chunks` /
-  `transfer_downloads` / `idempotency_keys` / `audit_events` / `schema_migrations`）；
+  （**7 张业务表**：`codes` / `auth_challenges` / `transfers` / `transfer_chunks` /
+  `transfer_downloads` / `idempotency_keys` / `audit_events`；
+  **+1 张迁移记账表** `schema_migrations`，由 `store.go` 建、不在 `0001_init.sql` 里，
+  只有 `version`/`applied_at` 两列 —— 它不是业务表，基线里单列）；
   白名单之外的任何表或列都会让本轮直接 FAIL
 - 库：**`yanshu_test` 的独立 schema `gate_ev1`**（不扫 `yanshu_dev` / `yanshu_staging`，
   也不碰 `public` 与 Core 自己的测试 schema）；DSN 从 `/.keys/pg.env` 读取，
@@ -71,7 +73,7 @@ YANSHU_TOKEN_SECRET=<随机> \
 | 目标 | 语料量 | 强信号命中 | 结论 |
 |---|---|---|---|
 | 存储目录 `<BLOB_DIR>/<id[0:2]>/<id>/{prelude,chunks/00000000,00000001}` | 3 文件 / 2241B | 0 | PASS |
-| PostgreSQL `yanshu_test` … schema `gate_ev1`（8 表 / 本次 172 行） | 全表文本列逐行 | 0 | PASS |
+| PostgreSQL `yanshu_test` … schema `gate_ev1`（7 业务 + 1 记账 = 8 表 / 本次 172 行） | 全表文本列逐行 | 0 | PASS |
 | 服务端日志（stdout 重定向） | 2 份 / 2773B | 0 | PASS |
 
 - 检索项 6 个（文件名、主干、扩展名带点、扩展名裸串、高熵片段、中文片段），
