@@ -1107,7 +1107,7 @@ func newSM2Identity(t *testing.T) (priv, pub []byte, code string) {
 // token 轮换语义（三步实测，见 TestUploadTokenRotationThreeSteps）：
 //
 //	① 同 kid 下签发的 token 能正常用；
-//	② 换 secret + kid 后，同一个 token 立刻 401 AUTH_TOKEN_STALE；
+//	② 换 secret + kid 后，同一个 token 立刻 401 AUTH_TOKEN_REVOKED；
 //	③ 重新签发（新建传输）的 token 正常 200。
 func TestUploadTokenRotationThreeSteps(t *testing.T) {
 	e := newEnv(t, "")
@@ -1126,6 +1126,10 @@ func TestUploadTokenRotationThreeSteps(t *testing.T) {
 	})
 	e.wantError(wrong, spec.ErrAuthSignatureInvalid)
 
+	// 再建一条传输：轮换必须让**所有**既有 token 一起失效，而不是只有一条。
+	f1b := newFixture()
+	tr1b := e.createTransfer(sender, recipient, f1b, nil)
+
 	// ② 轮换 secret + kid：同一 token 立刻失效，且错误名可区分。
 	rotatedTokens, err := auth.NewTokenIssuer([]byte("rotated-secret"))
 	if err != nil {
@@ -1142,11 +1146,12 @@ func TestUploadTokenRotationThreeSteps(t *testing.T) {
 	e2.srv = httptest.NewServer(e2.api.Handler())
 	defer e2.srv.Close()
 
-	e2.wantError(e2.putPrelude(tr.UploadToken, tr, f.Prelude), spec.ErrAuthTokenStale)
+	e2.wantError(e2.putPrelude(tr.UploadToken, tr, f.Prelude), spec.ErrAuthTokenRevoked)
+	e2.wantError(e2.putPrelude(tr1b.UploadToken, tr1b, f1b.Prelude), spec.ErrAuthTokenRevoked)
 	stale := e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
 		spec.HeaderUploadToken: tr.UploadToken,
 	})
-	e2.wantError(stale, spec.ErrAuthTokenStale)
+	e2.wantError(stale, spec.ErrAuthTokenRevoked)
 
 	// ③ 重新签发的新传输用新 token 正常。
 	f2 := newFixture()

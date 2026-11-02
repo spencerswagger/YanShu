@@ -222,7 +222,8 @@ YANSHU_KERNEL_WASM=./kernel/yanshu_sm.wasm \
 - **切换清单与 token 失效机制**见 `docs/TOKEN-LIFECYCLE.md`：`upload_token` 由
   `HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1"‖transfer_id)` 派生、库里只存 `SM3` 与
   签发时的 `kid`；**同时轮换 `TOKEN_SECRET` 与 `TOKEN_KID` 会让全部旧 token 立刻
-  `401 AUTH_TOKEN_STALE`**（这就是应急吊销手段）。`TOKEN_KID` 缺失时启动直接报错（fail closed）。
+  `401 AUTH_TOKEN_REVOKED`**（这就是应急吊销手段；与"token 值不对"的
+  `AUTH_SIGNATURE_INVALID` 分开）。`TOKEN_KID` 缺失时启动直接报错（fail closed）。
 - **schema 只用一套**：`yanshu_core`。`yanshu_core_sm2` 只是本地隔离验证用的临时 schema；
   换验签模式不需要重建 schema。
 - 切换影响：
