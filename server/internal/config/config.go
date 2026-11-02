@@ -93,6 +93,10 @@ func (c Config) ValidateForServe() error {
 		return fmt.Errorf("config: YANSHU_VERIFIER=sm2 requires the wasm kernel; " +
 			"set YANSHU_KERNEL_WASM=/path/to/yanshu_sm.wasm (repo ships it at server/kernel/yanshu_sm.wasm)")
 	}
+	if c.TokenKIDNum <= 0 {
+		// fail closed：没有 KID 就无法判断"旧凭据"，宁可拒绝启动。
+		return fmt.Errorf("config: YANSHU_TOKEN_KID is required when serving (positive decimal integer)")
+	}
 	if len(c.TokenSecret) < MinTokenSecretLen {
 		return fmt.Errorf("config: YANSHU_TOKEN_SECRET is required when serving (>=%d bytes); "+
 			"read it from an env var or a 0600 file, never hardcode it", MinTokenSecretLen)
@@ -125,15 +129,14 @@ func Load() (Config, error) {
 	if kidRaw == "" {
 		kidRaw = os.Getenv("YANSHU_TOKEN_EPOCH") // 兼容旧变量名
 	}
-	if kidRaw == "" {
-		kidRaw = "1"
+	if kidRaw != "" {
+		n, err := strconv.ParseInt(kidRaw, 10, 64)
+		if err != nil || n <= 0 {
+			return Config{}, fmt.Errorf("config: YANSHU_TOKEN_KID must be a positive decimal integer (got %q)", kidRaw)
+		}
+		c.TokenKID = strconv.FormatInt(n, 10)
+		c.TokenKIDNum = n
 	}
-	n, err := strconv.ParseInt(kidRaw, 10, 64)
-	if err != nil || n <= 0 {
-		return Config{}, fmt.Errorf("config: YANSHU_TOKEN_KID must be a positive decimal integer (got %q)", kidRaw)
-	}
-	c.TokenKID = strconv.FormatInt(n, 10)
-	c.TokenKIDNum = n
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: YANSHU_DATABASE_URL is required")
 	}
