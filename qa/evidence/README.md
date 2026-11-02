@@ -194,7 +194,7 @@ PostgreSQL 走 `row_to_json`：`TEXT` 列明文原样、`BYTEA` 列以 `\x<hex>`
 | 布局 | 来源 | 特征 | 用途 |
 |---|---|---|---|
 | `contract-v1`（**默认**） | `docs/CRYPTO-PACK.md` v1 冻结稿 | HEADER 112B、块头 16B | 验收 |
-| `rune-v1` | 端侧旧实现（已被删除） | HEADER 40B、块头 9B | **已不可解析**：显式指定会报 `LAYOUT_UNAVAILABLE`；历史结果归档在 `results/rune-v1-noncontract/`，不重跑（确需复现设 `YS_ALLOW_ARCHIVED_LAYOUT=1`） |
+| `rune-v1` | 端侧旧实现（已被删除） | HEADER 40B、块头 9B | **已不可解析**：显式指定报 `LAYOUT_UNAVAILABLE` 并**退出码 4**（不静默回落契约布局）；历史结果归档在 `results/rune-v1-noncontract/`，不重跑不删除（确需复现设 `YS_ALLOW_ARCHIVED_LAYOUT=1`） |
 | `auto` | 按头部判别 | — | 排查用；判不出即报错 |
 
 两者**曾不一致**（差异清单见 `results/rune-v1-noncontract/2026-11-02-evidence2-rune-v1.md`）。脚本不猜测：

@@ -139,6 +139,7 @@ TAG_LEN = 16
 EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_BLOCKED = 2
+EXIT_PENDING = 4        # 参数/依赖不可用（例如已删除的 rune-v1 布局）：不产结论
 
 HERE = Path(__file__).resolve().parent
 FIXTURE_HEX = HERE / "fixtures" / "yspk-contract-v2.hex"
@@ -1218,11 +1219,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_BLOCKED
 
     if args.layout == LAYOUT_RUNE and not os.environ.get("YS_ALLOW_ARCHIVED_LAYOUT"):
-        print("[BLOCKED] LAYOUT_UNAVAILABLE：端侧已删除 rune-v1 布局（仓库只剩 YSPK/1.0），"
+        print("[PENDING] LAYOUT_UNAVAILABLE：端侧已删除 rune-v1 布局（仓库只剩 YSPK/1.0），"
               "本工具不再解析它。\n"
-              "           历史结果已归档在 results/rune-v1-noncontract/，不重跑；"
+              "          历史结果归档在 results/rune-v1-noncontract/，不重跑、不删除；"
               "确需复现旧结果时设 YS_ALLOW_ARCHIVED_LAYOUT=1。", file=sys.stderr)
-        return EXIT_BLOCKED
+        return EXIT_PENDING
 
     try:
         env = parse_envelope(pristine, layout=args.layout)

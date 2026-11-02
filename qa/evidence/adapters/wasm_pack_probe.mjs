@@ -99,7 +99,11 @@ function callSized(fn, capGuess) {
 
 const mode = rest[0];
 
-if (mode === "keygen") {
+if (mode === "version") {
+  // ys_version() 是 u32，按 major.minor.patch(8.8.16) 解
+  const v = e.ys_version();
+  console.log(`0x${v.toString(16).padStart(8, "0")} ${(v >>> 24)}.${(v >>> 16) & 0xff}.${v & 0xffff}`);
+} else if (mode === "keygen") {
   const [skOut, pkOut] = rest.slice(1);
   if (!skOut || !pkOut) die("keygen <sk-out> <pk-out>");
   const seed = crypto.randomBytes(32);

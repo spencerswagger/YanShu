@@ -1,12 +1,15 @@
 # 证据二实测结果：密文篡改必报错（**生产导出路径**：wasm32 raw C ABI）
 
 - 日期：2026-11-02
-- 对象：`crypto/sm`，分支 `feat/endcrypto-wasm` @ `dbd66c4`（Rune 已删除 rune-v1 旧布局，
+- 对象：`crypto/sm`，分支 `feat/endcrypto-wasm` @ **`e9f8254`**（Rune 已删除 rune-v1 旧布局，
   仓库只剩 `YSPK/1.0`；解密调用走 6 参 `ys_unpack_v1`，没有则回退 7 参 `ys_unpack` 传 NULL）
+- **入口类型：`wasm-production`**（`--entry-kind production`）
+- `ys_version()`：`0x00010000` → **0.1.0**；wasm 文件 sha256
+  `a657b33948b7299bd282e2c4a6b4774906afa8c61d3a0e6a7fa279d2c2b57b19`（124,976 字节）
 - 包布局：`contract-v1`（默认）
 - 解密入口：**`yanshu_sm.wasm` 的 `ys_unpack`**（`--entry-kind production`）——
   就是 Web 将来要调的同一批导出，不是 Rust 原生 API、也不是测试替身
-- 打包同样走 wasm：`ys_pack_v1`（同一个 `.wasm`，124,976 字节）
+- 打包同样走 wasm：`ys_pack_v1`（同一个 `.wasm`，见上面的 sha256）
 - 判定：解密失败即 PASS（任一道防线拒绝都算）；错误名只作诊断
 - 基线：未篡改包解出的明文与原文**逐字节一致**（`--expect-plaintext`）
 
@@ -66,6 +69,8 @@ qa/evidence/run_evidence2_wasm.sh /tmp/rune/crypto/sm /tmp/ys-ev2-wasm
 | 块 0 换成块 1 的密文 | PASS | `TAG_MISMATCH` |
 
 **未报错 0 种**。
+
+（本次 head `e9f8254` 复跑：单块 5/5、多块 10/10、补充变体 18/18，与上一版结论一致。）
 
 ## 与 native-api 那份（`2026-11-02-evidence2-contract-v1.md`）的差别
 
