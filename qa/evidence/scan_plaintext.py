@@ -52,6 +52,8 @@ base64 / hex / percent-encode 形态。命中即说明服务端看到了不该�
     1  FAIL        有命中（逐条打印位置；片段只打印定位上下文，不整段回显）
     2  BLOCKED     配置/依赖问题（无检索目标、投递命令失败、psql 不可用……）
     3  INCONCLUSIVE 语料为空（扫了 0 文件 0 字节 0 行）——"没命中"不构成证据
+    4  PENDING     参数未就绪（--profile core-skeleton 时服务端还没合入/没起/migrations
+                   未跑）——既不算 PASS 也不算 FAIL
 
 ===============================================================================
 命中强度的口径（重要，别当成偷工减料）
@@ -112,9 +114,43 @@ EXIT_PASS = 0
 EXIT_HIT = 1
 EXIT_BLOCKED = 2
 EXIT_INCONCLUSIVE = 3
+EXIT_PENDING = 4        # 参数未就绪（服务端还没合入/没起）：既不算 PASS 也不算 FAIL
 
 HARD = "hard"
 ADVISORY = "advisory"
+
+# --------------------------------------------------------------------------- #
+# 服务端骨架 profile（来自 feat/server-skeleton 的约定，未合入 main 前只当"待确认"）
+#
+# 存储布局：<YANSHU_BLOB_DIR>/<pkg[0:2]>/<pkg>/prelude
+#                          /<pkg>/chunks/<index>       （server/internal/blob/disk.go）
+# 库表：server/internal/store/migrations/0001_init.sql 的白名单，任何白名单外的
+#       表/列都要在报告里点出来（Core 自己的 schema_test.go 也在守这条）。
+# --------------------------------------------------------------------------- #
+
+PROFILE_GENERIC = "generic"
+PROFILE_CORE = "core-skeleton"
+
+CORE_BLOB_DIR_ENV = "YANSHU_BLOB_DIR"
+CORE_BLOB_DIR_DEFAULT = "./data/blobs"
+CORE_DSN_ENV = "YANSHU_DATABASE_URL"
+
+CORE_SCHEMA = {
+    "codes": {"code", "pubkey", "nickname", "created_at", "updated_at",
+              "last_seen_at", "expires_at"},
+    "auth_challenges": {"id", "purpose", "code", "pubkey", "message",
+                        "expires_at", "used_at", "created_at"},
+    "sessions": {"token_hash", "code", "created_at", "expires_at"},
+    "packages": {"id", "sender_code", "recipient_code", "state", "chunk_count",
+                 "chunk_size", "plaintext_size", "prelude_len", "prelude_digest",
+                 "received_count", "max_downloads", "downloads_used", "delete_on_ack",
+                 "created_at", "expires_at", "committed_at", "terminal_at",
+                 "terminal_reason"},
+    "package_chunks": {"package_id", "chunk_index", "ct_len", "ct_digest", "received_at"},
+    "package_tombstones": {"id", "state", "sender_code", "recipient_code",
+                           "created_at", "terminal_at", "purged_at"},
+    "audit_events": {"id", "at", "kind", "code", "package_id", "bytes", "outcome", "ip"},
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -458,6 +494,38 @@ def scan_postgres(dsn: str, patterns: Sequence[Pattern], stats: Stats,
     return hits
 
 
+SQL_LIST_COLUMNS = (
+    "select table_name || '.' || column_name "
+    "from information_schema.columns "
+    "where table_schema = 'public' order by 1"
+)
+
+
+def core_schema_check(dsn: str, timeout: float) -> tuple[list[str], list[str]]:
+    """核对库里的表/列是否都落在服务端骨架的白名单内。
+
+    返回 (缺表, 白名单外的表/列)。缺表通常意味着 migrations 还没跑（骨架未起）。
+    """
+    proc = _psql(dsn, SQL_LIST_COLUMNS, timeout)
+    if proc.returncode != 0:
+        raise RuntimeError(f"psql 读 schema 失败：{proc.stderr.decode('utf-8', 'replace').strip()}")
+    seen: dict[str, set[str]] = {}
+    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        if not line.strip() or "." not in line:
+            continue
+        table, column = line.split(".", 1)
+        seen.setdefault(table, set()).add(column)
+    missing = [t for t in CORE_SCHEMA if t not in seen]
+    extra: list[str] = []
+    for table, cols in seen.items():
+        if table not in CORE_SCHEMA:
+            extra.append(f"白名单外的表 {table}（{len(cols)} 列）")
+            continue
+        for col in sorted(cols - CORE_SCHEMA[table]):
+            extra.append(f"白名单外的列 {table}.{col}")
+    return missing, extra
+
+
 def scan_sqlite(path: str, patterns: Sequence[Pattern], stats: Stats,
                 max_hits_per_form: int = 5) -> list[Hit]:
     hits: list[Hit] = []
@@ -631,14 +699,23 @@ def _selftest() -> int:
         return f"检索项 {len(items)} 个 / 形态 {len(patterns)} 个"
 
     def c_clean():
+        """3 MiB 随机语料：强信号必须 0 误报。
+
+        弱信号（裸扩展名这种 3 字节记号）在随机数据里本来就有 ~18% 概率偶然出现，
+        那正是把它定成 advisory 的原因 —— 这里只断言强信号不误报，并把观测到的
+        弱信号条数如实打出来。
+        """
         root = Path(tmp) / "clean"
         root.mkdir()
         (root / "blob-000.bin").write_bytes(os.urandom(3 * 1024 * 1024))
         st = Stats()
         hs = scan_storage(str(root), patterns, st)
-        assert not hs, f"3 MiB 随机数据出现误报：{[h.item_id for h in hs][:5]}"
+        hard_ids = {i.item_id for i in items if i.strength == HARD}
+        hard_hits = [h for h in hs if h.item_id in hard_ids]
+        assert not hard_hits, f"强信号误报：{[h.item_id for h in hard_hits][:5]}"
         assert st.bytes_scanned == 3 * 1024 * 1024, st.bytes_scanned
-        return "3 MiB 随机密文，0 误报"
+        weak = len(hs) - len(hard_hits)
+        return f"3 MiB 随机密文：强信号 0 误报（弱信号命中 {weak} 条，属预期）"
 
     def c_boundary():
         root = Path(tmp) / "boundary"
@@ -701,6 +778,21 @@ def _selftest() -> int:
         assert not hs and st.empty, "空语料应判 INCONCLUSIVE"
         return "空语料 → INCONCLUSIVE"
 
+    def c_core_schema():
+        """core-skeleton 白名单核对：缺表与白名单外的列都要能点出来。"""
+        import unittest.mock as mock
+        fake = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=("codes.code\ncodes.nickname\npackages.id\n"
+                    "packages.leaky_filename\nweird_table.x\n").encode(),
+            stderr=b"")
+        with mock.patch.object(sys.modules[__name__], "_psql", return_value=fake):
+            missing, extra = core_schema_check("postgres://x", 1.0)
+        assert "package_chunks" in missing and "codes" not in missing, missing
+        assert any("packages.leaky_filename" in e for e in extra), extra
+        assert any("weird_table" in e for e in extra), extra
+        return f"缺表 {len(missing)} 张、白名单外 {len(extra)} 项均被点出"
+
     def c_strict():
         loose = build_items(spec)
         strict_items = build_items(spec, strict=True)
@@ -716,6 +808,7 @@ def _selftest() -> int:
     case("文件名命中", c_name)
     case("SQLite（BLOB 原文 + TEXT 十六进制）", c_sqlite)
     case("空语料判 INCONCLUSIVE", c_empty)
+    case("core 白名单核对", c_core_schema)
     case("--strict 升级口径", c_strict)
 
     print("=" * 72)
@@ -763,6 +856,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
+    ap.add_argument("--profile", default=os.environ.get("YS_PROFILE", PROFILE_GENERIC),
+                    choices=[PROFILE_GENERIC, PROFILE_CORE],
+                    help="core-skeleton：从服务端骨架的约定取默认值并核对表/列白名单")
     ap.add_argument("--storage-root", default=os.environ.get("YS_STORAGE_ROOT"),
                     help="服务端存储根目录（递归扫描）")
     ap.add_argument("--dsn", default=os.environ.get("YS_DSN"),
@@ -840,24 +936,60 @@ def main(argv: Sequence[str] | None = None) -> int:
         if tmp_sample_dir:
             shutil.rmtree(tmp_sample_dir, ignore_errors=True)
 
-    # ---- 目标 ----
+    # ---- 目标（core-skeleton profile 会先从服务端骨架的约定里取默认值）----
+    core = args.profile == PROFILE_CORE
+    pending: list[str] = []
+    if core:
+        if not args.storage_root:
+            args.storage_root = os.environ.get(CORE_BLOB_DIR_ENV, "")
+            if not args.storage_root and os.path.isdir(CORE_BLOB_DIR_DEFAULT):
+                args.storage_root = CORE_BLOB_DIR_DEFAULT
+        if not args.dsn and not args.db_file:
+            args.dsn = os.environ.get(CORE_DSN_ENV, "")
+
     targets: list[str] = []
     if args.storage_root:
-        if not os.path.isdir(args.storage_root):
+        if os.path.isdir(args.storage_root):
+            targets.append("storage")
+        elif core:
+            pending.append(f"存储根目录不存在：{args.storage_root}"
+                           f"（{CORE_BLOB_DIR_ENV} 未指向已落盘的目录）")
+        else:
             print(f"[BLOCKED] 存储根目录不存在：{args.storage_root}", file=sys.stderr)
             return EXIT_BLOCKED
-        targets.append("storage")
     if args.dsn:
         targets.append("postgres")
     if args.db_file:
-        if not os.path.isfile(args.db_file):
+        if os.path.isfile(args.db_file):
+            targets.append("sqlite")
+        elif core:
+            pending.append(f"SQLite 文件不存在：{args.db_file}")
+        else:
             print(f"[BLOCKED] SQLite 文件不存在：{args.db_file}", file=sys.stderr)
             return EXIT_BLOCKED
-        targets.append("sqlite")
+    if core and not args.storage_root:
+        pending.append(f"{CORE_BLOB_DIR_ENV} 未设置、{CORE_BLOB_DIR_DEFAULT} 也不存在")
+    if core and not args.dsn and not args.db_file:
+        pending.append(f"{CORE_DSN_ENV} 未设置（拿不到 packages / package_chunks）")
+
     if not targets:
+        if core:
+            print("[PENDING] 待 Core 合入 + 参数确认 —— 下面几项还没有可用取值：",
+                  file=sys.stderr)
+            for item in pending:
+                print(f"  · {item}", file=sys.stderr)
+            print("  → 这不是 PASS 也不是 FAIL：服务端骨架还没落到 main / 还没跑起来，"
+                  "没有可检对象。", file=sys.stderr)
+            return EXIT_PENDING
         print("[BLOCKED] 至少给一个检索目标：--storage-root / --dsn / --db-file "
               "（或对应的 YS_* 环境变量）", file=sys.stderr)
         return EXIT_BLOCKED
+
+    for item in pending:
+        print(f"[warn] {item}")
+    if core:
+        print(f"[profile] core-skeleton：存储布局 <root>/<pkg[0:2]>/<pkg>/{{prelude,chunks/<idx>}}；"
+              f"表白名单 {len(CORE_SCHEMA)} 张")
 
     print(f"[target] storage={args.storage_root or '(none)'} "
           f"postgres={redact_dsn(args.dsn) if args.dsn else '(none)'} "
@@ -868,6 +1000,26 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     stats = Stats()
     hits: list[Hit] = []
+    schema_notes: list[str] = []
+    missing_tables: list[str] = []
+    if core and "postgres" in targets:
+        try:
+            missing_tables, extra = core_schema_check(args.dsn, args.psql_timeout)
+        except (RuntimeError, subprocess.TimeoutExpired) as exc:
+            print(f"[PENDING] 待 Core 合入 + 参数确认 —— 库连上了但读不到 schema：{exc}",
+                  file=sys.stderr)
+            return EXIT_PENDING
+        if missing_tables:
+            schema_notes.append("缺表：" + "、".join(missing_tables)
+                                + "（migrations 未跑 / 骨架未起）")
+        schema_notes.extend(extra)
+        for note in schema_notes:
+            print(f"[schema] {note}")
+        if len(missing_tables) == len(CORE_SCHEMA):
+            print("[PENDING] 待 Core 合入 + 参数确认 —— 库里一张服务端表都没有"
+                  "（migrations 未跑），现在扫出的「没命中」不能算证据。", file=sys.stderr)
+            return EXIT_PENDING
+
     try:
         if "storage" in targets:
             hits += scan_storage(args.storage_root, patterns, stats, args.max_hits_per_form)

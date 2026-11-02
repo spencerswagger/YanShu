@@ -17,6 +17,9 @@
 它**不实现加解密**：解密一律外派给你配置的端侧入口。脚本只负责
 「解析 → 构造破坏 → 调用 → 判定 → 打印证据」。
 
+包布局是**可插拔**的（`--layout auto|contract-v1|rune-v1`）：契约稿与端侧实现目前
+是两套格式，脚本按头部自动识别并在输出里写明，识别不出就报错，绝不猜。
+
 ===============================================================================
 判定口径
 ===============================================================================
@@ -36,6 +39,9 @@
                            一个断言"篡改包必须报错"；退出码 0 = 断言成立
     --backend selftest     自测替身（合成完整性校验，**不是密码学**），只用来
                            证明本脚本的构造与判定逻辑没问题，不能当证据用
+
+`--expect-plaintext <file>` 会额外要求「未篡改包解出的明文与给定文件逐字节一致」，
+不满足就整轮 BLOCKED —— 防的是"解密器根本没解开却每条都报错"的假 PASS。
     --backend always-ok    恒成功替身，测试专用：证明"解密成功会被判 FAIL"
 
 若用的是 `cargo-test` / `selftest` / `always-ok`，输出会明确打印
@@ -95,16 +101,35 @@ from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
 # --------------------------------------------------------------------------- #
-# CRYPTO-PACK 常量（v1，冻结）
+# 已知包布局
+#
+# 本脚本要验的是**真实产物**，所以布局是可插拔的：
+#   contract-v1 —— docs/CRYPTO-PACK.md v1 冻结契约（HEADER 112B、块头 16B）
+#   rune-v1     —— 端侧内核 crypto/sm/src/pack.rs::layout 的当前实现
+#                  （HEADER 40B、块头 9B：index u32 | flags u8 | ct_len u32）
+# 两者**不一致**（见 qa/evidence/results/ 里的对齐报告）：脚本按 MAGIC 后的
+# 头长度自动识别，并在输出里写明本次用的是哪个布局。识别失败不许猜。
 # --------------------------------------------------------------------------- #
 
-HEADER_LEN = 112
+LAYOUT_CONTRACT = "contract-v1"
+LAYOUT_RUNE = "rune-v1"
+
+# contract-v1
+CONTRACT_HEADER_LEN = 112
+CONTRACT_CHUNK_HDR_LEN = 16
 MIN_CHUNK_SIZE = 16
 MAX_CHUNK_SIZE = 1048576
+CONTRACT_WRAPPED_KEY_LEN = 129
+CONTRACT_PUB_LEN = 65
+
+# rune-v1
+RUNE_HEADER_LEN = 40
+RUNE_BLOCK_HDR_LEN = 9
+RUNE_MAX_BLOCK_SIZE = 64 << 20
+RUNE_KEY_REC_LEN = 128
+RUNE_SIG_LEN = 64
+
 TAG_LEN = 16
-CHUNK_HDR_LEN = 16
-WALKED_WRAPPED_KEY_LEN = 129
-UNCOMPRESSED_PUB_LEN = 65
 
 EXIT_PASS = 0
 EXIT_FAIL = 1
@@ -145,18 +170,17 @@ def _u64(b: bytes, o: int) -> int:
 
 
 @dataclass
-class ChunkRec:
+class BlockRec:
+    """一个块记录。两种布局共用这一份"字段坐标"，篡改用例只认坐标不认布局。"""
     seq: int            # 在块区里的序号
-    rec_off: int        # 整条记录的起始偏移
-    rec_len: int        # 16 + ct_len + 16
-    index_field: int    # 块头里声明的 CHUNK_INDEX
-    pt_len: int
+    rec_off: int        # 整条记录起始偏移
+    rec_len: int        # 块头 + 密文 + tag
+    hdr_off: int        # 块头起始偏移
+    hdr_len: int        # 块头长度（contract 16 / rune 9）
+    ct_off: int
     ct_len: int
-    last_flag: int
-
-    @property
-    def ct_off(self) -> int:
-        return self.rec_off + CHUNK_HDR_LEN
+    index_field: int    # 块头里声明的块号
+    last_flag: int      # contract: LAST_FLAG；rune: flags 字节
 
     @property
     def tag_off(self) -> int:
@@ -166,85 +190,117 @@ class ChunkRec:
 @dataclass
 class Envelope:
     raw: bytes
+    layout: str
     version: tuple[int, int]
     flags: int
     chunk_size: int
     chunk_count: int
     plaintext_size: int
-    wrapped_key_len: int
-    manifest_len: int
-    manifest_pt_len: int
-    sender_pub_len: int
-    sig_len: int
     prelude_len: int
-    chunks: list[ChunkRec] = field(default_factory=list)
+    header_flip_off: int
+    header_flip_note: str
+    chunks: list[BlockRec] = field(default_factory=list)
 
     def summary(self) -> str:
         lens = ",".join(str(c.rec_len) for c in self.chunks[:8])
         more = "" if len(self.chunks) <= 8 else ",…"
-        return (f"{len(self.raw):,}B · YSPK {self.version[0]}.{self.version[1]} · "
-                f"CHUNK_SIZE={self.chunk_size} · CHUNK_COUNT={self.chunk_count} · "
+        return (f"{len(self.raw):,}B · {self.layout} · v{self.version[0]}.{self.version[1]} · "
+                f"BLOCK_SIZE={self.chunk_size} · BLOCK_COUNT={self.chunk_count} · "
                 f"PT={self.plaintext_size}B · PRELUDE={self.prelude_len}B · "
                 f"块记录长度=[{lens}{more}]")
 
 
-def parse_envelope(data: bytes, strict: bool = True) -> Envelope:
-    """按 CRYPTO-PACK §4/§5/§6 解析。strict=False 只解析到能定位块区为止。"""
-    if len(data) < HEADER_LEN:
-        raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT", f"短于 {HEADER_LEN} 字节的头")
+def detect_layout(data: bytes) -> str:
+    """按 MAGIC 之后的结构判别布局；判不出就报错，不猜。"""
+    if len(data) < 8:
+        raise EnvelopeError("TRUNCATED", f"包太短（{len(data)} 字节）")
+    if data[0:4] != b"YSPK":
+        raise EnvelopeError("BAD_MAGIC", f"MAGIC={data[0:4]!r}")
+    if _u16(data, 6) == CONTRACT_HEADER_LEN:
+        return LAYOUT_CONTRACT
+    if data[4] == 1 and data[5] == 1:
+        return LAYOUT_RUNE
+    raise EnvelopeError("UNSUPPORTED_VERSION",
+                        f"无法识别布局（v={data[4]}.{data[5]}，u16@6={_u16(data, 6)}）")
+
+
+def _expected_block_count(plain_size: int, block_size: int) -> int:
+    if plain_size == 0:
+        return 1
+    return -(-plain_size // block_size)
+
+
+def _block_plain_len(plain_size: int, block_size: int, index: int, count: int) -> int:
+    if index + 1 < count:
+        return block_size
+    return plain_size - (count - 1) * block_size
+
+
+def parse_envelope(data: bytes, strict: bool = True, layout: str = "auto") -> Envelope:
+    """解析包结构。layout=auto 时按头部自动识别；判不出就报错。"""
+    if layout == "auto":
+        layout = detect_layout(data)
+    if layout == LAYOUT_CONTRACT:
+        return _parse_contract(data, strict)
+    if layout == LAYOUT_RUNE:
+        return _parse_rune(data, strict)
+    raise EnvelopeError("UNSUPPORTED_VERSION", f"未知布局 {layout}")
+
+
+def _parse_contract(data: bytes, strict: bool) -> Envelope:
+    """docs/CRYPTO-PACK.md v1：HEADER 112B，块头 16B（INDEX/PT_LEN/CT_LEN/LAST/RSV）。"""
+    if len(data) < CONTRACT_HEADER_LEN:
+        raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT", f"短于 {CONTRACT_HEADER_LEN} 字节的头")
     if data[0:4] != b"YSPK":
         raise EnvelopeError("CRYPTO_MAGIC_MISMATCH", f"MAGIC={data[0:4]!r}")
     version = (data[4], data[5])
     if version != (1, 0):
         raise EnvelopeError("CRYPTO_VERSION_UNSUPPORTED", f"版本 {version}")
-    if _u16(data, 6) != HEADER_LEN:
+    if _u16(data, 6) != CONTRACT_HEADER_LEN:
         raise EnvelopeError("CRYPTO_HEADER_INVALID", f"HEADER_LEN={_u16(data, 6)}")
 
     env = Envelope(
-        raw=data,
-        version=version,
-        flags=_u32(data, 8),
-        chunk_size=_u32(data, 16),
-        chunk_count=_u32(data, 20),
-        plaintext_size=_u64(data, 24),
-        wrapped_key_len=_u64(data, 32),
-        manifest_len=_u64(data, 40),
-        manifest_pt_len=_u32(data, 48),
-        sender_pub_len=_u32(data, 52),
-        sig_len=_u64(data, 72),
-        prelude_len=0,
+        raw=data, layout=LAYOUT_CONTRACT, version=version, flags=_u32(data, 8),
+        chunk_size=_u32(data, 16), chunk_count=_u32(data, 20),
+        plaintext_size=_u64(data, 24), prelude_len=0,
+        header_flip_off=56, header_flip_note="KDF_SALT 首字节（签名覆盖区）",
     )
+    wrapped_key_len = _u64(data, 32)
+    manifest_len = _u64(data, 40)
+    manifest_pt_len = _u32(data, 48)
+    sender_pub_len = _u32(data, 52)
+    sig_len = _u64(data, 72)
+
     if not (MIN_CHUNK_SIZE <= env.chunk_size <= MAX_CHUNK_SIZE):
         raise EnvelopeError("CRYPTO_HEADER_INVALID", f"CHUNK_SIZE={env.chunk_size}")
     if not (1 <= env.chunk_count <= 1048576):
         raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT", f"CHUNK_COUNT={env.chunk_count}")
-    if env.manifest_len != env.manifest_pt_len + TAG_LEN:
+    if manifest_len != manifest_pt_len + TAG_LEN:
         raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT",
-                            f"MANIFEST_LEN={env.manifest_len} vs PT={env.manifest_pt_len}+16")
-    if env.wrapped_key_len != WALKED_WRAPPED_KEY_LEN:
-        raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT", f"WRAPPED_KEY_LEN={env.wrapped_key_len}")
-    if env.sender_pub_len != UNCOMPRESSED_PUB_LEN:
-        raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT", f"SENDER_PUB_LEN={env.sender_pub_len}")
+                            f"MANIFEST_LEN={manifest_len} vs PT={manifest_pt_len}+16")
+    if wrapped_key_len != CONTRACT_WRAPPED_KEY_LEN:
+        raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT", f"WRAPPED_KEY_LEN={wrapped_key_len}")
+    if sender_pub_len != CONTRACT_PUB_LEN:
+        raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT", f"SENDER_PUB_LEN={sender_pub_len}")
 
-    env.prelude_len = (HEADER_LEN + env.sender_pub_len + env.wrapped_key_len
-                       + env.manifest_len + env.sig_len)
+    env.prelude_len = CONTRACT_HEADER_LEN + sender_pub_len + wrapped_key_len + manifest_len + sig_len
     if env.prelude_len > len(data):
         raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT",
                             f"PRELUDE_LEN={env.prelude_len} 超出包长 {len(data)}")
 
     off = env.prelude_len
     for i in range(env.chunk_count):
-        if off + CHUNK_HDR_LEN + TAG_LEN > len(data):
+        if off + CONTRACT_CHUNK_HDR_LEN + TAG_LEN > len(data):
             raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT",
                                 f"第 {i} 块记录越界（off={off}，包长={len(data)}）")
-        hdr = data[off:off + CHUNK_HDR_LEN]
+        hdr = data[off:off + CONTRACT_CHUNK_HDR_LEN]
         idx, pt, ct, last = _u32(hdr, 0), _u32(hdr, 4), _u32(hdr, 8), hdr[12]
-        rec_len = CHUNK_HDR_LEN + ct + TAG_LEN
+        rec_len = CONTRACT_CHUNK_HDR_LEN + ct + TAG_LEN
         if off + rec_len > len(data):
             raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT",
                                 f"第 {i} 块密文越界（CT_LEN={ct}）")
-        rec = ChunkRec(i, off, rec_len, idx, pt, ct, last)
-        env.chunks.append(rec)
+        env.chunks.append(BlockRec(i, off, rec_len, off, CONTRACT_CHUNK_HDR_LEN,
+                                   off + CONTRACT_CHUNK_HDR_LEN, ct, idx, last))
         off += rec_len
         if strict:
             if ct != pt:
@@ -263,10 +319,103 @@ def parse_envelope(data: bytes, strict: bool = True) -> Envelope:
         if off != len(data):
             raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT",
                                 f"包尾多出 {len(data) - off} 字节（ENVELOPE_LEN={off}）")
-        expect = -(-env.plaintext_size // env.chunk_size) if env.chunk_size else 0
-        if env.chunk_count != max(1, expect):
+        expect = _expected_block_count(env.plaintext_size, env.chunk_size)
+        if env.chunk_count != expect:
             raise EnvelopeError("CRYPTO_LENGTH_INCONSISTENT",
                                 f"CHUNK_COUNT={env.chunk_count} 与 ceil(PT/CHUNK_SIZE)={expect} 不符")
+    return env
+
+
+def _parse_rune(data: bytes, strict: bool) -> Envelope:
+    """端侧内核当前实现（crypto/sm/src/pack.rs::layout）。
+
+    结构：HEADER(40) ‖ KEY_REC(kind u8=1, len u32=128, wrapped) ‖
+          SIG_REC(kind u8=2, len u32=64, sig) ‖ MANIFEST_REC(ct_len u32, ct, tag16) ‖
+          BLOCK*(index u32, flags u8, ct_len u32, ct, tag16)
+    """
+    if len(data) < RUNE_HEADER_LEN:
+        raise EnvelopeError("TRUNCATED", f"短于 {RUNE_HEADER_LEN} 字节的头")
+    if data[0:4] != b"YSPK":
+        raise EnvelopeError("BAD_MAGIC", f"MAGIC={data[0:4]!r}")
+    version = (data[4], data[5])
+    if version[0] != 1:
+        raise EnvelopeError("UNSUPPORTED_VERSION", f"版本 {version}")
+    if data[5] != 1:
+        raise EnvelopeError("UNSUPPORTED_VERSION", f"suite={data[5]}")
+    if data[6] & ~0x01 or not data[6] & 0x01:
+        raise EnvelopeError("BAD_FLAGS", f"flags={data[6]}")
+    if data[7] != 0:
+        raise EnvelopeError("BAD_FLAGS", f"reserved={data[7]}")
+
+    env = Envelope(
+        raw=data, layout=LAYOUT_RUNE, version=version, flags=data[6],
+        chunk_size=_u32(data, 24), chunk_count=_u32(data, 28),
+        plaintext_size=_u64(data, 32), prelude_len=0,
+        header_flip_off=8, header_flip_note="FILE_ID 首字节（派生清单密钥，且被签名覆盖）",
+    )
+    if not (1 <= env.chunk_size <= RUNE_MAX_BLOCK_SIZE):
+        raise EnvelopeError("BAD_FLAGS", f"block_size={env.chunk_size}")
+
+    off = RUNE_HEADER_LEN
+    if off + 1 + 4 + RUNE_KEY_REC_LEN > len(data):
+        raise EnvelopeError("TRUNCATED", "KEY_REC 越界")
+    if data[off] != 1:
+        raise EnvelopeError("BAD_KEY_RECORD", f"kind={data[off]}")
+    klen = _u32(data, off + 1)
+    if klen != RUNE_KEY_REC_LEN:
+        raise EnvelopeError("BAD_KEY_RECORD", f"len={klen}")
+    off += 1 + 4 + klen
+
+    if off + 1 + 4 + RUNE_SIG_LEN > len(data):
+        raise EnvelopeError("TRUNCATED", "SIG_REC 越界")
+    if data[off] != 2:
+        raise EnvelopeError("BAD_SIGNATURE_RECORD", f"kind={data[off]}")
+    slen = _u32(data, off + 1)
+    if slen != RUNE_SIG_LEN:
+        raise EnvelopeError("BAD_SIGNATURE_RECORD", f"len={slen}")
+    off += 1 + 4 + slen
+
+    if off + 4 + TAG_LEN > len(data):
+        raise EnvelopeError("TRUNCATED", "MANIFEST_REC 越界")
+    man_ct_len = _u32(data, off)
+    off += 4 + man_ct_len + TAG_LEN
+    if off > len(data):
+        raise EnvelopeError("TRUNCATED", "MANIFEST_REC 密文越界")
+    env.prelude_len = off
+
+    expect_count = _expected_block_count(env.plaintext_size, env.chunk_size)
+    if strict and env.chunk_count != expect_count:
+        raise EnvelopeError("MANIFEST_MISMATCH",
+                            f"block_count={env.chunk_count} 与 ceil(PT/BLOCK_SIZE)={expect_count} 不符")
+
+    for i in range(env.chunk_count):
+        if off + RUNE_BLOCK_HDR_LEN + TAG_LEN > len(data):
+            raise EnvelopeError("TRUNCATED", f"第 {i} 块记录越界（off={off}）")
+        idx = _u32(data, off)
+        flags = data[off + 4]
+        ct_len = _u32(data, off + 5)
+        rec_len = RUNE_BLOCK_HDR_LEN + ct_len + TAG_LEN
+        if off + rec_len > len(data):
+            raise EnvelopeError("TRUNCATED", f"第 {i} 块密文越界（ct_len={ct_len}）")
+        env.chunks.append(BlockRec(i, off, rec_len, off, RUNE_BLOCK_HDR_LEN,
+                                   off + RUNE_BLOCK_HDR_LEN, ct_len, idx, flags))
+        off += rec_len
+        if strict:
+            if idx < i:
+                raise EnvelopeError("DUPLICATE_BLOCK", f"第 {i} 块 index={idx}")
+            if idx > i or idx >= env.chunk_count:
+                raise EnvelopeError("BLOCK_SEQUENCE", f"第 {i} 块 index={idx}")
+            want_flags = 1 if i == env.chunk_count - 1 else 0
+            if flags != want_flags:
+                raise EnvelopeError("LAST_FLAG_MISMATCH",
+                                    f"第 {i} 块 flags={flags}（应为 {want_flags}）")
+            want_len = _block_plain_len(env.plaintext_size, env.chunk_size, i, env.chunk_count)
+            if ct_len != want_len:
+                raise EnvelopeError("MANIFEST_MISMATCH",
+                                    f"第 {i} 块 ct_len={ct_len}（应为 {want_len}）")
+
+    if strict and off != len(data):
+        raise EnvelopeError("TRAILING_BYTES", f"包尾多出 {len(data) - off} 字节")
     return env
 
 
@@ -282,7 +431,7 @@ class Tamper:
     skip: str = ""
 
 
-def _middle(env: Envelope) -> ChunkRec:
+def _middle(env: Envelope) -> BlockRec:
     return env.chunks[len(env.chunks) // 2]
 
 
@@ -293,15 +442,15 @@ def _xor(buf: bytes, off: int, mask: int = 0x01) -> bytes:
 
 
 def t_flip_envelope_header(env: Envelope, _donor: Envelope | None) -> Tamper:
-    off = 56  # KDF_SALT 首字节，位于 HDR_CORE（签名覆盖区）
-    return Tamper("flip-envelope-header", f"HEADER[{off}]^=0x01（KDF_SALT，签名覆盖区）",
+    off = env.header_flip_off
+    return Tamper("flip-envelope-header", f"HEADER[{off}]^=0x01（{env.header_flip_note}）",
                   _xor(env.raw, off))
 
 
 def t_flip_chunk_header(env: Envelope, _donor: Envelope | None) -> Tamper:
     rec = _middle(env)
-    off = rec.rec_off  # CHUNK_INDEX 低字节
-    return Tamper("flip-chunk-header", f"块[{rec.seq}] 块头 CHUNK_INDEX 末字节 ^=0x01",
+    off = rec.hdr_off  # 两种布局里块号都是块头的第一个 u32
+    return Tamper("flip-chunk-header", f"块[{rec.seq}] 块头块号末字节 ^=0x01",
                   _xor(env.raw, off))
 
 
@@ -463,41 +612,53 @@ class CmdBackend(Backend):
     label = "cmd"
 
     def __init__(self, template: str, error_regex: str = r"CRYPTO_[A-Z0-9_]+",
-                 timeout: float = 120.0):
+                 timeout: float = 120.0, expect_plaintext: bytes | None = None):
         self.template = template
         self.error_regex = re.compile(error_regex)
         self.timeout = timeout
+        self.expect_plaintext = expect_plaintext
         self.note = template
 
-    def _run(self, data: bytes, workdir: str, tag: str) -> tuple[int, str, bool]:
+    def _run(self, data: bytes, workdir: str, tag: str) -> tuple[int, str, bool, str]:
         path = os.path.join(workdir, f"probe-{tag}.yspk")
+        out_path = os.path.join(workdir, f"probe-{tag}.out")
         with open(path, "wb") as f:
             f.write(data)
         cmd = (self.template
                .replace("{in}", shlex.quote(path))
-               .replace("{out}", shlex.quote(os.path.join(workdir, f"probe-{tag}.out"))))
+               .replace("{out}", shlex.quote(out_path)))
         proc = subprocess.run(cmd, shell=True, capture_output=True, text=True,
                               timeout=self.timeout)
         text = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
         m = self.error_regex.search(text)
         if m:
-            return proc.returncode, m.group(0), True
+            return proc.returncode, m.group(0), True, out_path
         first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
-        return proc.returncode, first[:160], False
+        return proc.returncode, first[:160], False, out_path
 
     def decrypt_succeeds(self, data: bytes) -> tuple[bool | None, str]:
         with tempfile.TemporaryDirectory(prefix="ys-probe-") as wd:
-            rc, detail, _matched = self._run(data, wd, "baseline")
-        return rc == 0, detail
+            rc, detail, _matched, out_path = self._run(data, wd, "baseline")
+            if rc != 0:
+                return False, detail or f"退出码 {rc}"
+            if self.expect_plaintext is not None:
+                got = Path(out_path).read_bytes() if os.path.exists(out_path) else b""
+                if got != self.expect_plaintext:
+                    return False, (f"明文不一致（得到 {len(got)}B，应为 "
+                                   f"{len(self.expect_plaintext)}B）")
+            return True, detail or "解密成功"
 
     def decrypt_fails(self, data: bytes) -> tuple[bool, str]:
         with tempfile.TemporaryDirectory(prefix="ys-probe-") as wd:
-            rc, detail, matched = self._run(data, wd, "tamper")
-        if rc == 0:
-            return False, "解密命令返回 0（视为成功解密）"
+            rc, detail, matched, out_path = self._run(data, wd, "tamper")
+            if rc == 0:
+                leaked = os.path.getsize(out_path) if os.path.exists(out_path) else 0
+                if leaked:
+                    return False, f"解密命令返回 0 且写出 {leaked}B 明文"
+                return False, "解密命令返回 0（视为成功解密）"
         if not matched:
             # 只凭退出码判定，如实标注，别把"程序崩了"当成"明确报错"
-            return True, f"退出码 {rc}（未取到 CRYPTO_* 错误码：{detail or '-'}）"
+            return True, f"退出码 {rc}（未取到错误码：{detail or '-'}）"
         return True, detail
 
 
@@ -558,7 +719,10 @@ def build_backend(args, pristine: bytes) -> Backend:
     if args.backend == "cmd":
         if not args.decrypt_cmd:
             raise EnvelopeError("BLOCKED", "--backend cmd 需要 --decrypt-cmd（或 YS_DECRYPT_CMD）")
-        return CmdBackend(args.decrypt_cmd, args.error_regex, args.timeout)
+        expect = None
+        if args.expect_plaintext:
+            expect = Path(args.expect_plaintext).read_bytes()
+        return CmdBackend(args.decrypt_cmd, args.error_regex, args.timeout, expect)
     if args.backend == "cargo-test":
         crate = args.rune_crate or ""
         if not crate:
@@ -584,9 +748,9 @@ class CaseResult:
 
 def execute(backend: Backend, pristine: bytes, donor: bytes | None,
             case_names: Sequence[str], out_dir: str | None, keep: bool,
-            log=print) -> tuple[list[CaseResult], int]:
-    env = parse_envelope(pristine)
-    env_donor = parse_envelope(donor) if donor else None
+            log=print, layout: str = "auto") -> tuple[list[CaseResult], int]:
+    env = parse_envelope(pristine, layout=layout)
+    env_donor = parse_envelope(donor, layout=layout) if donor else None
     results: list[CaseResult] = []
 
     run_dir = out_dir or tempfile.mkdtemp(prefix="ys-tamper-")
@@ -673,7 +837,7 @@ def load_fixture(path: Path | None = None) -> bytes:
 
 
 def build_synthetic_envelope(chunk_pt_lens: Sequence[int], chunk_size: int = 32) -> bytes:
-    """造一个**结构合法**的假包（内容随机），只用于解析/构造/判定自测。
+    """按 contract-v1 造一个**结构合法**的假包（内容随机），只用于解析/构造/判定自测。
 
     不含任何真实密钥：WRAPPED_KEY / SIG / tag 全是随机字节，密码学上无效。
     """
@@ -683,11 +847,11 @@ def build_synthetic_envelope(chunk_pt_lens: Sequence[int], chunk_size: int = 32)
     manifest_len = len(manifest_pt) + TAG_LEN
     sig = os.urandom(71)
     sender_pub = b"\x04" + os.urandom(64)
-    wrapped = os.urandom(WALKED_WRAPPED_KEY_LEN)
-    header = bytearray(HEADER_LEN)
+    wrapped = os.urandom(CONTRACT_WRAPPED_KEY_LEN)
+    header = bytearray(CONTRACT_HEADER_LEN)
     header[0:4] = b"YSPK"
     header[4:6] = bytes([1, 0])
-    struct.pack_into(">H", header, 6, HEADER_LEN)
+    struct.pack_into(">H", header, 6, CONTRACT_HEADER_LEN)
     struct.pack_into(">I", header, 8, 0x00000002)           # FLAGS: SENDER_SIGNED
     header[12:16] = bytes([1, 1, 1, 1])
     struct.pack_into(">I", header, 16, chunk_size)
@@ -702,12 +866,48 @@ def build_synthetic_envelope(chunk_pt_lens: Sequence[int], chunk_size: int = 32)
     # RESERVED 已全 0
     out = bytearray(header) + sender_pub + wrapped + manifest_pt + os.urandom(TAG_LEN) + sig
     for i, pt_len in enumerate(chunk_pt_lens):
-        rec = bytearray(CHUNK_HDR_LEN)
+        rec = bytearray(CONTRACT_CHUNK_HDR_LEN)
         struct.pack_into(">I", rec, 0, i)
         struct.pack_into(">I", rec, 4, pt_len)
         struct.pack_into(">I", rec, 8, pt_len)
         rec[12] = 1 if i == n - 1 else 0
         out += rec + os.urandom(pt_len) + os.urandom(TAG_LEN)
+    return bytes(out)
+
+
+def build_synthetic_rune_envelope(block_pt_lens: Sequence[int], block_size: int) -> bytes:
+    """按 rune-v1 造一个**结构合法**的假包（内容随机），用于在没有端侧二进制时自测。
+
+    同样不含任何真实密钥：wrapped / sig / tag 全是随机字节。
+    """
+    n = len(block_pt_lens)
+    total = sum(block_pt_lens)
+    header = bytearray(RUNE_HEADER_LEN)
+    header[0:4] = b"YSPK"
+    header[4] = 1                     # VERSION
+    header[5] = 1                     # SUITE
+    header[6] = 0x01                  # FLAGS：含加密清单
+    header[7] = 0
+    header[8:24] = os.urandom(16)     # FILE_ID
+    struct.pack_into(">I", header, 24, block_size)
+    struct.pack_into(">I", header, 28, n)
+    struct.pack_into(">Q", header, 32, total)
+
+    out = bytearray(header)
+    out.append(1)
+    out += len(os.urandom(RUNE_KEY_REC_LEN)).to_bytes(4, "big")
+    out += os.urandom(RUNE_KEY_REC_LEN)
+    out.append(2)
+    out += RUNE_SIG_LEN.to_bytes(4, "big")
+    out += os.urandom(RUNE_SIG_LEN)
+    man_ct = os.urandom(96)
+    out += len(man_ct).to_bytes(4, "big")
+    out += man_ct + os.urandom(TAG_LEN)
+    for i, pt_len in enumerate(block_pt_lens):
+        out += i.to_bytes(4, "big")
+        out.append(1 if i == n - 1 else 0)
+        out += pt_len.to_bytes(4, "big")
+        out += os.urandom(pt_len) + os.urandom(TAG_LEN)
     return bytes(out)
 
 
@@ -839,8 +1039,41 @@ def _selftest() -> int:
             assert fails2 and "未取到" in why2, why2
         return "cmd 后端接线正常；无错误码时如实标注"
 
+    def c_layout_detect():
+        c = build_synthetic_envelope([32, 32, 16])
+        r = build_synthetic_rune_envelope([1024, 1024, 13], 1024)
+        assert detect_layout(c) == LAYOUT_CONTRACT, detect_layout(c)
+        assert detect_layout(r) == LAYOUT_RUNE, detect_layout(r)
+        return "contract-v1 / rune-v1 均可自动识别"
+
+    def c_rune_layout():
+        raw = build_synthetic_rune_envelope([1024, 1024, 13], 1024)
+        env = parse_envelope(raw)
+        assert env.layout == LAYOUT_RUNE, env.layout
+        assert (env.chunk_size, env.chunk_count, env.plaintext_size) == (1024, 3, 2061)
+        assert [c.rec_len for c in env.chunks] == [1024 + 9 + 16, 1024 + 9 + 16, 13 + 9 + 16]
+        assert [c.last_flag for c in env.chunks] == [0, 0, 1]
+        assert env.prelude_len == 40 + 1 + 4 + 128 + 1 + 4 + 64 + 4 + 96 + 16
+        return "rune-v1：3 块 / PRELUDE 偏移 / 末块标志 正确"
+
+    def c_rune_tamper():
+        raw = build_synthetic_rune_envelope([1024, 1024, 13], 1024)
+        donor = build_synthetic_rune_envelope([1024, 1024, 13], 1024)
+        names = [n for n, _ in REQUIRED_CASES]
+        res, code = execute(SelftestBackend(raw), raw, donor, names, None, False,
+                            log=lambda *_: None)
+        assert res[0].status == "PASS", res[0]
+        bad = [r for r in res[1:] if r.status != "PASS"]
+        assert not bad, [(r.case, r.detail) for r in bad]
+        assert code == EXIT_PASS, code
+        return "rune-v1 四类篡改全部被拒：" + "，".join(
+            f"{r.case}={r.detail}" for r in res[1:])
+
     case("解析契约样例（YSPK v1 / 743B）", c_fixture)
     case("解析单块契约样例（522B）", c_fixture_v1)
+    case("布局自动识别", c_layout_detect)
+    case("rune-v1 布局解析", c_rune_layout)
+    case("rune-v1 四类篡改", c_rune_tamper)
     case("合成包解析", c_synthetic)
     case("四类篡改 + 块头/数据区翻转", c_baseline_and_tamper)
     case("附加用例（tag/截断/半块）", c_extra_cases)
@@ -883,7 +1116,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--rune-crate", default=os.environ.get("YS_RUNE_CRATE"))
     ap.add_argument("--cargo-test-error-filter", default="tamper_rejects")
     ap.add_argument("--cargo-test-ok-filter", default=None)
-    ap.add_argument("--error-regex", default=r"CRYPTO_[A-Z0-9_]+")
+    ap.add_argument("--error-regex", default=os.environ.get("YS_ERROR_REGEX", r"CRYPTO_[A-Z0-9_]+"))
+    ap.add_argument("--layout", default=os.environ.get("YS_LAYOUT", "auto"),
+                    choices=["auto", LAYOUT_CONTRACT, LAYOUT_RUNE],
+                    help="包布局；auto 按头部自动识别（contract-v1 / rune-v1）")
+    ap.add_argument("--expect-plaintext",
+                    help="未篡改包应解出的明文文件；给了就逐字节比对（baseline 才算数）")
     ap.add_argument("--cases", help="逗号分隔的用例白名单（默认要求的 6 条）")
     ap.add_argument("--extra-cases", action="store_true", help="追加 tag/半块/截断 3 条")
     ap.add_argument("--out-dir", help="篡改产物落盘目录（给了就保留）")
@@ -915,7 +1153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_BLOCKED
 
     try:
-        env = parse_envelope(pristine)
+        env = parse_envelope(pristine, layout=args.layout)
     except EnvelopeError as exc:
         print(f"[BLOCKED] 密文包结构不合法：{exc.code} {exc.msg}", file=sys.stderr)
         return EXIT_BLOCKED
@@ -924,7 +1162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.donor:
         try:
             donor = Path(args.donor).read_bytes()
-            parse_envelope(donor)
+            parse_envelope(donor, layout=args.layout)
         except (OSError, EnvelopeError) as exc:
             print(f"[BLOCKED] --donor 不可用：{exc}", file=sys.stderr)
             return EXIT_BLOCKED
@@ -946,7 +1184,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.dry_run:
         print("\n[dry-run] 只构造不执行：")
         for n in names:
-            t = ALL_CASES[n](env, parse_envelope(donor) if donor else None)
+            t = ALL_CASES[n](env, parse_envelope(donor, layout=args.layout) if donor else None)
             print(f"  {'SKIP' if t.skip else 'OK  '}  {n:<22} {t.skip or t.desc}")
         return EXIT_PASS
 
@@ -960,7 +1198,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("[warn] 当前走的是测试入口而非生产导出路径 —— 这份结果不能作为最终验收证据")
 
     try:
-        results, code = execute(backend, pristine, donor, names, args.out_dir, args.keep)
+        results, code = execute(backend, pristine, donor, names, args.out_dir, args.keep,
+                                layout=args.layout)
     except (EnvelopeError, subprocess.TimeoutExpired, RuntimeError) as exc:
         print(f"[BLOCKED] 执行中断：{exc}", file=sys.stderr)
         return EXIT_BLOCKED
@@ -971,7 +1210,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "backend": backend.label,
             "production_path": backend.production,
-            "envelope": {"source": src, "summary": env.summary(), "bytes": len(pristine)},
+            "envelope": {"source": src, "layout": env.layout, "summary": env.summary(),
+                         "bytes": len(pristine)},
+            "expected_plaintext": args.expect_plaintext or None,
             "exit_code": code,
             "cases": [{"case": r.case, "status": r.status, "expect": r.expect,
                        "detail": r.detail, "desc": r.desc, "artifact": r.artifact}
