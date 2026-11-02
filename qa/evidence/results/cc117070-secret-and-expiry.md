@@ -71,3 +71,20 @@
 3. `4eda665` 的实际校验是**重算**，所以"只换 secret 不吊销"在这版**不成立**（实测 401 `INVALID`）；
    源码里 `ValidateHash` 的注释"不重算"是**过时注释**，线上路径未使用它——建议 Core 顺手修掉这句，
    否则后来人会照注释以为 secret 不参与校验。
+
+## 五、`dfd3e82`（`83a99ffc…`，拟部署版本）的三个 grep
+
+```
+AUTH_TOKEN_EXPIRED = 0        （无任何文件命中）
+AUTH_TOKEN_REVOKED = 0
+AUTH_TOKEN_STALE   = 7        （README / api_test / handlers_transfers / spec/errors / spec_test / token-rotation-check.sh）
+```
+
+- **`EXPIRED` 触发点：不存在**（`git grep -n` 无输出，也没有 `6*time.Hour` / `30*time.Minute` 这类凭据时效判定；
+  只有 `handlers_blobs.go` 的下载租约 `leaseExpiry`，那是租约期限而非 `AUTH_TOKEN_EXPIRED` 错误码）。
+- 该 head 的 secret 语义此前已实测：**只改 secret → 401 `AUTH_TOKEN_INVALID`**（见 `83a99ffc-core-three-steps.md` 第 ② 行）。
+
+**因此：若部署 `dfd3e82`，契约必须退回"两个凭据码"**（`STALE` / `INVALID`），
+`AUTH_TOKEN_EXPIRED` 退回 **K2 预留名**（v1 不实现），超期走 **410 `TRANSFER_EXPIRED`**；
+同时必须把"只换 secret 不吊销"改回"**只换 secret 即吊销**（401 `INVALID`）"。
+只有部署 `06c9f56` 才成立"三码 + secret 不吊销"。
