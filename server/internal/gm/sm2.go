@@ -229,8 +229,13 @@ func verifyRS(pub *sm2Point, msg []byte, r, s *big.Int, id string) bool {
 	return rc.Cmp(r) == 0
 }
 
-// VerifySM2DER 校验 DER 编码（SEQUENCE{r,s}）的签名。
+// VerifySM2DER 校验 DER 编码（SEQUENCE{r,s}）的签名（默认 userID）。
 func VerifySM2DER(pubRaw, msg, der []byte) bool {
+	return VerifySM2DERWithID(pubRaw, msg, der, DefaultSM2ID)
+}
+
+// VerifySM2DERWithID 同上，但可指定 userID（只用于向量核对；服务端固定用默认值）。
+func VerifySM2DERWithID(pubRaw, msg, der []byte, id string) bool {
 	r, s, err := parseSM2DER(der)
 	if err != nil {
 		return false
@@ -239,7 +244,7 @@ func VerifySM2DER(pubRaw, msg, der []byte) bool {
 	if err != nil {
 		return false
 	}
-	return verifyRS(pub, msg, r, s, DefaultSM2ID)
+	return verifyRS(pub, msg, r, s, id)
 }
 
 // parseSM2DER 严格解析 SEQUENCE{INTEGER r, INTEGER s}。

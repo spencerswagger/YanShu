@@ -29,6 +29,8 @@ const (
 
 	// 403
 	ErrSignalPeerMismatch ErrorCode = "SIGNAL_PEER_MISMATCH"
+	// ErrNotTransferParty：已认证但不是该传输的当事人（裁决 G1）。
+	ErrNotTransferParty ErrorCode = "NOT_TRANSFER_PARTY"
 
 	// 404
 	ErrCodeNotFound     ErrorCode = "CODE_NOT_FOUND"
@@ -86,6 +88,7 @@ var errStatus = map[ErrorCode]int{
 	ErrAuthCodeMismatch:     http.StatusUnauthorized,
 
 	ErrSignalPeerMismatch: http.StatusForbidden,
+	ErrNotTransferParty:   http.StatusForbidden,
 
 	ErrCodeNotFound:     http.StatusNotFound,
 	ErrTransferNotFound: http.StatusNotFound,
@@ -136,6 +139,7 @@ var errMessage = map[ErrorCode]string{
 	ErrAuthCodeMismatch:     "X-YS-Code does not match the signed code",
 
 	ErrSignalPeerMismatch: "signal peers do not match the transfer",
+	ErrNotTransferParty:   "authenticated credential is not a party of this transfer",
 
 	ErrCodeNotFound:     "code is not registered",
 	ErrTransferNotFound: "transfer not found",

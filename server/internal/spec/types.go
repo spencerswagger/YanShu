@@ -6,10 +6,14 @@ package spec
 
 // ErrorResponse 是全部非 2xx 响应的统一外壳（API.md §0.2）。
 //
-// Missing 是 CHUNKS_MISSING 的附加信息（API.md §6.6 要求带 missing 数组）；
-// 契约的信封没有 details 槽位，这里暂放顶层，已在 DRAFT-FIELDS 记为待确认项。
+// Details 承载错误附加信息（裁决 G2）；v1 只允许 `missing`。
 type ErrorResponse struct {
-	Error   ErrorBody      `json:"error"`
+	Error   ErrorBody     `json:"error"`
+	Details *ErrorDetails `json:"details,omitempty"`
+}
+
+// ErrorDetails 是错误附加信息（裁决 G2：v1 只允许 `missing` 一个键）。
+type ErrorDetails struct {
 	Missing []MissingRange `json:"missing,omitempty"`
 }
 
@@ -32,7 +36,7 @@ type ConfigResponse struct {
 	MaxPlaintextSize  uint64       `json:"max_plaintext_size"`
 	MaxTTLSeconds     uint32       `json:"max_ttl_seconds"`
 	STUNURLs          []string     `json:"stun_urls"`
-	WSURL             string       `json:"ws_url"`
+	WSURL             *string      `json:"ws_url"`
 	Limits            ConfigLimits `json:"limits"`
 }
 

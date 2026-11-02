@@ -81,12 +81,21 @@ func (t *TokenIssuer) UploadToken(transferID string) (string, error) {
 	return B64.EncodeToString(mac.Sum(nil)), nil
 }
 
-// VerifyUploadToken 常数时间比对。
-func VerifyUploadToken(token string, wantHash []byte) bool {
+// Validate 校验 token：既要求它是当前密钥对 transfer_id 的正确派生值，
+// 也要求它与库里存的 SM3 一致。
+//
+// 裁决 G5：轮换 TOKEN_SECRET 会让存量 token 失效（≤ TTL 24h）——这条只有在
+// "按当前密钥重算" 时才成立；只比对哈希无法让轮换生效。
+func (t *TokenIssuer) Validate(token, transferID string, storedHash []byte) bool {
 	if token == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare(UploadTokenHash(token), wantHash) == 1
+	expected, err := t.UploadToken(transferID)
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare(UploadTokenHash(token), UploadTokenHash(expected)) == 1 &&
+		subtle.ConstantTimeCompare(UploadTokenHash(expected), storedHash) == 1
 }
 
 // EqualBytes 是常数时间比较。

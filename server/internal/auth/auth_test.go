@@ -139,14 +139,22 @@ func TestUploadTokenIsDeterministic(t *testing.T) {
 	if other == t1 {
 		t.Fatal("upload token does not depend on transfer id")
 	}
-	if !VerifyUploadToken(t1, UploadTokenHash(t1)) {
-		t.Fatal("verify failed for its own token")
+	if !issuer.Validate(t1, id, UploadTokenHash(t1)) {
+		t.Fatal("validate failed for its own token")
 	}
-	if VerifyUploadToken(t1, UploadTokenHash(other)) {
-		t.Fatal("verify accepted a different token hash")
+	if issuer.Validate(t1, strings.Repeat("c", 32), UploadTokenHash(t1)) {
+		t.Fatal("validate accepted a token for another transfer")
 	}
-	if VerifyUploadToken("", UploadTokenHash(t1)) {
+	if issuer.Validate(other, id, UploadTokenHash(t1)) {
+		t.Fatal("validate accepted a different token")
+	}
+	if issuer.Validate("", id, UploadTokenHash(t1)) {
 		t.Fatal("empty token accepted")
+	}
+	// 轮换密钥后，旧 token 必须失效（裁决 G5）。
+	rotated, _ := NewTokenIssuer([]byte("rotated-secret"))
+	if rotated.Validate(t1, id, UploadTokenHash(t1)) {
+		t.Fatal("token still valid after secret rotation")
 	}
 }
 

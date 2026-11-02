@@ -123,7 +123,7 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 			// 幂等重放要求返回同一个 token；如果期间 TOKEN_SECRET 轮换过，
 			// 重算出来的 token 与库里存的 SM3 不再匹配 —— 这时不能把不可用的
 			// token 发出去，让客户端重新建传输（新传输会拿到新 token）。
-			if !auth.VerifyUploadToken(token, existing.UploadTokenSM3) {
+			if !a.tokens.Validate(token, existing.ID, existing.UploadTokenSM3) {
 				a.log.Warn("idempotency replay after token secret rotation", "transferId", existing.ID)
 				fail(w, r, spec.ErrTransferStateConflict)
 				return
@@ -440,9 +440,9 @@ func (a *API) handleAck(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, "get transfer", err)
 		return
 	}
-	// 契约未给"已认证但不是当事人"的专用错误码，见 DRAFT-FIELDS 的缺口清单。
+	// 裁决 G1：已认证但非当事人 → 403 NOT_TRANSFER_PARTY。
 	if code != t.RecipientCode {
-		fail(w, r, spec.ErrTransferStateConflict)
+		fail(w, r, spec.ErrNotTransferParty)
 		return
 	}
 
@@ -502,8 +502,7 @@ func (a *API) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, store.ErrNotFound):
 			fail(w, r, spec.ErrTransferNotFound)
 		case errors.Is(err, store.ErrNotParty):
-			// 契约未给专用错误码，见 DRAFT-FIELDS 缺口清单。
-			fail(w, r, spec.ErrTransferStateConflict)
+			fail(w, r, spec.ErrNotTransferParty)
 		case errors.Is(err, store.ErrConflict):
 			fail(w, r, spec.ErrTransferStateConflict)
 		default:
@@ -545,7 +544,7 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 		a.internalError(w, r, "get transfer", err)
 		return store.Transfer{}, false
 	}
-	if !auth.VerifyUploadToken(token, t.UploadTokenSM3) {
+	if !a.tokens.Validate(token, t.ID, t.UploadTokenSM3) {
 		fail(w, r, spec.ErrAuthSignatureInvalid)
 		return store.Transfer{}, false
 	}

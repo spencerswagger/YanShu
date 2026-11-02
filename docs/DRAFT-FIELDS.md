@@ -58,10 +58,9 @@
 
 ## 3. 裁决落实与残留待裁决
 
-契约方已就 D1/D2/D3/G5/G9 给出裁决（`docs/contract-rulings.md`，13 项落点表）。
-其中 5 条已在本分支落实；**其余 8 项对应的裁决文档尚未推到远端**（`docs/contract-clarify`
-分支在本地未推，`feat/contracts-v1` 仍停在 `376c5b5`），因此这 8 项暂按现有实现保留，
-拿到文档后逐条对，不静默留白。
+契约方已就 13 项（3 项偏离 + 10 项缺口）给出裁决，文档在归远端分支
+`docs/contract-clarify`（`b1c1250`，只读引用，不合并）。13 项**全部落实**：D1/D2/D3/G5/G9 见 §3.1，
+G1/G2/G3/G4/G7/G8/G10 见 §3.2。裁决全部为澄清与错误码/元数据口径，**不改包字段、不改样例字节**。
 
 ### 3.1 已裁决并落实（5 项）
 
@@ -73,17 +72,18 @@
 | G5 | 采纳 HMAC 派生并写进契约：`base64url(HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖ transfer_id))`，库内只存 `SM3` | `auth.TokenIssuer` 前缀改为 `yanshu/upload-token/v1`（无分隔符）；`TestUploadTokenMatchesContract` 独立复算；`TOKEN_SECRET` 只从 env 读、不落日志 |
 | G9 | 密文摘要头**不纳入 v1**，客户端不得依赖 | 已从 `GET /v1/transfers/{id}/chunks/{index}` 响应里移除 `X-YS-Ciphertext-Sm3`；内部仍存 SM3 用于幂等 |
 
-### 3.2 待裁决（7 项，等 `docs/contract-rulings.md`）
+### 3.2 契约方已裁决并落实（`docs/contract-clarify` @ `b1c1250`）
 
-| # | 缺口 | 当前做法（未变） |
-|---:|---|---|
-| G1 | 「已认证但不是传输当事人」（非接收方 `ack`、非发送方 `revoke`）没有专用错误码 | `409 TRANSFER_STATE_CONFLICT` |
-| G2 | `CHUNKS_MISSING` 要求带 `missing` 数组，但错误信封没有 `details` 槽位 | 放在错误体顶层 |
-| G3 | `§2.1` 白名单未列服务端必需的派生状态（`prelude_received`、`received_chunks`、`updated_at`、`upload_token_sm3`、`uploader_ip`、租约表、幂等表） | 已落库并在迁移文件注明理由 |
-| G4 | `§11.4` 按 IP 配额需要上传者 IP，但 `§2.1` 只在审计域列了 `ip` | `transfers.uploader_ip`（派生列） |
-| G7 | 重复注册（同码同公钥）语义未定义 | 幂等 `200`，不覆盖昵称 |
-| G8 | 终结后 `GET /v1/transfers/{id}` 的字段集未写清 | 保留白名单元数据，去掉 `prelude_sm3` 与 `lease_expires_at` |
-| G10 | `GET /v1/config` 的 `stun_urls` / `ws_url` 默认值未定义 | 由 `YANSHU_STUN_URLS` / `YANSHU_WS_URL` 注入 |
+| # | 裁决 | 落实 |
+|---|---|---|
+| G1 | 新增 `403 NOT_TRANSFER_PARTY`（已认证但非当事人） | `spec.ErrNotTransferParty`；`handleAck`（非接收方）与 `store.ErrNotParty`（非发送方 revoke）改用它 |
+| G2 | 错误信封新增可选 `details` 对象，v1 只允许键 `missing` | `spec.ErrorDetails{Missing}`；`CHUNKS_MISSING` 改为 `{"error":{…},"details":{"missing":[…]}}`，不再放顶层 |
+| G3 | 白名单新增「派生状态」一组（`prelude_received`/`received_chunks`/`upload_token_sm3`/`uploaded_bytes`/租约/幂等键） | 与现有 schema 一致；`schema_test.go` 白名单即该清单，新增列必须先改白名单 |
+| G4 | `transfers.uploader_ip` 列入白名单（仅配额/反滥用，不对外返回） | 已落库；`/v1/transfers/{id}` 响应不含该字段 |
+| G5 | `upload_token = base64url(HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1"‖TRANSFER_ID))`；轮换令存量 token 失效 | `auth.TokenIssuer.Validate` 改为**按当前密钥重算 + 比对 SM3**；轮换后旧 token → 401，幂等重放 → 409 |
+| G7 | 重复注册：`200` 幂等、`registered_at` 不变、不覆盖昵称 | 已实现（返回既有记录） |
+| G8 | 终态 `GET /transfers/{id}` 固定字段集，不返回 `prelude_sm3` / `lease_expires_at` | 已实现（`transferResponse` 在终态去掉这两个字段） |
+| G10 | `stun_urls` ≥1 且禁 `turn:`；`ws_url` 可为 `null`；config 不得含密钥/TURN 凭据/内部地址 | `config.Load` 启动校验（空列表/非 stun:/turn: 直接报错）；`ws_url` 空时返回 `null` |
 
 （原 G6「码归一化」已由 D3 裁决关闭。）
 

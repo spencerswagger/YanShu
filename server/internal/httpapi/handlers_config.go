@@ -12,6 +12,11 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if !a.validateQuery(w, r) {
 		return
 	}
+	var wsURL *string
+	if a.cfg.WSURL != "" {
+		u := a.cfg.WSURL
+		wsURL = &u
+	}
 	writeJSON(w, http.StatusOK, spec.ConfigResponse{
 		APIVersion:        spec.APIVersion,
 		CryptoPackVersion: spec.CryptoPackVersion,
@@ -19,7 +24,7 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 		MaxPlaintextSize:  spec.MaxPlaintextSize,
 		MaxTTLSeconds:     spec.MaxTTLSeconds,
 		STUNURLs:          a.cfg.STUNURLs,
-		WSURL:             a.cfg.WSURL,
+		WSURL:             wsURL,
 		Limits: spec.ConfigLimits{
 			CodeLookupPerMin:      spec.DefaultLimits.CodeLookupPerIP.Max,
 			ChallengePerMin:       spec.DefaultLimits.ChallengePerIP.Max,

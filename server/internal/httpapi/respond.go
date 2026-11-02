@@ -48,7 +48,7 @@ func writeError(w http.ResponseWriter, r *http.Request, e apiError) {
 		w.Header().Set(spec.HeaderRateLimitReset, strconv.Itoa(secs))
 	}
 	if len(e.missing) > 0 {
-		body.Missing = e.missing
+		body.Details = &spec.ErrorDetails{Missing: e.missing}
 	}
 	writeJSON(w, e.code.Status(), body)
 }

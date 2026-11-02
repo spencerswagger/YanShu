@@ -267,8 +267,16 @@ func TestConfig(t *testing.T) {
 	if cfg.APIVersion != "v1" || cfg.CryptoPackVersion != "YSPK/1.0" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
-	if len(cfg.STUNURLs) == 0 || cfg.WSURL == "" {
-		t.Fatalf("missing stun/ws: %+v", cfg)
+	if len(cfg.STUNURLs) == 0 {
+		t.Fatalf("missing stun urls: %+v", cfg)
+	}
+	for _, u := range cfg.STUNURLs {
+		if !strings.HasPrefix(u, "stun:") {
+			t.Fatalf("non-stun url: %q", u)
+		}
+	}
+	if cfg.WSURL == nil || *cfg.WSURL == "" {
+		t.Fatalf("missing ws url: %+v", cfg)
 	}
 	if strings.Contains(string(resp.body), "turn:") {
 		t.Fatal("config must not advertise TURN")
@@ -617,10 +625,10 @@ func TestRevoke(t *testing.T) {
 		t.Fatalf("idempotent revoke: %d %s", resp.status, resp.body)
 	}
 
-	// 非发送方撤回 → 409（契约缺专用错误码，见 DRAFT-FIELDS）。
+	// 裁决 G1：非当事人撤回 → 403 NOT_TRANSFER_PARTY。
 	other, _ := e.register("other")
 	e.wantError(e.do(http.MethodPost, spec.RevokePath(tr.TransferID), nil,
-		e.authHeaders(spec.PurposeTransferRevoke, other)), spec.ErrTransferStateConflict)
+		e.authHeaders(spec.PurposeTransferRevoke, other)), spec.ErrNotTransferParty)
 
 	// ack 撤回后的传输 → 409。
 	e.wantError(e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil,
@@ -1049,9 +1057,9 @@ func TestUploadTokenAcrossSecretRotation(t *testing.T) {
 	e2.srv = httptest.NewServer(e2.api.Handler())
 	defer e2.srv.Close()
 
-	// ① 已签发的 token 仍然可用（校验的是 SM3，不是重算）。
-	if resp := e2.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusCreated {
-		t.Fatalf("existing token rejected after rotation: %d %s", resp.status, resp.body)
+	// ① 裁决 G5：轮换 TOKEN_SECRET 后存量 token 失效 → 401（客户端据此重新建传输）。
+	if resp := e2.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusUnauthorized {
+		t.Fatalf("old token after rotation: %d %s", resp.status, resp.body)
 	}
 	// ② 错 token → 401。
 	wrong := e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{

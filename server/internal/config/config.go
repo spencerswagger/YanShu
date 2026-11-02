@@ -103,6 +103,17 @@ func Load() (Config, error) {
 	if c.BlobDir == "" {
 		return Config{}, fmt.Errorf("config: YANSHU_BLOB_DIR is required")
 	}
+	if len(c.STUNURLs) == 0 {
+		return Config{}, fmt.Errorf("config: at least one STUN URL is required (YANSHU_STUN_URLS)")
+	}
+	for _, u := range c.STUNURLs {
+		if strings.HasPrefix(strings.ToLower(u), "turn:") || strings.HasPrefix(strings.ToLower(u), "turns:") {
+			return Config{}, fmt.Errorf("config: TURN is not supported; remove %q from YANSHU_STUN_URLS", u)
+		}
+		if !strings.HasPrefix(strings.ToLower(u), "stun:") {
+			return Config{}, fmt.Errorf("config: only stun: URLs are allowed, got %q", u)
+		}
+	}
 	if c.SweepInterval <= 0 {
 		return Config{}, fmt.Errorf("config: YANSHU_SWEEP_INTERVAL must be positive")
 	}
