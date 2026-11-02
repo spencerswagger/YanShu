@@ -89,8 +89,10 @@ fn ffi_user_code_matches_contract_and_native() {
     }
 }
 
-/// 传错宽度（65 字节缓冲喂 64 字节接口）会得到不同的码——把这条"事故本身"固化，
-/// 提醒后来者：入参宽度必须 64。合法调用不会有这个值。
+/// 传错宽度（65 字节缓冲喂 64 字节接口）会得到不同的码——把这条"事故本身"固化。
+///
+/// **该错误无法在库内检测**：接口没有长度入参，内核按 64 解释、不会报错。
+/// 防线只能是：调用方断言 `len == 64`，或用 65 字节专用入口 `ys_user_code_wire`。
 #[test]
 fn wrong_width_is_detectable_and_documented() {
     let v = unhex(KEYS[0].0);
