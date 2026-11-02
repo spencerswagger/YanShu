@@ -99,8 +99,9 @@ export class WasmKernel {
     this.capabilities = {
       signDer: has('ys_sm2_sign_der'),
       packV1: has('ys_pack_v1'),
-      unpackByCode: has('ys_unpack_v1') && has('ys_unpack_meta_v1'),
-      layoutSwitch: has('ys_set_layout'),
+      // 6 参 = 包内自证来源（契约 P1 新原型）；7 参 = 过渡期"按发送方码校验"那一版
+      selfUnpack: has('ys_unpack_v1') && has('ys_unpack_meta_v1') && exports.ys_unpack_v1.length === 6,
+      codeUnpack: has('ys_unpack_v1') && exports.ys_unpack_v1.length === 7,
       errorNameV1: has('ys_error_name_v1'),
     }
     if (this.layout !== 'contract') {
@@ -445,9 +446,22 @@ export class WasmKernel {
   #unpackArgs({ pack, recipientPrivate, senderPublic, senderCode }) {
     const p = this.#write(pack)
     const priv = this.#write(recipientPrivate)
-    // 优先按"发送方 4 位码"校验（契约 §13 #18，公钥在包内）；
-    // 只给了公钥时走老导出（与包内 SENDER_PUB 逐字节比对，绑定更强）。
-    if (senderCode && this.capabilities.unpackByCode) {
+    // 优先用 6 参 `_v1`：来源由包内 SENDER_PUB 自证，调用方什么都不用给。
+    if (this.capabilities.selfUnpack) {
+      return {
+        mode: 'self',
+        p,
+        priv,
+        code: null,
+        pub: null,
+        release: () => {
+          p.release()
+          priv.release()
+        },
+      }
+    }
+    // 过渡版（7 参 `_v1`）：按发送方 4 位码校验（契约 §13 #18，公钥在包内）
+    if (senderCode && this.capabilities.codeUnpack) {
       const code = this.#write(new TextEncoder().encode(senderCode))
       return {
         mode: 'code',
@@ -485,19 +499,29 @@ export class WasmKernel {
   unpackMeta({ pack, recipientPrivate, senderPublic, senderCode }) {
     const args = this.#unpackArgs({ pack, recipientPrivate, senderPublic, senderCode })
     try {
-      const json = args.mode === 'code'
-        ? this.#outCall(
-            'ys_unpack_meta_v1',
-            (out, cap, outLen) =>
-              this.exports.ys_unpack_meta_v1(args.p.ptr, args.p.len, args.priv.ptr, args.code.ptr, args.code.len, out, cap, outLen),
-            1024,
-          )
-        : this.#outCall(
-            'ys_unpack_meta',
-            (out, cap, outLen) =>
-              this.exports.ys_unpack_meta(args.p.ptr, args.p.len, args.priv.ptr, args.pub.ptr, out, cap, outLen),
-            1024,
-          )
+      let json
+      if (args.mode === 'self') {
+        json = this.#outCall(
+          'ys_unpack_meta_v1',
+          (out, cap, outLen) =>
+            this.exports.ys_unpack_meta_v1(args.p.ptr, args.p.len, args.priv.ptr, out, cap, outLen),
+          1024,
+        )
+      } else if (args.mode === 'code') {
+        json = this.#outCall(
+          'ys_unpack_meta_v1',
+          (out, cap, outLen) =>
+            this.exports.ys_unpack_meta_v1(args.p.ptr, args.p.len, args.priv.ptr, args.code.ptr, args.code.len, out, cap, outLen),
+          1024,
+        )
+      } else {
+        json = this.#outCall(
+          'ys_unpack_meta',
+          (out, cap, outLen) =>
+            this.exports.ys_unpack_meta(args.p.ptr, args.p.len, args.priv.ptr, args.pub ? args.pub.ptr : 0, out, cap, outLen),
+          1024,
+        )
+      }
       try {
         return JSON.parse(new TextDecoder().decode(json))
       } catch {
@@ -511,19 +535,27 @@ export class WasmKernel {
   unpack({ pack, recipientPrivate, senderPublic, senderCode }) {
     const args = this.#unpackArgs({ pack, recipientPrivate, senderPublic, senderCode })
     try {
-      return args.mode === 'code'
-        ? this.#outCall(
-            'ys_unpack_v1',
-            (out, cap, outLen) =>
-              this.exports.ys_unpack_v1(args.p.ptr, args.p.len, args.priv.ptr, args.code.ptr, args.code.len, out, cap, outLen),
-            pack.length + 4096,
-          )
-        : this.#outCall(
-            'ys_unpack',
-            (out, cap, outLen) =>
-              this.exports.ys_unpack(args.p.ptr, args.p.len, args.priv.ptr, args.pub.ptr, out, cap, outLen),
-            pack.length + 4096,
-          )
+      if (args.mode === 'self') {
+        return this.#outCall(
+          'ys_unpack_v1',
+          (out, cap, outLen) => this.exports.ys_unpack_v1(args.p.ptr, args.p.len, args.priv.ptr, out, cap, outLen),
+          pack.length + 4096,
+        )
+      }
+      if (args.mode === 'code') {
+        return this.#outCall(
+          'ys_unpack_v1',
+          (out, cap, outLen) =>
+            this.exports.ys_unpack_v1(args.p.ptr, args.p.len, args.priv.ptr, args.code.ptr, args.code.len, out, cap, outLen),
+          pack.length + 4096,
+        )
+      }
+      return this.#outCall(
+        'ys_unpack',
+        (out, cap, outLen) =>
+          this.exports.ys_unpack(args.p.ptr, args.p.len, args.priv.ptr, args.pub ? args.pub.ptr : 0, out, cap, outLen),
+        pack.length + 4096,
+      )
     } finally {
       args.release()
     }

@@ -40,14 +40,14 @@ export async function receiveTransfer({ api, kernel, session, transferId, sender
   const prelude = await api.getPrelude(transferId)
   if (!prelude.downloadId) throw new ApiError({ code: 'DOWNLOAD_NOT_STARTED', status: 409, message: 'no download id' })
 
-  // 新内核按 4 位发送方码校验（公钥来自包内，§13 #18）；老内核才需要另取发送方公钥
-  const byCode = kernel.capabilities?.unpackByCode
-  const pub = byCode ? null : await senderPublic(meta.sender_code)
+  // 新内核来源由包内 SENDER_PUB 自证（6 参 `_v1`），老内核才需要另取发送方公钥
+  const selfUnpack = kernel.capabilities?.selfUnpack || kernel.capabilities?.codeUnpack
+  const pub = selfUnpack ? null : await senderPublic(meta.sender_code)
   const unpack = kernel.openUnpackSession({
     prelude: prelude.bytes,
     recipientPrivate: session.privateKey,
     senderPublic: pub,
-    senderCode: byCode ? meta.sender_code : null,
+    senderCode: meta.sender_code,
     plaintextSize: Number(meta.plaintext_size),
     chunkSize: Number(meta.chunk_size),
   })
@@ -84,6 +84,10 @@ export async function receiveTransfer({ api, kernel, session, transferId, sender
   }
 
   const finalMeta = unpack.meta || {}
+  // §13 #18：包内 SENDER_PUB 派生的码必须与列表里的发送方码一致（内核自证之后的第二道核对）
+  if (finalMeta.sender_code && meta.sender_code && finalMeta.sender_code !== meta.sender_code) {
+    throw new CryptoError('CRYPTO_SENDER_MISMATCH', `${meta.sender_code} ≠ ${finalMeta.sender_code}`)
+  }
   const blob = new Blob([plain], { type: finalMeta.mime || 'application/octet-stream' })
   if (save) {
     report({ phase: 'saving', done: plain.length, total: plain.length, message: '落盘' })
