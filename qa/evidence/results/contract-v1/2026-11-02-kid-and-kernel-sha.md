@@ -29,11 +29,24 @@ python3 qa/evidence/check_token_lifecycle.py --binary <yanshu-server> \
 > `739293a` 起 `YANSHU_TOKEN_KID` 是**必配项**，不设服务端直接退出（fail closed）；
 > 脚本已支持 `--kid`，并把 kid 变化写进输出。
 
+### 1b. 「只改 secret 是否吊销」的历史（回答两边为什么各说各话）
+
+| 服务端 commit | 只改 `TOKEN_SECRET` 后同 token | 原因 |
+|---|---|---|
+| `9065eb8` | **201（仍可用）** | `Validate` 只比库里 `SM3(token)`，与 secret 无关 |
+| `08d40e7` | **401 `AUTH_SIGNATURE_INVALID`** | 改成"用当前 secret 重算 + 比对" |
+| `739293a` | **401 `AUTH_SIGNATURE_INVALID`**（只改 secret）；**401 `AUTH_TOKEN_REVOKED`**（只改 kid） | 再加 kid 元数据，先比 kid 再比 token |
+
+**定案：在 `08d40e7` 及之后，"只改 secret"就会吊销；`9065eb8` 那次 201 是版本差异，不是矛盾。**
+错误名分工建议：kid 变化→凭据类（现在 `AUTH_TOKEN_REVOKED`，对）；secret 变化→应改
+`AUTH_TOKEN_INVALID`（现在仍报签名类 `AUTH_SIGNATURE_INVALID`）；伪造签名→保留
+`AUTH_SIGNATURE_INVALID`。
+
 ## 2. 服务端内嵌内核 sha256：**FAIL（当前不一致）**
 
 | 项 | 值 |
 |---|---|
-| Core 工作树 `server/kernel/yanshu_sm.wasm` | **130,653 B / `8b89dd7f…154f9`** |
+| Core 工作树 `server/kernel/yanshu_sm.wasm`（2026-11-02 17:49 复核，仍是这份） | **130,653 B / `8b89dd7f…154f9`** |
 | 验收冻结产物 | **127,313 B / `c1b87d0a…7259f`** |
 | `ys_version()` | 两者都是 `0x00010000` |
 | 导出 | 两者都是 34 函数 + `memory` |
