@@ -101,6 +101,30 @@ python3 qa/evidence/scan_plaintext.py \
 
 五项齐了才算"参数就绪"；任何一项缺，`--profile core-skeleton` 都会点名并以退出码 4 结束。
 
+> **库固定 `yanshu_test`**：`run_evidence1_core.sh` 开头会解析 DSN 的库名，不是
+> `yanshu_test` 直接退出 2（`YS_EXPECT_DB` 可改，但不建议）。schema 用独立的
+> `gate_ev1`，不碰 `public` 与 Core 自己的测试 schema。DSN 只从 `/.keys/pg.env`
+> 之类的环境读取，**口令与原文不落任何文件**。
+
+### 接 Core 的投递驱动（一条命令）
+
+`run_evidence1_core.sh` 内置两个位置可换：
+
+| 变量 | 含义 |
+|---|---|
+| `YS_DELIVER_BIN` | 换成 Core 的投递驱动（入参是 `.yspk`，不是明文） |
+| `YS_DELIVER_ARGS` | 传给驱动的参数模板，`{pack}` 会被替换成本次生成的 `.yspk` 路径 |
+
+驱动只要在 stdout 给出 `code` / `package_id` / `blob_dir` / `db_url` / `log_path`，
+脚本就会用驱动报出的路径去扫；给不出就退回本次 workdir，缺项会明确报出来。
+
+```sh
+YS_BASE_DSN="$PG_TEST_DSN" \
+YS_DELIVER_BIN=/path/to/core-deliver \
+YS_DELIVER_ARGS='--pack {pack}' \
+qa/evidence/run_evidence1_core.sh <core-src> <rune-crate> /tmp/ys-ev1
+```
+
 ### 投递钩子：任意命令 + 从 stdout 解析标识
 
 `--deliver-cmd '<命令>'` 先跑一次投递，再读它的 stdout 取标识。**不绑定任何具体实现**：

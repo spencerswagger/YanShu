@@ -152,8 +152,13 @@ if (mode === "keygen") {
   const pp = alloc(pack.length || 1), skp = alloc(32);
   write(pp, pack); write(skp, skBytes);
   try {
-    const plain = callSized((out, cap, outLen) =>
-      e.ys_unpack(pp, pack.length, skp, out, cap, outLen), pack.length);
+    // 优先用 6 参的 ys_unpack_v2（不需要发送方公钥）；没有就退回 7 参原型并把公钥传 0。
+    // 注意：wasm 会静默丢弃多余实参并整体错位（out 收到公钥指针 → 内存踩踏），所以两条路
+    // 必须精确匹配各自的原型，不能混传。
+    const unpackFn = typeof e.ys_unpack_v2 === "function"
+      ? (out, cap, outLen) => e.ys_unpack_v2(pp, pack.length, skp, out, cap, outLen)
+      : (out, cap, outLen) => e.ys_unpack(pp, pack.length, skp, 0, out, cap, outLen);
+    const plain = callSized(unpackFn, pack.length);
     fs.writeFileSync(outPath, plain);
     console.log(`OK ${plain.length}`);
   } catch (err) {

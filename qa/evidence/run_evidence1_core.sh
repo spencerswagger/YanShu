@@ -35,8 +35,20 @@ if [ -z "$base_dsn" ]; then
     exit 4
 fi
 schema="${YS_EV1_SCHEMA:-gate_ev1}"
-port="${YS_EV1_PORT:-18080}"
+# 端口按 PID 派生：沙盒里上一轮的服务可能还没退干净，固定端口会导致
+# "healthz 通但其实是别人的服务"，把密文写到别的目录里去（已踩过一次）
+port="${YS_EV1_PORT:-$((18080 + ($$ % 500)))}"
 dsn="$base_dsn&search_path=$schema"
+
+# 只允许跑在约定的库上（默认 yanshu_test）：不扫别人的库、不互相污染
+dbname=$(python3 -c 'import sys,urllib.parse as u; p=u.urlparse(sys.argv[1]); print(p.path.lstrip("/"))' "$base_dsn")
+expect_db="${YS_EXPECT_DB:-yanshu_test}"
+if [ "$dbname" != "$expect_db" ]; then
+    echo "[BLOCKED] 证据一必须跑在库 '$expect_db' 上，当前 DSN 指向 '${dbname:-?}'；" \
+         "不扫别人的库（口令与 DSN 原文不落任何文件）" >&2
+    exit 2
+fi
+echo "db: $dbname / schema: $schema（DSN 从环境取，不落文件）"
 
 rm -rf "$work"
 mkdir -p "$work/bin" "$work/blobs" "$work/logs" "$work/sample"
@@ -72,12 +84,23 @@ while [ $i -lt 60 ]; do
     if curl -fsS --max-time 2 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then break; fi
     i=$((i+1)); sleep 0.2
 done
-if ! curl -fsS --max-time 2 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
-    echo "[BLOCKED] 服务没起来，日志尾部：" >&2
+# 必须是**我们自己起的**那个进程在服务：进程活着、日志里有 listening、没有 bind 失败
+if ! kill -0 "$SRV" 2>/dev/null; then
+    echo "[BLOCKED] 服务进程已退出，日志尾部：" >&2
     tail -20 "$work/logs/server.log" >&2
     exit 2
 fi
-echo "healthz OK"
+if grep -q "bind: address already in use" "$work/logs/server.log" 2>/dev/null; then
+    echo "[BLOCKED] 端口 $port 被占（可能是上一轮没退干净的服务）：换 YS_EV1_PORT 重跑" >&2
+    tail -5 "$work/logs/server.log" >&2
+    exit 2
+fi
+if ! grep -q "listening" "$work/logs/server.log" 2>/dev/null; then
+    echo "[BLOCKED] 日志里没有 listening，服务未就绪：" >&2
+    tail -20 "$work/logs/server.log" >&2
+    exit 2
+fi
+echo "healthz OK（port $port，pid $SRV）"
 
 echo "== 3/6 投递样本 =="
 python3 "$here/scan_plaintext.py" --emit-sample "$work/sample" | sed 's/^/  /'
@@ -95,17 +118,57 @@ SAMPLE_NAME=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["fi
     --name "$SAMPLE_NAME" --mime application/octet-stream --ext txt --chunk-size 1024
 
 b64() { python3 -c 'import base64,sys;print(base64.urlsafe_b64encode(bytes.fromhex(sys.argv[1])).decode().rstrip("="))' "$1"; }
-python3 "$here/adapters/core_delivery.py" --base-url "http://127.0.0.1:$port" \
-    --yspk "$work/sample.yspk" \
-    --sender-code "$ALICE_CODE" --sender-pk-b64 "$(b64 "$ALICE_PUB65")" --sender-nickname 甲 \
-    --recipient-code "$BOB_CODE" --recipient-pk-b64 "$(b64 "$BOB_PUB65")" --recipient-nickname 乙 \
-    --sm3-cmd "$BIN/ys-tool sm3" --no-ack \
-    --json-out "$work/delivery.json" | sed 's/^/  /'
+
+# 扫描目标：默认用本次 work 目录；若投递驱动报了路径就用它的
+SCAN_BLOB="$work/blobs"; SCAN_DSN="$base_dsn"; SCAN_LOG="$work/logs"
+
+if [ -n "${YS_DELIVER_BIN:-}" ]; then
+    # Core 的投递驱动：入参是 .yspk（不是明文），stdout 给五个标识
+    echo "  投递驱动：$YS_DELIVER_BIN"
+    dargs=$(printf '%s' "${YS_DELIVER_ARGS:-}" | sed "s#{pack}#$work/sample.yspk#g")
+    set +e
+    # shellcheck disable=SC2086
+    DELIVER_OUT=$("$YS_DELIVER_BIN" $dargs 2>&1)
+    rc_deliver=$?
+    set -e
+    printf '%s\n' "$DELIVER_OUT" | sed 's/^/  /'
+    if [ "$rc_deliver" -ne 0 ]; then
+        echo "[BLOCKED] 投递驱动退出码 $rc_deliver" >&2
+        exit 2
+    fi
+    IDS_JSON=$(printf '%s' "$DELIVER_OUT" | python3 -c '
+import json, sys
+sys.path.insert(0, sys.argv[1])
+from scan_plaintext import parse_deliver_output
+print(json.dumps(parse_deliver_output(sys.stdin.read()), ensure_ascii=False))
+' "$here")
+    SCAN_BLOB=$(printf '%s' "$IDS_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("blob_dir",""))')
+    SCAN_DSN=$(printf '%s' "$IDS_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("db_url",""))')
+    SCAN_LOG=$(printf '%s' "$IDS_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("log_path",""))')
+    SCAN_BLOB=${SCAN_BLOB:-$work/blobs}
+    SCAN_DSN=${SCAN_DSN:-$base_dsn}
+    SCAN_LOG=${SCAN_LOG:-$work/logs}
+    echo "  驱动报出的扫描目标：blob=$SCAN_BLOB db=$(python3 -c 'import sys,urllib.parse as u;print(u.urlparse(sys.argv[1]).path.lstrip("/") or "(none)")' "$SCAN_DSN") log=$SCAN_LOG"
+else
+    python3 "$here/adapters/core_delivery.py" --base-url "http://127.0.0.1:$port" \
+        --yspk "$work/sample.yspk" \
+        --sender-code "$ALICE_CODE" --sender-pk-b64 "$(b64 "$ALICE_PUB65")" --sender-nickname 甲 \
+        --recipient-code "$BOB_CODE" --recipient-pk-b64 "$(b64 "$BOB_PUB65")" --recipient-nickname 乙 \
+        --sm3-cmd "$BIN/ys-tool sm3" --no-ack \
+        --json-out "$work/delivery.json" | sed 's/^/  /'
+fi
+
+if [ -z "$(find "$SCAN_BLOB" -type f 2>/dev/null | head -1)" ]; then
+    echo "[BLOCKED] 投递后存储目录是空的：$SCAN_BLOB" >&2
+    echo "          说明密文没落到这个目录（端口被占 / 路径不对），此时'扫不到明文'不能算证据" >&2
+    exit 2
+fi
+echo "  存储里已有 $(find "$SCAN_BLOB" -type f | wc -l) 个文件，可以扫了"
 
 echo "== 5/6 三处检索 =="
 set +e
 python3 "$here/scan_plaintext.py" --profile core-skeleton \
-    --storage-root "$work/blobs" --dsn "$base_dsn" --pg-schema "$schema" --log-path "$work/logs" \
+    --storage-root "$SCAN_BLOB" --dsn "$SCAN_DSN" --pg-schema "$schema" --log-path "$SCAN_LOG" \
     --sample "$work/sample/sample.json" \
     --json-out "$work/scan.json"
 SCAN_RC=$?
@@ -117,8 +180,8 @@ if [ "${YS_EV1_CONTROLS:-1}" = "1" ]; then
     NAME=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["file_name"])' "$work/sample/sample.json")
     scan() {
         python3 "$here/scan_plaintext.py" --profile core-skeleton \
-            --storage-root "$work/blobs" --dsn "$base_dsn" --pg-schema "$schema" \
-            --log-path "$work/logs" --sample "$work/sample/sample.json" >/dev/null 2>&1
+            --storage-root "$SCAN_BLOB" --dsn "$SCAN_DSN" --pg-schema "$schema" \
+            --log-path "$SCAN_LOG" --sample "$work/sample/sample.json" >/dev/null 2>&1
     }
     # ① 存储：把明文样本塞进 blob 目录
     cp "$work/sample/sample.bin" "$work/blobs/_control_plaintext.bin"

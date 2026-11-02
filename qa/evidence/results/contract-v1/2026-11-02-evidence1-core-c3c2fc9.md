@@ -2,7 +2,10 @@
 
 - 日期：2026-11-02
 - 对象：服务端 `feat/server-skeleton` @ `c3c2fc9`（PR #3），配端侧 `feat/endcrypto-wasm`
-  @ `de6d6e1` 打出的**真契约包**（`YSPK/1.0`，2 块，2272B，prelude 548B）
+  @ `73e4b2a` 打出的**真契约包**（`YSPK/1.0`，2 块，2273B，prelude 549B）
+- 库：**`yanshu_test` 的独立 schema `gate_ev1`**（不扫 `yanshu_dev` / `yanshu_staging`，
+  也不碰 `public` 与 Core 自己的测试 schema）；DSN 从 `/.keys/pg.env` 读取，
+  **口令与 DSN 原文不进仓库、结果文件、日志与 PR**
 - 结论：**三处全部 PASS，零命中**；退出码 0
 - 并且做了 **3 组阳性对照**：分别把明文塞进存储、把文件名写进日志、把文件名写进 DB，
   三处都能被抓出来（退出码 1）——说明"没命中"不是因为检测器瞎了
@@ -45,8 +48,8 @@ YANSHU_TOKEN_SECRET=<随机> \
 | 目标 | 语料量 | 强信号命中 | 结论 |
 |---|---|---|---|
 | 存储目录 `<BLOB_DIR>/<id[0:2]>/<id>/{prelude,chunks/00000000,00000001}` | 3 文件 / 2241B | 0 | PASS |
-| PostgreSQL `gate_ev1`（8 表 / 97 行） | 全表文本列逐行 | 0 | PASS |
-| 服务端日志（stdout 重定向） | 2 份 / 2919B | 0 | PASS |
+| PostgreSQL `yanshu_test`.  schema `gate_ev1`（8 表 / 158 行） | 全表文本列逐行 | 0 | PASS |
+| 服务端日志（stdout 重定向） | 2 份 / 2773B | 0 | PASS |
 
 - 检索项 6 个（文件名、主干、扩展名带点、扩展名裸串、高熵片段、中文片段），
   每个展开 1–8 种形态（raw / base64×4 / hex×2 / percent），共 31 种字节串。
@@ -73,12 +76,27 @@ YANSHU_TOKEN_SECRET=<随机> \
    （对照组由脚本自动跑，不等我手工补）。
 2. **验签是桩**：本轮 `YANSHU_VERIFIER=stub-allow`，签名只做形状检查。这不影响"无明文"结论
    （与密码学无关），但**不能**用于证明鉴权强度。
-3. **schema 隔离**：用独立 schema `gate_ev1`，不碰别人的 `public`；库里另有两条历史
-   transfer（同一 workdir 里重复投递所致），不影响结论。
+3. **库与 schema 隔离**：只用 `yanshu_test`，并在其中用独立 schema `gate_ev1`；
+   脚本开头有硬守卫——DSN 指向的库不是 `yanshu_test` 就直接退出 2，不扫别人的数据。
+   同一 workdir 里重复投递会留下多条历史 transfer，不影响结论。
 4. **日志是 stdout 重定向**：服务端没有独立日志文件机制；`YANSHU_LOG_DIR` 未被服务端使用，
    本证据按"部署方重定向到哪就扫哪"处理。
 5. **未覆盖**：ack 后删除、TTL 到期清理、撤回删密文（生命周期证据另做）；抓包层无明文
    （HTTPS 之外还有 SM4 密文）未在本次范围内。
+
+## 跑的过程中修掉的一个假 PASS 风险（值得记）
+
+第一次换到新 head 复跑时，结果"PASS"了，但存储目标其实**扫了 0 字节**——原因是上一轮的
+服务进程还占着固定端口 18080，新进程 `bind: address already in use` 直接退出，而
+`/healthz` 探活打到的是**旧进程**，于是密文落进了上一轮的目录，我扫的却是新 workdir 的空目录。
+
+已加三道硬约束，任何一条不满足就以退出码 2 结束、不产结论：
+
+1. 端口按 PID 派生（`18080 + $$ % 500`），不再固定；
+2. 启动校验升级为"进程活着 + 日志里有 `listening` + 日志里没有 `bind: address already in use`"，
+   不再只信 `/healthz`；
+3. 投递后断言存储目录**非空**（`find "$SCAN_BLOB" -type f`），空即 BLOCKED ——
+   "什么都没扫到"不许当 PASS。
 
 ## 附：本次没做的
 

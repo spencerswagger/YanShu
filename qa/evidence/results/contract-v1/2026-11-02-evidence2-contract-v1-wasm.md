@@ -1,12 +1,12 @@
 # 证据二实测结果：密文篡改必报错（**生产导出路径**：wasm32 raw C ABI）
 
 - 日期：2026-11-02
-- 对象：`crypto/sm`，分支 `feat/endcrypto-wasm` @ `cdcba0e`（Rune 已删除 rune-v1 旧布局，
-  仓库只剩 `YSPK/1.0`）
+- 对象：`crypto/sm`，分支 `feat/endcrypto-wasm` @ `73e4b2a`（Rune 已删除 rune-v1 旧布局，
+  仓库只剩 `YSPK/1.0`；解密调用走 6 参 `ys_unpack_v2`）
 - 包布局：`contract-v1`（默认）
 - 解密入口：**`yanshu_sm.wasm` 的 `ys_unpack`**（`--entry-kind production`）——
   就是 Web 将来要调的同一批导出，不是 Rust 原生 API、也不是测试替身
-- 打包同样走 wasm：`ys_pack_v1`（同一个 `.wasm`，122,307 字节）
+- 打包同样走 wasm：`ys_pack_v1`（同一个 `.wasm`，124,976 字节）
 - 判定：解密失败即 PASS（任一道防线拒绝都算）；错误名只作诊断
 - 基线：未篡改包解出的明文与原文**逐字节一致**（`--expect-plaintext`）
 
@@ -83,6 +83,7 @@ qa/evidence/run_evidence2_wasm.sh /tmp/rune/crypto/sm /tmp/ys-ev2-wasm
 1. **头文件注释与实现不一致**：`crypto/include/yanshu_sm.h` 里 `ys_pack_v1` 的
    `recipient_public` 注释写 `/* 64 */`，但实现（`ffi.rs`）读 **65 字节**并强制 `0x04` 前缀，
    传 64 字节会得到 `BAD_POINT`。驱动里已按 65 处理并做了 64→65 自动补前缀。
+   （本轮复查 `73e4b2a` 的头文件，注释仍未改；`ys_unpack` 的 7 参/`_v2` 6 参说明已补齐。）
 2. **wasm 的 `ys_error_name` 返回不带 `CRYPTO_` 前缀**（如 `TAG_MISMATCH`），而 native/Rust
    侧错误名是 `CRYPTO_*`。两边不一致会让"按错误名做前端映射"时踩坑；本次用
    `--error-regex 'ERR [A-Z_]+'` 兼容，但建议统一。

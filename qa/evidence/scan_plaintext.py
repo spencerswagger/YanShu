@@ -698,6 +698,14 @@ def report(items: Sequence[SearchItem], hits: Sequence[Hit], stats: Stats,
                       f"before={hexpreview(h.before) or '-'} after={hexpreview(h.after) or '-'}")
 
     print("-" * 108)
+    # 逐目标的空语料告警：某个目标扫了 0 字节/0 行，"没命中"在那个目标上不成立
+    if "storage" in targets and stats.bytes_scanned == 0:
+        print("[warn] storage 目标扫了 0 字节：投递可能没落到这个目录，"
+              "该目标的 PASS 不算数（换目录或补投递后重跑）")
+    if "logs" in targets and stats.log_bytes == 0:
+        print("[warn] logs 目标扫了 0 字节：日志路径可能不对，该目标的 PASS 不算数")
+    if "postgres" in targets and stats.db_rows == 0:
+        print("[warn] postgres 目标扫了 0 行：库可能是空的或 schema 不对，该目标的 PASS 不算数")
     print(f"扫描：存储文件 {stats.files:,} 个 / {stats.bytes_scanned:,} 字节；"
           f"日志 {stats.log_files:,} 份 / {stats.log_bytes:,} 字节；"
           f"数据库 {stats.db_tables} 表 / {stats.db_rows:,} 行 / {stats.db_cells:,} 单元格；"
