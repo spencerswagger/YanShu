@@ -55,6 +55,23 @@ type Config struct {
 	ShutdownTimeout time.Duration
 }
 
+// MinTokenSecretLen 是 upload_token HMAC 密钥的最小长度（字节）。
+const MinTokenSecretLen = 16
+
+// ValidateForServe 校验「真正对外服务」所需的配置。
+//
+// 刻意与 Load 分开：`-migrate-only` 只需要数据库，不需要 token 密钥；
+// 但只要开始监听端口，就必须有稳定的 TOKEN_SECRET —— 缺失时**报错退出**，
+// 不允许静默用空值/进程内随机值跑起来（那会让 upload_token 在重启后全部失效，
+// 而且部署方根本察觉不到）。
+func (c Config) ValidateForServe() error {
+	if len(c.TokenSecret) < MinTokenSecretLen {
+		return fmt.Errorf("config: YANSHU_TOKEN_SECRET is required when serving (>=%d bytes); "+
+			"read it from an env var or a 0600 file, never hardcode it", MinTokenSecretLen)
+	}
+	return nil
+}
+
 // Load 从环境变量构造配置。
 func Load() (Config, error) {
 	c := Config{

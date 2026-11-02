@@ -167,24 +167,48 @@ log_path=/var/log/yanshu/server.log
 判定：退出码 `0` 即投递成功；`--json-out` 里的 `package_id` / `storage_path` / `schema` / `db_url`
 可直接作为后续检索的入参（JSON 与 stdout 同名字段）。
 
-### 环境变量
+### 环境变量（实现侧权威清单）
 
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `YANSHU_ADDR` | `:8080` | 监听地址 |
-| `YANSHU_DATABASE_URL` | 无（必填） | PG DSN |
-| `YANSHU_BLOB_DIR` | `./data/blobs` | 密文块根目录 |
-| `YANSHU_VERIFIER` | `stub-deny` | `sm2` / `stub-deny`（fail closed）/ `stub-allow`（仅测试） |
-| `YANSHU_TOKEN_SECRET` | 进程内随机 | `upload_token` 的 HMAC 密钥；为空时重启后旧 token 失效 |
-| `YANSHU_TRUST_PROXY` | `false` | 是否信任 `X-Forwarded-For` |
-| `YANSHU_STUN_URLS` | 公共 STUN | `/v1/config` 下发的 STUN 列表（**没有 TURN**） |
-| `YANSHU_WS_URL` | 空 | `/v1/config` 下发的 `ws_url` |
-| `YANSHU_STORAGE_QUOTA_BYTES` | `8GiB` | 单 IP 未取走密文总量上限（超出 → `507`） |
-| `YANSHU_LOG_DIR` | 空（仅 stdout） | 按日滚动日志目录：`yanshu-server-YYYY-MM-DD.log`（UTC） |
-| `YANSHU_LOG_RETENTION_DAYS` | `7` | 滚动日志保留天数，超期自动删除 |
-| `YANSHU_LOG_FILE` | 空 | 单文件日志（不滚动）；设置后优先于 `YANSHU_LOG_DIR` |
-| `YANSHU_SWEEP_INTERVAL` | `30s` | 清理任务周期 |
-| `YANSHU_SHUTDOWN_TIMEOUT` | `10s` | 优雅退出超时 |
+| 变量 | 必需 | 默认 | 说明 / 合法取值 |
+|---|---|---|---|
+| `YANSHU_DATABASE_URL` | **是** | 无 | PG DSN；建议带 `?search_path=<schema>` 指定独立 schema。缺失 → 启动直接报错退出 |
+| `YANSHU_BLOB_DIR` | 否 | `./data/blobs` | 密文块根目录，自动创建；同一实例不要与别的实例共用 |
+| `YANSHU_TOKEN_SECRET` | **起服务时必需** | 无 | `upload_token` 的 HMAC 密钥，**≥16 字节**；缺失或过短 → 启动报错退出（不会用空值/随机值静默跑起来）；只从环境变量或 0600 密钥文件读 |
+| `YANSHU_ADDR` | 否 | `:8080` | 监听地址；常驻本机写 `127.0.0.1:8080`。**只认这个 env，没有 `--addr` 参数** |
+| `YANSHU_VERIFIER` | 否 | `stub-deny` | `sm2` / `stub-deny`（一律拒绝，fail closed）/ `stub-allow`（仅显式开启的测试态，启动打 WARN） |
+| `YANSHU_LOG_DIR` | 否 | 空（仅 stdout） | 按 UTC 日期滚动写 `yanshu-server-YYYY-MM-DD.log`（0640） |
+| `YANSHU_LOG_RETENTION_DAYS` | 否 | `7` | 滚动日志保留天数，只清理本服务命名规则内的文件 |
+| `YANSHU_LOG_FILE` | 否 | 空 | 单文件日志（不滚动），优先于 `YANSHU_LOG_DIR` |
+| `YANSHU_TRUST_PROXY` | 否 | `false` | 为 `true` 时从 `X-Forwarded-For` 取客户端 IP；**只有前面确有可信反代时才开** |
+| `YANSHU_STUN_URLS` | 否 | 公共 STUN | `/v1/config` 下发的 STUN 列表（逗号分隔）；本项目**没有 TURN** |
+| `YANSHU_WS_URL` | 否 | 空 | `/v1/config` 下发的 `ws_url` |
+| `YANSHU_STORAGE_QUOTA_BYTES` | 否 | `8GiB` | 单 IP 未取走密文总量上限（超出 → `507 INSUFFICIENT_STORAGE`） |
+| `YANSHU_SWEEP_INTERVAL` | 否 | `30s` | 清理任务周期（Go duration） |
+| `YANSHU_SHUTDOWN_TIMEOUT` | 否 | `10s` | 优雅退出超时（Go duration） |
+
+**限速阈值目前没有 env 开关**：默认值在 `internal/spec/limits.go`（按 IP/按码/按传输各档），
+要线上调需要改代码发版；这是 v1 的已知限制，不是漏写。
+
+### 端口与监听
+
+- 默认 `:8080`（所有网卡）。要只监听本机：`YANSHU_ADDR=127.0.0.1:8080`。
+- **没有命令行参数覆盖**，端口/地址只认 `YANSHU_ADDR`。
+- 健康检查：`GET /healthz`（DB 通 → 200 `{"status":"ok"}`；DB 不通 → 503 `degraded`）。
+
+### migrations（命令与幂等性）
+
+```sh
+# 需先有 schema（只建一次；不建就看 DSN 里 search_path / 默认 public）
+psql "$PG_DSN_WITHOUT_SEARCH_PATH" -c 'create schema if not exists yanshu_core'
+
+# 只迁移、不起服务
+YANSHU_DATABASE_URL="$PG_DSN_WITH_SEARCH_PATH" ./bin/yanshu-server -migrate-only
+```
+
+- **幂等**：`schema_migrations` 表记录已应用的文件，重复执行只会跳过；并发执行有
+  `pg_advisory_lock` 兜底。重复跑不会重建表、不会丢数据。
+- 不需要单独跑迁移也能起服务：正常启动时会先自动执行一遍同样的迁移。
+- `-migrate-only` **不需要** `YANSHU_TOKEN_SECRET`（它不监听端口）。
 
 ## 接口
 

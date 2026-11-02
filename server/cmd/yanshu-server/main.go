@@ -72,6 +72,13 @@ func run() error {
 	log := slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
 
+	// 起服务才校验 token 密钥；-migrate-only 不需要它。
+	if !*migrateOnly {
+		if err := cfg.ValidateForServe(); err != nil {
+			return err
+		}
+	}
+
 	if *migrateOnly {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
@@ -113,9 +120,6 @@ func run() error {
 	tokens, err := auth.NewTokenIssuer(cfg.TokenSecret)
 	if err != nil {
 		return err
-	}
-	if len(cfg.TokenSecret) == 0 {
-		log.Warn("YANSHU_TOKEN_SECRET is empty: upload tokens will not survive a restart")
 	}
 
 	api := httpapi.New(cfg, st, blobs, verifier, tokens, ratelimit.NewMemory(), ratelimit.NewMemoryLockout(), log)
