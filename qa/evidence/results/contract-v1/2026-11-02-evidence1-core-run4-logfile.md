@@ -50,3 +50,17 @@ qa/evidence/run_evidence1_core.sh <core-src> <rune-crate> /tmp/ys-ev1
 ## 未覆盖
 
 真实验签、TTL 到期清理、撤回删密文、抓包层无明文。
+
+## 附：宿主常驻实例上的跨端冒烟（非证据，库是 `yanshu_dev`）
+
+spencer 在宿主起的常驻实例 `http://127.0.0.1:18080`（契约 v1 / `YSPK/1.0` / 1 MiB 块）上做了一次冒烟：
+
+| 项 | 结果 |
+|---|---|
+| `/healthz` | 200 `{"status":"ok","api_version":"v1","contract":"v1"}` |
+| `/v1/config` | `chunk_size=1048576`、`max_plaintext=4294967296`、`ttl≤86400`、STUN 已下发、`ws_url` 空 |
+| 单块包（715B 明文 / 1 块 / 1226B 密文） | 投递 `state=LEASED`；GET 回来的 prelude 495B **逐字节一致** |
+| 三块包（3072B 明文 / 3 块 / 3746B 密文） | 投递 `state=LEASED`；prelude + 3 块 **全部逐字节一致** |
+
+> 这是"跨端冒烟"，不是证据：库是 `yanshu_dev`、走 `stub-allow`，且用的是宿主实例。
+> 证据类扫描仍只用 `yanshu_test` 的 `gate_ev1`，不扫 `yanshu_dev`。

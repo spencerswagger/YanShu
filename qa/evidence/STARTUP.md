@@ -1,9 +1,68 @@
 # 雁书服务端 · 常驻实例启动配方（沙盒实测原文）
 
 > 这份是**实际跑通过**的命令原文，不是"见 README"。
-> 实测环境：`core` @ `2bc7dae`（`feat/server-skeleton`）、PostgreSQL `yanshu_test`、
-> schema `gate_ev1`、监听 `127.0.0.1:8099`（换成 8080 只需改 `YANSHU_ADDR`，无其他依赖）。
+> 实测环境：`core` @ `28d75b0`（`feat/server-skeleton`）、PostgreSQL `yanshu_test`、
+> schema `gate_ev1`；命令里的端口统一按 8080 写（我沙盒实测用动态空闲端口，只改 `YANSHU_ADDR`）。
 > 口令与 DSN 只从密钥文件读取，**任何一步都不打印它们**。
+
+
+## TL;DR · 可直接粘走（整段）
+
+```sh
+# ── 0) 凭据：只从密钥文件读，不落仓库/日志 ───────────────────────────
+set -a; . /.keys/pg.env; set +a          # 提供 PG_TEST_DSN / PG_TEST_PASSWORD
+export PGPASSWORD="$PG_TEST_PASSWORD"
+
+# ── 1) 编译 + 目录（目录 0750、块文件 0640，与 Core 实现一致）─────────
+cd <YANSHU_SRC>/server && go build -o /srv/yanshu/bin/yanshu-server ./cmd/yanshu-server
+cd <YANSHU_SRC>/server && go build -o /srv/yanshu/bin/deliver       ./cmd/deliver
+install -d -m 0750 /srv/yanshu/blobs
+install -d -m 0700 /srv/yanshu/logs /srv/yanshu/secrets
+head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > /srv/yanshu/secrets/token_secret
+chmod 600 /srv/yanshu/secrets/token_secret
+
+# ── 2) schema + migrations（服务端启动时也会自动跑；先自检一次）────────
+psql "$PG_TEST_DSN" -c 'create schema if not exists gate_ev1'
+YANSHU_DATABASE_URL="$PG_TEST_DSN&search_path=gate_ev1" \
+  /srv/yanshu/bin/yanshu-server -migrate-only      # 期望 "migrations applied"，退出码 0
+
+# ── 3) 起服务（stdout 重定向；日志另可走 YANSHU_LOG_FILE）──────────────
+YANSHU_DATABASE_URL="$PG_TEST_DSN&search_path=gate_ev1" \
+YANSHU_BLOB_DIR=/srv/yanshu/blobs \
+YANSHU_ADDR=127.0.0.1:8080 \
+YANSHU_VERIFIER=stub-allow \
+YANSHU_TOKEN_SECRET="$(cat /srv/yanshu/secrets/token_secret)" \
+setsid /srv/yanshu/bin/yanshu-server >>/srv/yanshu/logs/server.log 2>&1 </dev/null &
+
+# ── 4) 健康检查 ────────────────────────────────────────────────────
+curl -fsS http://127.0.0.1:8080/healthz
+# 期望：{"status":"ok","api_version":"v1","contract":"v1"}
+# 判活别只看端口：kill -0 <pid> && grep listening /srv/yanshu/logs/server.log
+
+# ── 5) 投递一条（--no-ack 必带：ack 会删密文，删完就没法扫"无明文"了）──
+/srv/yanshu/bin/deliver \
+  --base-url http://127.0.0.1:8080 \
+  --yspk /path/to/<包>.yspk \
+  --no-ack \
+  --blob-dir /srv/yanshu/blobs \
+  --json-out /srv/yanshu/deliver.json
+
+# ── 6) 收工 ────────────────────────────────────────────────────────
+pkill -f yanshu-server
+```
+
+env 一览（凭据不写明文，一律从 `/.keys/pg.env` 读）：
+
+| 变量 | 值 |
+|---|---|
+| `YANSHU_DATABASE_URL` | `"$PG_TEST_DSN&search_path=<你的 schema>"` |
+| `YANSHU_BLOB_DIR` | `/srv/yanshu/blobs` |
+| `YANSHU_ADDR` | `127.0.0.1:8080` |
+| `YANSHU_VERIFIER` | `stub-allow`（仅联调；默认是 fail-closed 的 `stub-deny`） |
+| `YANSHU_TOKEN_SECRET` | 从 `/srv/yanshu/secrets/token_secret` 读（重启不换才不丢 token） |
+| `YANSHU_LOG_FILE` | 可选：`/srv/yanshu/logs/server-file.log`（推荐；与 stdout 并行） |
+
+> 下面第 0～8 节是同一套命令的展开说明（含权限、日志三种写法、判活细节、故障排查）。
 
 ## 0. 前置
 
