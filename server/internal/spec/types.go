@@ -38,8 +38,6 @@ type ConfigResponse struct {
 	STUNURLs          []string     `json:"stun_urls"`
 	WSURL             *string      `json:"ws_url"`
 	Limits            ConfigLimits `json:"limits"`
-	// TokenEpoch 是当前只读的密钥版本（递增即吊销全部旧 upload_token）。
-	TokenEpoch int64 `json:"token_epoch"`
 }
 
 // ConfigLimits 是 /v1/config 里暴露的限速额度（API.md §4.1）。

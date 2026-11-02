@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/binary"
 	"fmt"
 
 	"github.com/spencerswagger/YanShu/server/internal/gm"
@@ -67,24 +66,30 @@ func NewTokenIssuer(secret []byte) (*TokenIssuer, error) {
 	return &TokenIssuer{secret: append([]byte(nil), secret...)}, nil
 }
 
-// uploadTokenInfo 是派生前缀（API §1.7，token v2 带 EPOCH）：
+// uploadTokenInfo 是契约派生前缀（API §1.5）：
 //
-//	upload_token = base64url(HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v2" ‖ u64be(EPOCH) ‖ transfer_id))
+//	upload_token = base64url(HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖ transfer_id))
 //
-// EPOCH 进了派生串，但**校验不靠重算**：库里存 SM3(token)，另存签发时的 EPOCH；
-// 校验 = 「token 的 SM3 == 库里哈希」且「行内 EPOCH == 当前 EPOCH」。
-// 因此：只换 TOKEN_SECRET 不影响既有 token（哈希没变）；只有 EPOCH 递增才会吊销。
-const uploadTokenInfo = "yanshu/upload-token/v2"
+// v1 **不引入 EPOCH**：吊销 = 轮换 TOKEN_SECRET（派生结果变、旧 token 对不上）。
+const uploadTokenInfo = "yanshu/upload-token/v1"
 
-// UploadToken 为某个 transfer_id + 当前 EPOCH 派生 upload_token。
-func (t *TokenIssuer) UploadToken(transferID string, epoch int64) (string, error) {
+// UploadToken 为某个 transfer_id 派生 upload_token。
+func (t *TokenIssuer) UploadToken(transferID string) (string, error) {
 	mac := hmac.New(sha256.New, t.secret)
 	mac.Write([]byte(uploadTokenInfo))
-	var e [8]byte
-	binary.BigEndian.PutUint64(e[:], uint64(epoch))
-	mac.Write(e[:])
 	mac.Write([]byte(transferID))
 	return B64.EncodeToString(mac.Sum(nil)), nil
+}
+
+// Derives 判断某个 token 在当前密钥下是否等于该 transfer 的派生值。
+// 用于区分"密钥轮换导致的失效"（哈希对得上、但重算对不上）。
+func (t *TokenIssuer) Derives(token, transferID string, storedHash []byte) bool {
+	expected, err := t.UploadToken(transferID)
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare(UploadTokenHash(token), UploadTokenHash(expected)) == 1 &&
+		subtle.ConstantTimeCompare(UploadTokenHash(expected), storedHash) == 1
 }
 
 // ValidateHash 只比对 token 的 SM3 与库里存的哈希。

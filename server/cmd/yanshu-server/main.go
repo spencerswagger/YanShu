@@ -113,18 +113,6 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// EPOCH 只增不减：调小会让旧版本 token 复活，直接拒绝启动。
-	// 运行期吊销 = 运维执行 `UPDATE token_kid_state SET kid = kid + 1`（无需重启）。
-	if stored, err := st.EnsureTokenEpoch(ctx, cfg.TokenEpoch, time.Now().UTC()); err != nil {
-		if errors.Is(err, store.ErrTokenEpochLower) {
-			return fmt.Errorf("YANSHU_TOKEN_EPOCH=%d is lower than the recorded epoch %d: "+
-				"epoch must strictly increase", cfg.TokenEpoch, stored)
-		}
-		return fmt.Errorf("check token epoch: %w", err)
-	} else {
-		log.Info("token epoch", "bootstrap", cfg.TokenEpoch, "current", stored)
-	}
-
 	verifier, err := auth.NewVerifier(string(cfg.Verifier), cfg.ResolveKernelWASM(), log)
 	if err != nil {
 		return err

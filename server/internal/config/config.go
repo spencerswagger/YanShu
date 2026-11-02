@@ -36,9 +36,6 @@ type Config struct {
 
 	// TokenSecret 是 upload_token 的 HMAC 密钥。
 	TokenSecret []byte
-	// TokenEpoch 是启动时的 token 密钥版本（API §1.7 的 EPOCH，正整数）。
-	// 运行期的"以哪个 EPOCH 为准"存在库里：启动只是 bootstrap + 防回退。
-	TokenEpoch int64
 
 	// 对外配置（GET /v1/config）。
 	STUNURLs []string
@@ -93,9 +90,6 @@ func (c Config) ValidateForServe() error {
 		return fmt.Errorf("config: YANSHU_VERIFIER=sm2 requires the wasm kernel; " +
 			"set YANSHU_KERNEL_WASM=/path/to/yanshu_sm.wasm (repo ships it at server/kernel/yanshu_sm.wasm)")
 	}
-	if c.TokenEpoch <= 0 {
-		return fmt.Errorf("config: YANSHU_TOKEN_EPOCH must be positive")
-	}
 	if len(c.TokenSecret) < MinTokenSecretLen {
 		return fmt.Errorf("config: YANSHU_TOKEN_SECRET is required when serving (>=%d bytes); "+
 			"read it from an env var or a 0600 file, never hardcode it", MinTokenSecretLen)
@@ -124,19 +118,6 @@ func Load() (Config, error) {
 	if secret := os.Getenv("YANSHU_TOKEN_SECRET"); secret != "" {
 		c.TokenSecret = []byte(secret)
 	}
-	// 兼容旧变量名 YANSHU_TOKEN_KID（等价于 EPOCH），新部署用 YANSHU_TOKEN_EPOCH。
-	epochRaw := os.Getenv("YANSHU_TOKEN_EPOCH")
-	if epochRaw == "" {
-		epochRaw = os.Getenv("YANSHU_TOKEN_KID")
-	}
-	if epochRaw == "" {
-		epochRaw = "1"
-	}
-	n, err := strconv.ParseInt(epochRaw, 10, 64)
-	if err != nil || n <= 0 {
-		return Config{}, fmt.Errorf("config: YANSHU_TOKEN_EPOCH must be a positive decimal integer (got %q)", epochRaw)
-	}
-	c.TokenEpoch = n
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: YANSHU_DATABASE_URL is required")
 	}

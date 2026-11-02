@@ -1,43 +1,40 @@
-# upload_token 的生命周期与失效方式（EPOCH 版，API §1.7）
+# upload_token 的生命周期与失效方式（v1）
 
-> 实现：`server/internal/auth/token.go`、`server/internal/store/token_epoch.go`。
+> 实现：`server/internal/auth/token.go`、`server/internal/httpapi/handlers_transfers.go`。
 
 ## 1. 生成、存储、校验
 
 ```
-upload_token = base64url(HMAC-SHA256(TOKEN_SECRET,
-                "yanshu/upload-token/v2" ‖ u64be(EPOCH) ‖ transfer_id))
+upload_token = base64url(HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖ transfer_id))
 ```
 
-- 库里只存 `SM3(upload_token)`（`transfers.upload_token_sm3`）与**签发时的 EPOCH**
-  （`transfers.upload_token_kid`，列名沿用旧命名，值就是 EPOCH 的十进制串）。
-- 校验（`requireUploadToken`，顺序固定）：
-  1. **EPOCH**：行内 EPOCH == 当前 EPOCH，否则 `401 AUTH_TOKEN_STALE`；
-  2. **哈希**：`SM3(token)` == 库内值，否则 `401 AUTH_TOKEN_INVALID`；
-  3. **过期**：签发超过 **6 小时** → `401 AUTH_TOKEN_EXPIRED`；
-  4. 之后才看传输状态（**先凭据后状态**：401 优先于 410）。
-- `TOKEN_SECRET` 只是派生盐：**轮换它不会让已签发 token 失效**（哈希没变）。
+- 库里只存 `SM3(upload_token)`（`transfers.upload_token_sm3`），不存原文。
+- 校验顺序（**先凭据后状态**）：
+  1. `SM3(token)` 与库内哈希对不上 → `401 AUTH_TOKEN_INVALID`（伪造/串了传输）；
+  2. 哈希对得上、但**当前密钥**派生不出同一个值 → `401 AUTH_TOKEN_REVOKED`（密钥轮换）；
+  3. 签发超过 **6 小时** → `401 AUTH_TOKEN_EXPIRED`；
+  4. 之后才看传输状态（409/410）。
+- 签名类错误 `AUTH_SIGNATURE_INVALID` **只**用于签名本身不被接受（伪造 DER、消息被改、公钥不符），
+  与上面三个凭据类是两套，互不覆盖。
 
-## 2. EPOCH：一键吊销
+## 2. 吊销
 
-当前 EPOCH 存在 `token_kid_state`（单行 `id=true, kid=<epoch>`），运行期每次校验都读它。
+**v1 不引入 EPOCH**：吊销 = **轮换 `TOKEN_SECRET`**（派生结果变，旧 token 对不上 → `AUTH_TOKEN_REVOKED`）。
 
-```sql
--- 一键吊销全部 upload_token：不需要删库、不需要重启
-UPDATE token_kid_state SET kid = kid + 1;
+```sh
+# 应急：换一个新 secret 并重启（影响全站所有在传任务）
+YANSHU_TOKEN_SECRET=<新的 ≥16B 随机值>  ./bin/yanshu-server
 ```
 
-- 启动时 `YANSHU_TOKEN_EPOCH`（正整数，默认 1）作为 bootstrap：库里没有就写入；比库里大就更新；
-  **比库里小直接拒绝启动**（防止调小让旧 token 复活）。
-- `/v1/config` 暴露只读 `token_epoch`，客户端可据此判断自己是否落后。
+代价与边界：这是**全局**动作（不是按用户/按传输）；重启期间不可用；客户端拿到
+`AUTH_TOKEN_REVOKED` 后应**重建传输**，而不是重算签名。
 
 ## 3. 失效矩阵
 
 | 事件 | 结果 |
 |---|---|
-| 只换 `TOKEN_SECRET` | **旧 token 仍然有效**（EPOCH 未变、哈希未变） |
-| `EPOCH` 递增 | 全部旧 token 立刻 `401 AUTH_TOKEN_STALE` |
-| 超过 6 小时 | `401 AUTH_TOKEN_EXPIRED` |
+| 轮换 `TOKEN_SECRET` | 全部旧 token **立刻** `401 AUTH_TOKEN_REVOKED`（应急吊销） |
+| 超过 6 小时 | `401 AUTH_TOKEN_EXPIRED`（下载租约 30 分钟同属此类） |
 | token 值不对/串了传输 | `401 AUTH_TOKEN_INVALID` |
 | 传输终结（撤回/过期/取完） | 上传接口 409/410（状态层） |
 
@@ -47,7 +44,7 @@ UPDATE token_kid_state SET kid = kid + 1;
 |---|---|---|
 | `9065eb8` 及更早 | 只比 `SM3(token)` 与库内哈希 | **仍然有效（201）** |
 | `08d40e7` | 按当前密钥**重算** + 比对 | 失效（401 `AUTH_TOKEN_INVALID`） |
-| `fa479d9` | 加 kid：行内 kid 必须等于当前 kid | 失效（401 `AUTH_TOKEN_STALE`） |
+| `fa479d9` | 加 kid（**已按最终裁决撤回**，见 `0004` 迁移） | 当时为 `AUTH_TOKEN_STALE`，已改名 `AUTH_TOKEN_REVOKED` |
 
 所以"换 secret 后 201"是 `9065eb8` 的**预期行为**，不是同一份实现的矛盾。
 
@@ -61,30 +58,19 @@ UPDATE token_kid_state SET kid = kid + 1;
 # 3) 旧 token 立刻 401，客户端重建传输拿新 token（新 token 立即可用）
 ```
 
-轮换矩阵（自动化测试 `TestTokenRotationMatrix`）：
-
-| 只改什么 | 旧 token 结果 | 说明 |
-|---|---|---|
-| 只改 `TOKEN_SECRET` | `401 AUTH_TOKEN_INVALID` | 校验会按新密钥重算，旧 token 自然也失效 |
-| 只改 `TOKEN_KID` | `401 AUTH_TOKEN_STALE` | 行内 kid 与当前不一致 |
-| 两个都改（推荐） | `401 AUTH_TOKEN_STALE` | kid 先判，语义最清楚 |
-
-`AUTH_TOKEN_STALE` = 版本被轮换，客户端应**重建传输**；`AUTH_TOKEN_INVALID` = token 值不对，
-客户端应检查是不是串了传输；`AUTH_SIGNATURE_INVALID` 只用于签名不被接受。
-
 ### 客户端自愈（按错误名分支）
 
 | 错误名 | 含义 | 客户端动作 |
 |---|---|---|
-| `AUTH_TOKEN_STALE` | EPOCH 已递增，凭据作废 | 重新 `POST /v1/transfers` 建传输拿新 token；**不要**重算签名 |
+| `AUTH_TOKEN_REVOKED` | 派生密钥已轮换，凭据作废 | 重新 `POST /v1/transfers` 建传输拿新 token；**不要**重算签名 |
 | `AUTH_TOKEN_INVALID` | token 值不对/串了传输 | 检查本地存的 token 与 transfer_id 是否配对；必要时重建传输 |
 | `AUTH_TOKEN_EXPIRED` | 超过 6 小时（或租约 30 分钟） | 重建传输 / 重新拿租约 |
 | `AUTH_SIGNATURE_INVALID` | 签名本身不被接受 | 检查 `SIG_INPUT` 与私钥；**与 token 无关** |
 
 > 注意：按 API §1.7，`TOKEN_SECRET` 只是派生盐——**轮换它不会吊销任何 token**；
 > 全局吊销的唯一开关是 EPOCH 递增（`UPDATE token_kid_state SET kid = kid + 1`）。
-> 若最终裁决改为"删掉 EPOCH、只靠换 secret 吊销"，则 `AUTH_TOKEN_STALE` 会改由 secret 轮换触发，
-> 届时只需替换 `requireUploadToken` 的 EPOCH 判定，错误名与客户端分支不变。
+> v1 的吊销就是轮换 `TOKEN_SECRET`（全局、需重启）。EPOCH 机制已按最终裁决撤回
+> （`0004_drop_token_epoch.sql` 删列删表）。
 **没有 `AUTH_TOKEN_EXPIRED`**：过期是传输级语义（`410 TRANSFER_EXPIRED`）。
 
 ### 自动化对照脚本（给验收）

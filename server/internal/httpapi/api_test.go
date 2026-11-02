@@ -61,7 +61,6 @@ func newEnv(t *testing.T, mode string) *env {
 	e.cfg = config.Config{
 		Verifier:          config.VerifierMode(mode),
 		TokenSecret:       []byte("test-secret"),
-		TokenEpoch:        1,
 		STUNURLs:          []string{"stun:stun.example:3478"},
 		WSURL:             "wss://example/v1/ws",
 		StorageQuotaBytes: 64 << 20,
@@ -81,9 +80,6 @@ func newEnv(t *testing.T, mode string) *env {
 		t.Fatal(err)
 	}
 	e.tokens = tokens
-	if _, err := st.EnsureTokenEpoch(context.Background(), 1, e.now); err != nil {
-		t.Fatalf("seed token epoch: %v", err)
-	}
 	e.logBuf = &bytes.Buffer{}
 	e.api = New(e.cfg, st, blobs, v, tokens, ratelimit.NewMemory(), ratelimit.NewMemoryLockout(),
 		slog.New(slog.NewTextHandler(e.logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
@@ -285,9 +281,6 @@ func TestConfig(t *testing.T) {
 	}
 	if cfg.WSURL == nil || *cfg.WSURL == "" {
 		t.Fatalf("missing ws url: %+v", cfg)
-	}
-	if cfg.TokenEpoch != 1 {
-		t.Fatalf("token_epoch = %d, want 1", cfg.TokenEpoch)
 	}
 	if strings.Contains(string(resp.body), "turn:") {
 		t.Fatal("config must not advertise TURN")
@@ -1110,11 +1103,12 @@ func newSM2Identity(t *testing.T) (priv, pub []byte, code string) {
 	return priv, pub, gm.DeriveCode(pub)
 }
 
-// token 轮换矩阵（API §1.7 的 EPOCH 语义）：
+// token 轮换矩阵（v1：吊销 = 轮换派生密钥）：
 //
-//	只换 TOKEN_SECRET（EPOCH 不变）→ 旧 token **仍然有效**（200）；
-//	EPOCH 递增 → 旧 token 立刻 401 AUTH_TOKEN_STALE；
-//	每行都断言"新签发的 token 可用"，避免"整体坏掉也是 401"。
+//	基线 201；只换 TOKEN_SECRET → 旧 token 401 AUTH_TOKEN_REVOKED；重新签发 201；
+//	错 token → AUTH_TOKEN_INVALID；超 6h → AUTH_TOKEN_EXPIRED。
+//
+// 每行都断言"新签发的 token 可用"，避免"整体坏掉也是 401"。
 func TestTokenRotationMatrix(t *testing.T) {
 	e := newEnv(t, "")
 	sender, _ := e.register("sender")
@@ -1122,12 +1116,16 @@ func TestTokenRotationMatrix(t *testing.T) {
 	f := newFixture()
 	tr := e.createTransfer(sender, recipient, f, nil)
 
-	// 基线：token 可用。
+	// 基线：可用。
 	if resp := e.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusCreated {
 		t.Fatalf("baseline: %d %s", resp.status, resp.body)
 	}
+	// 错 token（哈希对不上）→ INVALID。
+	e.wantError(e.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
+		spec.HeaderUploadToken: "not-a-real-token",
+	}), spec.ErrAuthTokenInvalid)
 
-	// ① 只换 TOKEN_SECRET（EPOCH 不变）→ 旧 token 仍然有效。
+	// ① 只换 TOKEN_SECRET → 旧 token REVOKED。
 	rotatedTokens, err := auth.NewTokenIssuer([]byte("rotated-secret"))
 	if err != nil {
 		t.Fatal(err)
@@ -1142,56 +1140,35 @@ func TestTokenRotationMatrix(t *testing.T) {
 	e2.srv = httptest.NewServer(e2.api.Handler())
 	defer e2.srv.Close()
 
-	got := e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
-		spec.HeaderUploadToken: tr.UploadToken,
-	})
-	if got.status != http.StatusOK {
-		t.Fatalf("only-secret must keep old token alive (API §1.7), got %d %s", got.status, got.body)
-	}
-	// 新签发的 token 也可用（用新 secret + 同一 EPOCH）。
-	f1 := newFixture()
-	tr1 := e2.createTransfer(sender, recipient, f1, nil)
-	if resp := e2.putPrelude(tr1.UploadToken, tr1, f1.Prelude); resp.status != http.StatusCreated {
-		t.Fatalf("only-secret new token: %d %s", resp.status, resp.body)
-	}
-
-	// ② EPOCH 递增 → 旧 token 立刻 AUTH_TOKEN_STALE。
-	if _, err := e.st.Pool().Exec(context.Background(),
-		`UPDATE token_kid_state SET kid = 2 WHERE id = true`); err != nil {
-		t.Fatal(err)
-	}
+	e2.wantError(e2.putPrelude(tr.UploadToken, tr, f.Prelude), spec.ErrAuthTokenRevoked)
 	e2.wantError(e2.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
 		spec.HeaderUploadToken: tr.UploadToken,
-	}), spec.ErrAuthTokenStale)
-	e2.wantError(e2.putPrelude(tr1.UploadToken, tr1, f1.Prelude), spec.ErrAuthTokenStale)
+	}), spec.ErrAuthTokenRevoked)
 
-	// 新签发的 token（带当前 EPOCH）正常。
+	// ② 轮换后重新签发 → 新 token 可用。
 	f2 := newFixture()
 	tr2 := e2.createTransfer(sender, recipient, f2, nil)
+	if tr2.UploadToken == tr.UploadToken {
+		t.Fatal("new transfer reused the old token")
+	}
 	if resp := e2.putPrelude(tr2.UploadToken, tr2, f2.Prelude); resp.status != http.StatusCreated {
-		t.Fatalf("after epoch bump new token: %d %s", resp.status, resp.body)
+		t.Fatalf("after rotation new token: %d %s", resp.status, resp.body)
 	}
 
-	// ③ 错 token 是 AUTH_TOKEN_INVALID（与 STALE 区分）。
-	e2.wantError(e2.do(http.MethodGet, spec.StatusPath(tr2.TransferID), nil, map[string]string{
-		spec.HeaderUploadToken: "not-a-real-token",
-	}), spec.ErrAuthTokenInvalid)
-}
-
-// 上传 token 6 小时过期 → AUTH_TOKEN_EXPIRED（与 STALE/INVALID 三分）。
-func TestUploadTokenExpires(t *testing.T) {
-	e := newEnv(t, "")
-	sender, _ := e.register("sender")
-	recipient, _ := e.register("recipient")
-	f := newFixture()
-	tr := e.createTransfer(sender, recipient, f, nil)
-	if resp := e.putPrelude(tr.UploadToken, tr, f.Prelude); resp.status != http.StatusCreated {
-		t.Fatalf("put: %d", resp.status)
+	// ③ 幂等重放在轮换后拿不回同一个 token → 409。
+	body := map[string]any{
+		"recipient_code": recipient, "plaintext_size": f.PlaintextSize, "chunk_size": f.ChunkSize,
+		"chunk_count": f.ChunkCount, "prelude_len": len(f.Prelude), "prelude_sm3": f.preludeSM3(),
 	}
-	e.advance(6*time.Hour + time.Minute)
-	e.wantError(e.do(http.MethodGet, spec.StatusPath(tr.TransferID), nil, map[string]string{
-		spec.HeaderUploadToken: tr.UploadToken,
-	}), spec.ErrAuthTokenExpired)
+	key := auth.B64.EncodeToString(randomBytes(24))
+	hdrs := e.authHeaders(spec.PurposeTransferCreate, sender)
+	hdrs[spec.HeaderIdempotencyKey] = key
+	if resp := e.do(http.MethodPost, spec.PathTransfers, body, hdrs); resp.status != http.StatusCreated {
+		t.Fatalf("create: %d %s", resp.status, resp.body)
+	}
+	hdrs2 := e2.authHeaders(spec.PurposeTransferCreate, sender)
+	hdrs2[spec.HeaderIdempotencyKey] = key
+	e2.wantError(e2.do(http.MethodPost, spec.PathTransfers, body, hdrs2), spec.ErrTransferStateConflict)
 }
 
 // 真认证链路：注册 → 建传输 → 分块 → complete → 取件 → ack，全部用真实 SM2 签名。

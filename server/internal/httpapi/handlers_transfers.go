@@ -115,20 +115,14 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 				a.internalError(w, r, "get idempotent transfer", err)
 				return
 			}
-			cur, err := a.store.CurrentTokenEpoch(ctx)
-			if err != nil {
-				a.internalError(w, r, "current token epoch", err)
-				return
-			}
-			token, err := a.tokens.UploadToken(existing.ID, cur)
+			token, err := a.tokens.UploadToken(existing.ID)
 			if err != nil {
 				a.internalError(w, r, "derive upload token", err)
 				return
 			}
-			// 幂等重放要返回同一个 token；EPOCH 变过或 secret 轮换过都重建不出来，
-			// 这时不能把不可用的 token 发出去，让客户端重建传输（拿不到旧 token 才是对的）。
-			if existing.UploadTokenEpoch != strconv.FormatInt(cur, 10) ||
-				!auth.ValidateHash(token, existing.UploadTokenSM3) {
+			// 幂等重放要返回同一个 token；secret 轮换过就重建不出来，
+			// 这时不能把不可用的 token 发出去，让客户端重建传输。
+			if !a.tokens.Derives(token, existing.ID, existing.UploadTokenSM3) {
 				a.log.Warn("idempotency replay after token rotation", "transferId", existing.ID)
 				fail(w, r, spec.ErrTransferStateConflict)
 				return
@@ -170,32 +164,26 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		a.internalError(w, r, "transfer id", err)
 		return
 	}
-	epoch, err := a.store.CurrentTokenEpoch(ctx)
-	if err != nil {
-		a.internalError(w, r, "current token epoch", err)
-		return
-	}
-	token, err := a.tokens.UploadToken(transferID, epoch)
+	token, err := a.tokens.UploadToken(transferID)
 	if err != nil {
 		a.internalError(w, r, "upload token", err)
 		return
 	}
 
 	created, err := a.store.CreateTransfer(ctx, store.Transfer{
-		ID:               transferID,
-		SenderCode:       senderCode,
-		RecipientCode:    recipient,
-		PlaintextSize:    int64(req.PlaintextSize),
-		ChunkSize:        int(req.ChunkSize),
-		ChunkCount:       int(req.ChunkCount),
-		PreludeLen:       int(req.PreludeLen),
-		PreludeSM3:       preludeSM3,
-		MaxDownloads:     int(maxDownloads),
-		CreatedAt:        now,
-		ExpiresAt:        now.Add(time.Duration(ttl) * time.Second),
-		UploadTokenSM3:   auth.UploadTokenHash(token),
-		UploadTokenEpoch: strconv.FormatInt(epoch, 10),
-		UploaderIP:       ip,
+		ID:             transferID,
+		SenderCode:     senderCode,
+		RecipientCode:  recipient,
+		PlaintextSize:  int64(req.PlaintextSize),
+		ChunkSize:      int(req.ChunkSize),
+		ChunkCount:     int(req.ChunkCount),
+		PreludeLen:     int(req.PreludeLen),
+		PreludeSM3:     preludeSM3,
+		MaxDownloads:   int(maxDownloads),
+		CreatedAt:      now,
+		ExpiresAt:      now.Add(time.Duration(ttl) * time.Second),
+		UploadTokenSM3: auth.UploadTokenHash(token),
+		UploaderIP:     ip,
 	})
 	if err != nil {
 		a.internalError(w, r, "create transfer", err)
@@ -555,20 +543,15 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 		a.internalError(w, r, "get transfer", err)
 		return store.Transfer{}, false
 	}
-	// 判定顺序（API §1.7）：**先凭据后状态**。
-	// ① EPOCH 不符 → AUTH_TOKEN_STALE（递增即吊销，与 secret 无关）
-	epoch, err := a.store.CurrentTokenEpoch(r.Context())
-	if err != nil {
-		a.internalError(w, r, "current token epoch", err)
-		return store.Transfer{}, false
-	}
-	if t.UploadTokenEpoch != strconv.FormatInt(epoch, 10) {
-		writeError(w, r, apiError{code: spec.ErrAuthTokenStale})
-		return store.Transfer{}, false
-	}
-	// ② token 值不对 → AUTH_TOKEN_INVALID
+	// 判定顺序（先凭据后状态）：
+	// ① token 与库内哈希都对不上 → AUTH_TOKEN_INVALID（伪造/串了传输）
 	if !auth.ValidateHash(token, t.UploadTokenSM3) {
 		writeError(w, r, apiError{code: spec.ErrAuthTokenInvalid})
+		return store.Transfer{}, false
+	}
+	// ② 哈希对得上、但当前密钥派生不出同一个值 → 密钥轮换导致失效 → AUTH_TOKEN_REVOKED
+	if !a.tokens.Derives(token, t.ID, t.UploadTokenSM3) {
+		writeError(w, r, apiError{code: spec.ErrAuthTokenRevoked})
 		return store.Transfer{}, false
 	}
 	// ③ 凭据过期（上传 token 6h）→ AUTH_TOKEN_EXPIRED

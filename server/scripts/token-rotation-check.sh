@@ -46,7 +46,7 @@ FAILS=0
 
 start_server() { # $1=secret $2=kid
     YANSHU_DATABASE_URL="$DSN" YANSHU_BLOB_DIR="$BLOB" YANSHU_ADDR="127.0.0.1:$PORT" \
-    YANSHU_VERIFIER=stub-allow YANSHU_TOKEN_SECRET="$1" YANSHU_TOKEN_KID="$2" \
+    YANSHU_VERIFIER=stub-allow YANSHU_TOKEN_SECRET="$1" \
         "$BIN" >"$WORK/server-$2.log" 2>&1 &
     SRV_PID=$!
     i=0
@@ -99,32 +99,26 @@ check() { # $1=label $2=want_status $3=want_err $4=got
 echo "== 0) 迁移 =="
 YANSHU_DATABASE_URL="$DSN" "$BIN" -migrate-only >/dev/null 2>&1 || { echo "migrate 失败" >&2; exit 1; }
 
-echo "== 1) 基线：kid=k1 签发并可用 =="
+echo "== 1) 基线：签发并可用 =="
 start_server "rotation-secret-0001" "1"
 set -- $(new_transfer)
 PKG1=$1; TOK1=$2
 check "baseline status" 200 "" "$(status_of "$PKG1" "$TOK1")"
+check "wrong token" 401 "AUTH_TOKEN_INVALID" "$(status_of "$PKG1" "not-a-real-token")"
 stop_server
 
-echo "== 2) 只改 secret（EPOCH 仍 1）→ 旧 token 必须仍可用 =="
+echo "== 2) 轮换 TOKEN_SECRET → 旧 token 立刻 REVOKED =="
 start_server "rotation-secret-0002" "1"
-check "only-secret: 旧 token" 200 "" "$(status_of "$PKG1" "$TOK1")"
+check "rotated: 旧 token" 401 "AUTH_TOKEN_REVOKED" "$(status_of "$PKG1" "$TOK1")"
 set -- $(new_transfer); PKG2=$1; TOK2=$2
-check "only-secret: 新 token" 200 "" "$(status_of "$PKG2" "$TOK2")"
+check "rotated: 新 token" 200 "" "$(status_of "$PKG2" "$TOK2")"
 stop_server
 
-echo "== 3) EPOCH +1（secret 不变）→ 旧 token 立刻 STALE =="
-start_server "rotation-secret-0002" "2"
-check "epoch+1: 旧 token" 401 "AUTH_TOKEN_STALE" "$(status_of "$PKG2" "$TOK2")"
+echo "== 3) 再轮换一次 → 上一轮 token 也 REVOKED，新 token 可用 =="
+start_server "rotation-secret-0003" "1"
+check "rotate-again: 旧 token" 401 "AUTH_TOKEN_REVOKED" "$(status_of "$PKG2" "$TOK2")"
 set -- $(new_transfer); PKG3=$1; TOK3=$2
-check "epoch+1: 新 token" 200 "" "$(status_of "$PKG3" "$TOK3")"
-stop_server
-
-echo "== 4) secret 与 EPOCH 都换 → 仍 STALE =="
-start_server "rotation-secret-0003" "3"
-check "both: 旧 token" 401 "AUTH_TOKEN_STALE" "$(status_of "$PKG3" "$TOK3")"
-set -- $(new_transfer); PKG4=$1; TOK4=$2
-check "both: 新 token" 200 "" "$(status_of "$PKG4" "$TOK4")"
+check "rotate-again: 新 token" 200 "" "$(status_of "$PKG3" "$TOK3")"
 stop_server
 
 echo

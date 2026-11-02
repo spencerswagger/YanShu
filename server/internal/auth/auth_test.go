@@ -128,15 +128,15 @@ func TestUploadTokenIsDeterministic(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := strings.Repeat("b", 32)
-	t1, err := issuer.UploadToken(id, 1)
+	t1, err := issuer.UploadToken(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t2, _ := issuer.UploadToken(id, 1)
+	t2, _ := issuer.UploadToken(id)
 	if t1 != t2 {
 		t.Fatal("upload token is not deterministic; idempotent replay cannot return the same token")
 	}
-	other, _ := issuer.UploadToken(strings.Repeat("c", 32), 1)
+	other, _ := issuer.UploadToken(strings.Repeat("c", 32))
 	if other == t1 {
 		t.Fatal("upload token does not depend on transfer id")
 	}
@@ -149,10 +149,13 @@ func TestUploadTokenIsDeterministic(t *testing.T) {
 	if ValidateHash("", UploadTokenHash(t1)) {
 		t.Fatal("empty token accepted")
 	}
-	// 同一 transfer 不同 EPOCH 派生出的 token 不同（EPOCH 是吊销开关）。
-	e2, _ := issuer.UploadToken(id, 2)
-	if e2 == t1 {
-		t.Fatal("epoch does not participate in derivation")
+	// 轮换密钥后，旧 token 不再等于任何派生值（吊销语义）。
+	rotated, _ := NewTokenIssuer([]byte("rotated-secret"))
+	if rotated.Derives(t1, id, UploadTokenHash(t1)) {
+		t.Fatal("token still derives under a rotated secret")
+	}
+	if !issuer.Derives(t1, id, UploadTokenHash(t1)) {
+		t.Fatal("token must derive under its issuing secret")
 	}
 }
 
@@ -164,17 +167,12 @@ func TestUploadTokenMatchesContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := issuer.UploadToken(id, 7)
+	got, err := issuer.UploadToken(id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte("yanshu/upload-token/v2"))
-	var epoch [8]byte
-	for i := 0; i < 8; i++ {
-		epoch[7-i] = byte(uint64(7) >> (8 * i))
-	}
-	mac.Write(epoch[:])
+	mac.Write([]byte("yanshu/upload-token/v1"))
 	mac.Write([]byte(id))
 	want := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	if got != want {
