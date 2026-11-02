@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref, shallowRef } from 'vue'
-import { createKernel } from './crypto/index.js'
+import { createKernel, describeKernel } from './crypto/index.js'
 import { createClient } from './net/client.js'
 import { createApi } from './net/api.js'
 import { createIdentityManager } from './store/identity.js'
@@ -31,6 +31,7 @@ const regNotice = ref('')
 const serverConfig = ref(null)
 const kernelBuild = ref(null)
 const kernelSelfTest = ref(null)
+const kernelInfo = ref(describeKernel(null))
 const manualAttempts = ref(0)
 const inboxRef = ref(null)
 
@@ -46,13 +47,7 @@ const session = reactive({
 const realCrypto = computed(() => Boolean(kernel.value?.isRealCrypto))
 const kernelLayout = computed(() => kernel.value?.layout || '')
 /** 标签必须如实区分：契约布局 / 旧布局 / 桩 / 未就绪，别让人把旧布局当契约验收。 */
-const kernelLabel = computed(() => {
-  if (kernelMode.value === 'wasm') return '真实加密 · 契约布局内核（YSPK/1.0）'
-  if (kernelMode.value === 'wasm-noncontract') return '真实加密 · 非契约布局内核（待对齐）'
-  if (kernelMode.value === 'stub-fake') return '开发桩（未加密）'
-  if (kernelMode.value === 'unavailable') return '内核未就绪'
-  return '加载中'
-})
+const kernelLabel = computed(() => kernelInfo.value?.label || '加载中')
 const layoutFailed = computed(() => kernel.value?.layoutFailedSignals || [])
 const layoutWarning = computed(() => {
   if (kernelMode.value !== 'wasm-noncontract') return ''
@@ -83,8 +78,9 @@ onMounted(async () => {
     if (kernel.value.mode === 'wasm') {
       // 标签的事实依据：真跑一遍打包→解包 + 版本闸门（契约 §2.3）
       kernelSelfTest.value = kernel.value.selfTest()
-      kernelMode.value = kernelSelfTest.value.ok ? 'wasm' : 'wasm-noncontract'
     }
+    kernelInfo.value = describeKernel(kernel.value, kernelSelfTest.value)
+    kernelMode.value = kernelInfo.value.mode
 
     pendingBackend.value = defaultBackend('pending')
     identityManager.value = createIdentityManager({

@@ -61,6 +61,11 @@ test('真内核：0 import、导出齐全、版本/包头/块大小可读', { sk
   // 新原型：6 参自证解包 + DER 签名 + v1 打包
   assert.equal(kernel.capabilities.selfUnpack, true, 'ys_unpack_v1 应为 6 参自证原型')
   assert.equal(typeof kernel.exports.ys_layout_of, 'undefined', '当前 ABI 已删掉布局判别导出（单一格式）')
+  assert.equal(typeof kernel.exports.ys_get_layout, 'undefined')
+  // 原型钉死：ys_unpack 7 参（第 4 参公钥可选）、ys_unpack_v1 6 参（自证）
+  assert.equal(kernel.exports.ys_unpack.length, 7)
+  assert.equal(kernel.exports.ys_unpack_v1.length, 6)
+  assert.equal(kernel.exports.ys_unpack_meta_v1.length, 6)
   const selfTest = kernel.selfTest()
   assert.equal(selfTest.ok, true, `自检失败：${JSON.stringify(selfTest.checks)}`)
   assert.deepEqual(selfTest.checks, { version: true, header: true, roundtrip: true, versionGate: true })

@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DevStubKernel, UnavailableKernel } from '../src/crypto/stub.js'
-import { createKernel, resetKernel } from '../src/crypto/index.js'
+import { createKernel, resetKernel, describeKernel } from '../src/crypto/index.js'
 import { CryptoError } from '../src/crypto/errors.js'
 
 test('未就绪替身：一律报 CRYPTO_NOT_READY，绝不假装加密成功', () => {
@@ -70,6 +70,18 @@ test('码归一化走内核口径（O→0、I/L→1、去 -）', () => {
   assert.equal(k.normalizeCode('0il1'), '0111')
   assert.equal(k.normalizeCode('k7q'), null)
   assert.equal(k.normalizeCode('K7QU'), null)
+})
+
+test('标签判定收在一个薄函数：未就绪/桩/契约/非契约四态', () => {
+  assert.equal(describeKernel(null).label, '内核未就绪')
+  assert.equal(describeKernel(new UnavailableKernel('x')).label, '内核未就绪')
+  assert.equal(describeKernel(new DevStubKernel()).label, '开发桩（未加密）')
+  const okKernel = { mode: 'wasm', selfTestResult: { ok: true, checks: { version: true, header: true, roundtrip: true, versionGate: true } } }
+  assert.equal(describeKernel(okKernel).label, '真实加密 · 契约布局内核（YSPK/1.0）')
+  const badKernel = { mode: 'wasm', selfTestResult: { ok: false, checks: { version: true, header: true, roundtrip: false, versionGate: true } } }
+  const bad = describeKernel(badKernel)
+  assert.equal(bad.label, '真实加密 · 非契约布局内核（待对齐）')
+  assert.deepEqual(bad.failed, ['roundtrip'])
 })
 
 test('生产构建拒绝开发桩', async () => {
