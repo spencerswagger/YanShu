@@ -237,11 +237,18 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 **`KID` 的取值规则（写死）**
 
-- 部署**必配**凭据版本号 `KID`：**正整数**。
-- **必须严格单调递增**：新值 MUST **严格大于**当前值，不接受相等，更不接受调小。
-- 服务端 MUST 持久化"已见到的最大 `KID`"，并在启动时校验：**本次配置的 `KID` 小于等于历史最大值 → 拒绝启动**（fail closed，错误信息点名该配置项）。
+- 部署**必配**凭据版本号 `KID`：**正整数**（十进制）。
+- **版本只能前进**：轮换时新值 MUST **严格大于**当前值；**同一版本重启允许相等**（否则每次重启都会被自己挡住）。
+- 服务端 MUST 持久化"已生效的最大 `KID`"（记为 `current`），启动时按下表校验：
+
+| 配置值 `provided` | 启动行为 |
+|---|---|
+| `provided < current` | **拒绝启动**（`exit 1`），错误信息打印 `current=N, provided=M` |
+| `provided == current` | 正常启动（同一版本重启） |
+| `provided > current` | 正常启动，生效并把 `current` 更新为新值（新签发的凭据用新 `KID`） |
+
   理由：把 `KID` 调回旧值会让**已被吊销的旧凭据瞬间复活**——这是本机制最危险的误操作，必须在启动时挡住，不能靠人记得。
-- **未配置 `KID` 时同样 MUST 拒绝启动**（fail closed）。**MUST NOT** 退化为"没有版本号就放过旧凭据"。
+- **未配置 `KID` 时同样 MUST 拒绝启动**（fail closed，`exit 1`，错误信息点名该配置项）。**MUST NOT** 退化为"没有版本号就放过旧凭据"。
 
 **吊销效果**
 
@@ -286,7 +293,7 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 **三个终值（定稿）**：`AUTH_TOKEN_STALE`（版本已过期，`KID` 轮换）/ `AUTH_TOKEN_INVALID`（值不匹配·格式错·不存在）/ `AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受）。
 
-> `AUTH_TOKEN_STALE` 本期**不定义**：本实现没有"显式吊销列表"这类独立语义，将来若引入再单独定义，避免两个近义名混用。
+> 「显式吊销列表」这类独立语义本期**不定义**：本实现没有该机制，将来若引入再单独命名，避免与 `AUTH_TOKEN_STALE` 近义混用。
 
 **客户端处置按名字分叉**：前两个都走"重新挑战 → 签名 → 取新凭据"（**不要重算签名**，那是签名问题的解法）；只有拿到 `AUTH_SIGNATURE_INVALID` 才去查 `SIG_INPUT` 拼接、私钥与公钥是否配对。
 
@@ -296,7 +303,7 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 #### 1.7.5 重签发（可选端点）
 
-`POST /v1/transfers/{id}/token`，无请求体。用于"吊销后不重传大文件"，但**在 v1 中是可选能力**：部署方 MAY 关闭（关闭后返回 `501 FEATURE_DISABLED`），代价是吊销后只能重建传输并重传。
+`POST /v1/transfers/{id}/token`，无请求体。**v1 定义并实现**（不是可选特性、不是未来版本），用于"吊销后不重传大文件"；部署方 MAY 通过配置关闭（关闭后返回 `501 FEATURE_DISABLED`，代价是吊销后只能重建传输并重传）。
 
 **① 鉴权：只认发送方签名**
 
@@ -306,7 +313,8 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 **② 幂等与限次**
 
-- 派生输入是 `(transfer_id, 当前 TOKEN_SECRET, 当前 KID)`：同一三元组下重复调用返回**逐字节相同**的凭据与相同 `expires_at`（`200`），不刷新、不累加。
+- **幂等键是 `(transfer_id, KID)`**：同一键下重复调用返回**逐字节相同**的凭据与相同 `expires_at`（`200`），不刷新、不累加。
+- 派生输入含 `KID` 与 `TOKEN_SECRET`：若期间只换过 `TOKEN_SECRET`（`KID` 未变），重签发会得到**新值**，旧值已 `AUTH_TOKEN_INVALID`——这是预期行为，不属于幂等破坏。
 - 限速：按传输 10 次/分钟、按码 30 次/分钟（§11.1），超限 `429`。
 
 **③ 失效联动：旧凭据不得复活**
@@ -399,7 +407,7 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 | 15 | GET | `/v1/transfers/{id}/chunks/{index}` | `transfer_id` + `download_id` | 下载一个块切片 |
 | 16 | POST | `/v1/transfers/{id}/ack` | 签名 `TRANSFER_ACK` | 取件完成确认 → 删密文 |
 | 17 | POST | `/v1/transfers/{id}/revoke` | 签名 `TRANSFER_REVOKE` | 发送方主动撤回 |
-| 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`（**v1 可选能力**：部署方可关闭，关闭返回 `501 FEATURE_DISABLED`，代价是吊销后需重建传输并重传）。细则见 §1.7.5 |
+| 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`。**v1 定义并实现**；部署方可配置关闭（关闭返回 `501 FEATURE_DISABLED`，代价是吊销后需重建传输并重传）。细则见 §1.7.5 |
 | 19 | WS | `/v1/ws` | 首帧签名 `WS_HELLO` | 在线状态、收件通知、直传信令。**v1 未实现**：返回 `503 SERVICE_UNAVAILABLE`，客户端按 §9.6 降级（排期见 §15） |
 
 ---
