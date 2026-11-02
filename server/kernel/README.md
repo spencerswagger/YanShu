@@ -5,8 +5,8 @@
 
 | 项 | 值 |
 |---|---|
-| 来源分支/提交 | `feat/endcrypto-wasm` @ `f1ef9f9a1212ce48ae40d3891750ee7c8da81d9d` |
-| 大小 | 130 653 B |
+| 来源分支/提交 | `feat/endcrypto-wasm` @ **`031e95b`**（端侧冻结 head；本文件早先记录过 `f1ef9f9`，其产物与本案字节相同） |
+| 大小 | 130 653 B（本沙盒工具链产物；不同环境可能不同，见下方说明） |
 | sha256 | `8b89dd7fc033b9f4b316238d1d7507b161bbc74ff3547643d00981ed8da154f9` |
 | 导出 | 34 个函数 + `memory`，**0 个 import** |
 | 用到的导出 | `ys_alloc` / `ys_free` / `ys_sm2_verify_der` / `ys_version` |
@@ -24,6 +24,13 @@ sha256sum <repo>/server/kernel/yanshu_sm.wasm   # 与上表不一致时更新本
 
 注意：构建 wasm 时**不要**全局覆盖 `RUSTFLAGS`/`CC`（会把 linker 带偏，见端侧
 `docs/ABI.md`）；上面这条命令不需要额外参数。
+
+## 关于 sha256 的跨环境差异
+
+同一 commit 在**不同工具链/构建环境**下产出的 wasm 字节可能不同（实测：本沙盒 130 653 B /
+`8b89dd7f…`，Web 侧 127 313 B / `c1b87d0a…`，两者 `ys_version()` 与导出集一致）。因此判断
+"是否同源"要看 **commit + `ys_version()` + 导出数量**，不能只比 sha256。服务端只要求
+本目录这份产物通过 `internal/auth` 的验签向量测试。
 
 ## 更新流程
 
