@@ -27,11 +27,15 @@
 
 ## 附：token 错误名期望（单独判定，不属三条门槛）
 
-| 场景 | 期望字面（spencer 裁定） |
+| 场景 | 期望字面（现行裁定） |
 |---|---|
-| 版本/密钥轮换 → 旧 token | **`AUTH_TOKEN_STALE`** |
-| 凭据值不匹配/格式错/不存在 | `AUTH_TOKEN_INVALID` |
+| **只改 `TOKEN_SECRET`**（KID 不变） | **`AUTH_TOKEN_INVALID`**（派生密钥变了 → 凭据值不匹配，**这是正确行为**） |
+| **递增 `KID`**（或 secret+KID 同改） | **`AUTH_TOKEN_STALE`**（签发版本已过期，优先于 INVALID） |
+| 格式错/不存在 | `AUTH_TOKEN_INVALID` |
 | 签名本身不被接受 | `AUTH_SIGNATURE_INVALID` |
+
+`AUTH_TOKEN_REVOKED` 当前**不应出现**（只留给将来的"显式吊销列表"）；
+`AUTH_TOKEN_EXPIRED` 本期不实现（K2 登记），不算缺口。
 
 实现若仍返回 `AUTH_TOKEN_REVOKED` → **记 FAIL 并注明"待 Core 改名"**，不迁就实现。
 `AUTH_TOKEN_REVOKED` 只在"显式吊销"语义下才允许，当前不存在，验收里不引用。

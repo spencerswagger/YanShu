@@ -58,7 +58,8 @@ results/
 | `contract-v1/2026-11-02-token-naming-authority-5605907.md` | —（服务端证据） | `5605907` | `3c1e4b2b…35f98f` | stub-allow | native-api | `check_token_lifecycle.py ...`（`--kid` 即 epoch） | **命名权威表**：只改 secret → 204（不吊销）；只改 epoch → 401 `AUTH_TOKEN_STALE`；两者都改 → STALE 优先；新签发 201、旧 token 不复活；epoch 调小拒启动 |
 | `contract-v1/2026-11-02-host-binary-7239888.md` | —（服务端证据） | `7239888` | `bd64d23c…d7d6d7` | stub/sm2 | native-api | `check_token_lifecycle.py --kid 1 …`；`yanshu-server -migrate-only` 验升级路径 | **三件套 + 升级路径已修**：老库（`08d40e7`）升级后补上 `upload_token_kid` 并起得来；token 四步 201 → 401 `AUTH_TOKEN_INVALID`（secret）→ 401 `AUTH_TOKEN_STALE`（kid）→ 新 201，旧 token 不复活 |
 | `contract-v1/2026-11-02-token-kid-fa479d9.md` | —（服务端证据） | `fa479d9` | 二进制前缀 `b9d4086e…` | stub-allow | native-api | `python3 qa/evidence/check_token_lifecycle.py --kid k1 --binary <bin> --dsn "<DSN>" --ys-tool <t>` | **token 已验证（kid）**：基线 201 → 只换 secret 401 `AUTH_SIGNATURE_INVALID` → 只换 kid 401 `AUTH_TOKEN_STALE` → 新签发 201、旧 token 不复活；不设 KID 启动 exit 1 |
-| `contract-v1/2026-11-02-kid-and-kernel-sha.md` | `ab4279a`/`9bce5bb`/`739293a` | 各自现编 | stub-allow | `check_token_lifecycle.py --kid k1 …`；`check_server_kernel.py --server-dir <src> --vectors-dir <vec>` | token 三态已验证（201→401→201，待统一错误名）；内嵌内核已换冻结产物、白名单+向量套件全 PASS；老库缺 `upload_token_kid` 列（唯一真 BLOCKED） |
+| `contract-v1/2026-11-02-rejudge-b516cc6.md` | —（服务端证据） | `b516cc6` | `26739fd3…b81e…` | stub-allow + 真 sm2 | native-api | `check_token_lifecycle.py --kid 1 …`；`check_upgrade_path.py` | **按现行裁定全部 PASS**：只改 secret → `AUTH_TOKEN_INVALID`（设计如此）、只改 KID → `AUTH_TOKEN_STALE`、旧 token 不复活；升级 10/10（`pre-kid`、连跑两次幂等）；四码覆盖（签名类/凭据类互不顶替） |
+| `contract-v1/2026-11-02-kid-and-kernel-sha.md` | `ab4279a`/`9bce5bb`/`739293a` | 各自现编 | stub-allow | `check_token_lifecycle.py --kid k1 …`；`check_server_kernel.py --server-dir <src> --vectors-dir <vec>` | 历史记录：早期 head 的行为与升级缺口（已由后续提交修复，留档对照） |
 | `contract-v1/2026-11-02-host-binary-980fc44.md` | `08d40e7` | `275fc463…6af55` | 真 sm2 / stub | `python3 qa/evidence/check_token_lifecycle.py --binary <bin> …` | 二进制三件套；token 三态 201→401→201 |
 | `contract-v1/2026-11-02-evidence1-core-run4-logfile.md` | `28d75b0` | — | stub-allow | `YS_EV1_LOG_MODE=file … run_evidence1_core.sh` | 日志改 `YANSHU_LOG_FILE`/`LOG_DIR`；LEASED vs CONSUMED 残留对比 |
 | `contract-v1/2026-11-02-evidence1-core-run3-core-deliver.md` | `2bc7dae` | — | stub-allow | `YS_DELIVER_BIN=core-deliver …` | 投递改用 Core 官方 `deliver` |
@@ -85,59 +86,12 @@ token 轮换（kid → `AUTH_TOKEN_REVOKED`）。
 
 **仍 BLOCKED / 待跟进**：
 
-1. ~~已有 schema 升级缺 `upload_token_kid` 列~~ → **已闭合且有常规检查**（`check_upgrade_path.py`）：
-   老 `08d40e7` → 新 `5605907` 十项断言全 PASS（列补上、历史行 `pre-kid`、服务起、连跑两次幂等）。
-   **`739293a` 存在该缺口，不可用于已有库**；`7239888` 起修复。
-2. **token 命名以实测为准（`d655e16`，最新）**：只换 `TOKEN_SECRET` → **401 `AUTH_TOKEN_REVOKED`**
-   （旧版误报 `AUTH_SIGNATURE_INVALID` 的缺陷已修）；`AUTH_TOKEN_INVALID`（值不匹配/格式错）与
-   `AUTH_TOKEN_EXPIRED`（上传 6h / 租约 30min）未在本矩阵触发，属实现内已存在、待单独构造用例。
-   历史实测（`5605907` 的 EPOCH 版：只改 epoch → `AUTH_TOKEN_STALE`）保留在
-   `2026-11-02-token-naming-authority-5605907.md`，**EPOCH 已在 `d655e16` 撤回（`0004` 删列）**。
+1. ~~schema 升级缺列~~ → **已闭合**（`0002` 补列 + `pre-kid` 回填）：`08d40e7 → b516cc6` 10/10 PASS。
+2. ~~token 错误名~~ → **已闭合**：`b516cc6` 上只有 `AUTH_TOKEN_INVALID` 与 `AUTH_TOKEN_STALE`，
+   `AUTH_TOKEN_REVOKED` 已不出现（`d655e16` 的那次是旧产物）。
+3. **重签发端点未实现**（`POST /v1/transfers/{id}/token`，契约 §1.7.5 已定义）——
+   **进度差，不是 BLOCKED**；`AUTH_TOKEN_EXPIRED` 属 K2 登记，本期不实现，也不算缺口。
 
 其余项全部闭合：证据二（生产路径 6/6 + 11/11 + 变体 18/18）、用户码/校验位四形态 26/26 + 反向用例、
 prelude-only 6/6、证据一（存储/DB/日志零命中 + 三组阳性对照，含真 `sm2`）、
-token 轮换功能、服务端内嵌内核同源（白名单 + 向量套件）。
-
-## 经验条目
-
-### 经验一：同源不同字节的根因是**构建入口用错**（2026-11-02）
-
-之前那对 `127,313 B / c1b87d0a…` 与 `130,653 B / 8b89dd7f…` 不是"环境差异"，是**从错的目录构建**：
-
-| 命令 | 结果 |
-|---|---|
-| `cd crypto && cargo build --release --target wasm32-unknown-unknown -p yanshu-sm` | **127,313 B / `c1b87d0a…`**（正确） |
-| `cd crypto/sm && cargo build …`（成员目录） | 130,653 B / `8b89dd7f…`（绕过 workspace 的 `Cargo.lock` 与 `[profile.release]`） |
-
-教训：① 同一份源码可以有**两种字节**，判定只能比 **sha256**——commit 号、导出数、
-`ys_version()`、"能跑通"都不足以为凭；② 交付说明必须写**唯一正确构建命令**并注明
-"禁止从成员目录构建"，否则下一个人一编译又产出一个"看起来一样"的假产物。
-
-（另一面：根 `.gitignore` 的 `*.wasm` 会让 `server/kernel/yanshu_sm.wasm` 被静默跳过——
-`b516cc6` 里它是**空 blob**，别人 clone 拿不到内核；`8f4f24c` 才真正提交。）
-
-### 经验二：入参宽度错一位造成的"假缺陷"
-
-同一把公钥 `PB_S`：传 **64 字节 `X‖Y` → `AWQW`**（正确）；误传 **65 字节（`0x04‖X‖Y`）给
-只收 64 字节的 `ys_user_code`** → 内核把 `0x04` 当 X 首位、整体错位一字节 → `X2EH`。
-无报错、只是一致性检查红。规矩：**每个公钥入参函数调用前显式断言缓冲区长度**，
-`ys_user_code_wire` 只用于 65 字节形态。
-
-### 经验三：零命中的证据必须配阳性对照
-
-"存储/日志/DB 三处零命中"本身可能是检测器瞎了。每轮必须做三组注入对照（塞明文到存储、
-写文件名到日志、写文件名到 DB）→ 期望 exit=1；复原 → exit=0。对照不成立即判本轮不可信。
-
-### 经验四：向量超出 ABI 能力时，标"不可执行"而不是判 FAIL
-
-验签向量的 `different_user_id` 改了 `user_id` 但签名体不变；ABI 验签**没有 userID 入参**
-（固定国标默认串），所以固定默认 ID 下**必然通过**。正确做法：标 `executable:false` 不计入统计，
-把"换 ID 必拒"挪到**能表达它的层级**（库层断言）去验证。
-
-### 经验五：假 PASS 的两种来源（都被实盘抓到过）
-
-1. **旧进程占端口**：第二个实例 `bind: address already in use` 起不来，旧实例继续应答 →
-   旧 token 得 200、密文落旧目录而扫新目录空语料却"PASS"。修法：端口由内核分配、三重判活
-   （进程活 + 日志 `listening` + 无 bind 错误）、并断言落盘路径在本次 blob 根下。
-2. **`--log-path` 指向单个文件**：`os.walk` 遍历不到 → 日志 0 份却 PASS。修法：文件/目录都支持，
-   逐目标空语料告警。
+token 矩阵（INVALID/STALE 两码 + 四码覆盖）、服务端内嵌内核同源（白名单 + 向量套件）。
