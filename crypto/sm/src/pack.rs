@@ -158,10 +158,10 @@ impl Header {
             return Err(Error::LengthInconsistent);
         }
         if buf[OFF_MAGIC..OFF_MAGIC + 4] != MAGIC {
-            return Err(Error::MagicMismatch);
+            return Err(Error::BadMagic);
         }
         if buf[OFF_VERSION_MAJOR] != VERSION_MAJOR || buf[OFF_VERSION_MINOR] != VERSION_MINOR {
-            return Err(Error::VersionUnsupported);
+            return Err(Error::UnsupportedVersion);
         }
         let header_len = u16::from_be_bytes(
             buf[OFF_HEADER_LEN..OFF_HEADER_LEN + 2]
@@ -180,7 +180,7 @@ impl Header {
         }
         let flags = u32::from_be_bytes(buf[OFF_FLAGS..OFF_FLAGS + 4].try_into().expect("4"));
         if flags & !(FLAG_NAME_OBFUSCATED | FLAG_SENDER_SIGNED) != 0 {
-            return Err(Error::FlagsUnknown);
+            return Err(Error::BadFlags);
         }
         if flags & FLAG_SENDER_SIGNED == 0 {
             return Err(Error::Unsigned);
@@ -317,7 +317,8 @@ pub struct Manifest {
     pub name_mode: u8,
     pub file_size: u64,
     pub chunk_size: u32,
-    pub chunk_count: u32,
+    /// 块数。字段名沿用首版 API（Gate 的探针读 `manifest.block_count`）。
+    pub block_count: u32,
     pub created_at_ms: u64,
     pub name: String,
     pub mime: String,
@@ -364,6 +365,11 @@ pub fn valid_ext(s: &str) -> bool {
 }
 
 impl Manifest {
+    /// 契约口径的别名（`block_count` 是首版 API 的字段名）。
+    pub fn chunk_count(&self) -> u32 {
+        self.block_count
+    }
+
     pub fn encode(&self) -> Result<Vec<u8>> {
         if !valid_name(&self.name) || !valid_mime(&self.mime) || !valid_ext(&self.ext) {
             return Err(Error::BadArgument);
@@ -378,7 +384,7 @@ impl Manifest {
         out.push(DIGEST_LEN);
         out.extend_from_slice(&self.file_size.to_be_bytes());
         out.extend_from_slice(&self.chunk_size.to_be_bytes());
-        out.extend_from_slice(&self.chunk_count.to_be_bytes());
+        out.extend_from_slice(&self.block_count.to_be_bytes());
         out.extend_from_slice(&self.created_at_ms.to_be_bytes());
         out.extend_from_slice(&(self.name.len() as u16).to_be_bytes());
         out.extend_from_slice(self.name.as_bytes());
@@ -395,78 +401,78 @@ impl Manifest {
 
     pub fn decode(buf: &[u8]) -> Result<Manifest> {
         if buf.len() < 42 {
-            return Err(Error::ManifestInvalid);
+            return Err(Error::BadManifestRecord);
         }
         if buf[0..4] != MANIFEST_MAGIC
             || buf[4] != MANIFEST_VERSION
             || buf[6] != DIGEST_ALG_SM3
             || buf[7] != DIGEST_LEN
         {
-            return Err(Error::ManifestInvalid);
+            return Err(Error::BadManifestRecord);
         }
         let name_mode = buf[5];
         if name_mode != NAME_MODE_REAL && name_mode != NAME_MODE_OBFUSCATED {
-            return Err(Error::ManifestInvalid);
+            return Err(Error::BadManifestRecord);
         }
         let file_size = u64::from_be_bytes(buf[8..16].try_into().expect("8"));
         let chunk_size = u32::from_be_bytes(buf[16..20].try_into().expect("4"));
-        let chunk_count = u32::from_be_bytes(buf[20..24].try_into().expect("4"));
+        let block_count = u32::from_be_bytes(buf[20..24].try_into().expect("4"));
         let created_at_ms = u64::from_be_bytes(buf[24..32].try_into().expect("8"));
 
         let mut pos = 32usize;
         let name_len = u16::from_be_bytes(buf[pos..pos + 2].try_into().expect("2")) as usize;
         pos += 2;
         if name_len > 255 || pos + name_len > buf.len() {
-            return Err(Error::ManifestInvalid);
+            return Err(Error::BadManifestRecord);
         }
         let name = core::str::from_utf8(&buf[pos..pos + name_len])
-            .map_err(|_| Error::ManifestInvalid)?
+            .map_err(|_| Error::BadManifestRecord)?
             .to_string();
         pos += name_len;
 
         if pos + 2 > buf.len() {
-            return Err(Error::ManifestInvalid);
+            return Err(Error::BadManifestRecord);
         }
         let mime_len = u16::from_be_bytes(buf[pos..pos + 2].try_into().expect("2")) as usize;
         pos += 2;
         if mime_len == 0 || mime_len > 127 || pos + mime_len > buf.len() {
-            return Err(Error::ManifestInvalid);
+            return Err(Error::BadManifestRecord);
         }
         let mime = core::str::from_utf8(&buf[pos..pos + mime_len])
-            .map_err(|_| Error::ManifestInvalid)?
+            .map_err(|_| Error::BadManifestRecord)?
             .to_string();
         pos += mime_len;
 
         if pos + 2 > buf.len() {
-            return Err(Error::ManifestInvalid);
+            return Err(Error::BadManifestRecord);
         }
         let ext_len = u16::from_be_bytes(buf[pos..pos + 2].try_into().expect("2")) as usize;
         pos += 2;
         if ext_len > 16 || pos + ext_len > buf.len() {
-            return Err(Error::ManifestInvalid);
+            return Err(Error::BadManifestRecord);
         }
         let ext = core::str::from_utf8(&buf[pos..pos + ext_len])
-            .map_err(|_| Error::ManifestInvalid)?
+            .map_err(|_| Error::BadManifestRecord)?
             .to_string();
         pos += ext_len;
         if !valid_name(&name) || !valid_mime(&mime) || !valid_ext(&ext) {
-            return Err(Error::ManifestInvalid);
+            return Err(Error::BadManifestRecord);
         }
 
         if pos + 4 > buf.len() {
-            return Err(Error::ManifestInvalid);
+            return Err(Error::BadManifestRecord);
         }
         let digest_table_len =
             u32::from_be_bytes(buf[pos..pos + 4].try_into().expect("4")) as usize;
         pos += 4;
-        if digest_table_len != chunk_count as usize * 32 {
+        if digest_table_len != block_count as usize * 32 {
             return Err(Error::LengthInconsistent);
         }
         if pos + digest_table_len != buf.len() {
-            return Err(Error::ManifestInvalid);
+            return Err(Error::BadManifestRecord);
         }
-        let mut digests = Vec::with_capacity(chunk_count as usize);
-        for _ in 0..chunk_count {
+        let mut digests = Vec::with_capacity(block_count as usize);
+        for _ in 0..block_count {
             let mut d = [0u8; 32];
             d.copy_from_slice(&buf[pos..pos + 32]);
             digests.push(d);
@@ -476,7 +482,7 @@ impl Manifest {
             name_mode,
             file_size,
             chunk_size,
-            chunk_count,
+            block_count,
             created_at_ms,
             name,
             mime,
@@ -486,19 +492,26 @@ impl Manifest {
     }
 }
 
-/// 打包输入。
+/// 打包输入（**首版形状**：64 字节公钥 + `block_size`，Gate 的探针按这个编译）。
+///
+/// 契约要求 65 字节未压缩点，内核在内部补 `0x04`；Web/Gate 不需要改。
 pub struct PackInput<'a> {
-    /// 接收方公钥（65 字节，`0x04 ‖ X ‖ Y`）
-    pub recipient_public: &'a [u8; SENDER_PUB_LEN],
+    /// 接收方公钥 `X‖Y`（64 字节；内部补 `0x04` 成契约的 65 字节）
+    pub recipient_public: &'a [u8; 64],
     /// 发送方私钥（32 字节）
     pub sender_private: &'a [u8; 32],
     pub name: &'a str,
     pub mime: &'a str,
-    pub ext: &'a str,
-    /// Unix 毫秒（UTC）
-    pub created_at_ms: u64,
-    pub chunk_size: u32,
+    /// 明文块大小（契约里叫 `CHUNK_SIZE`）
+    pub block_size: u32,
     pub data: &'a [u8],
+}
+
+/// 契约清单里的可选字段（首版 API 没有；默认空扩展名 + `created_at = 0`）。
+#[derive(Clone, Copy, Default)]
+pub struct PackOptions<'a> {
+    pub ext: &'a str,
+    pub created_at_ms: u64,
 }
 
 /// 可复现打包参数（测试向量用；生产中由 [`pack`] 用 CSPRNG 生成）。
@@ -507,15 +520,6 @@ pub struct PackParams {
     pub kdf_salt: [u8; KDF_SALT_LEN],
     pub k_enc: U256,
     pub k_sig: U256,
-}
-
-fn strip_pub_prefix(pub65: &[u8; SENDER_PUB_LEN]) -> Result<[u8; 64]> {
-    if pub65[0] != 0x04 {
-        return Err(Error::BadPoint);
-    }
-    let mut out = [0u8; 64];
-    out.copy_from_slice(&pub65[1..]);
-    Ok(out)
 }
 
 fn kek_chunk(dk: &[u8; 32], salt: &[u8; KDF_SALT_LEN]) -> [u8; KEK_LEN] {
@@ -543,16 +547,29 @@ fn random_scalar(rng: &mut impl Rng) -> Result<U256> {
     Err(Error::Rng)
 }
 
-/// 打包（随机 DK / KDF_SALT / k_enc / k_sig）。
+/// 打包（契约默认布局；随机 DK / KDF_SALT / k_enc / k_sig）。
+///
+/// 清单里的 `ext` 为空、`created_at = 0`（首版 API 没有这两个字段）；
+/// 需要完整清单字段时用 [`pack_with_options`]。
 pub fn pack(input: &PackInput, rng: &mut impl Rng) -> Result<Vec<u8>> {
+    pack_with_options(input, &PackOptions::default(), rng)
+}
+
+/// 打包并指定清单的可选字段。
+pub fn pack_with_options(
+    input: &PackInput,
+    options: &PackOptions,
+    rng: &mut impl Rng,
+) -> Result<Vec<u8>> {
     let mut dk = [0u8; 32];
     rng.fill(&mut dk);
     let mut kdf_salt = [0u8; KDF_SALT_LEN];
     rng.fill(&mut kdf_salt);
     let k_enc = random_scalar(rng)?;
     let k_sig = random_scalar(rng)?;
-    pack_with(
+    pack_with_params(
         input,
+        options,
         &PackParams {
             dk,
             kdf_salt,
@@ -563,14 +580,19 @@ pub fn pack(input: &PackInput, rng: &mut impl Rng) -> Result<Vec<u8>> {
 }
 
 /// 用固定参数打包（测试向量可复现；生产 MUST NOT 用固定值）。
-pub fn pack_with(input: &PackInput, params: &PackParams) -> Result<Vec<u8>> {
-    if !(MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&input.chunk_size) {
+pub fn pack_with_params(
+    input: &PackInput,
+    options: &PackOptions,
+    params: &PackParams,
+) -> Result<Vec<u8>> {
+    let chunk_size = input.block_size;
+    if !(MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&chunk_size) {
         return Err(Error::BadArgument);
     }
     if input.data.len() as u64 > MAX_PLAINTEXT_SIZE {
         return Err(Error::BadArgument);
     }
-    let chunk_count64 = expected_chunk_count(input.data.len() as u64, input.chunk_size);
+    let chunk_count64 = expected_chunk_count(input.data.len() as u64, chunk_size);
     if chunk_count64 > MAX_CHUNK_COUNT as u64 {
         return Err(Error::BadArgument);
     }
@@ -588,13 +610,9 @@ pub fn pack_with(input: &PackInput, params: &PackParams) -> Result<Vec<u8>> {
     let mut chunk_bytes: Vec<u8> = Vec::with_capacity(input.data.len() + chunk_count as usize * 32);
     let mut digests: Vec<[u8; 32]> = Vec::with_capacity(chunk_count as usize);
     for index in 0..chunk_count {
-        let start = index as usize * input.chunk_size as usize;
-        let pt_len = chunk_plain_len(
-            input.data.len() as u64,
-            input.chunk_size,
-            chunk_count,
-            index,
-        ) as usize;
+        let start = index as usize * chunk_size as usize;
+        let pt_len =
+            chunk_plain_len(input.data.len() as u64, chunk_size, chunk_count, index) as usize;
         let end = core::cmp::min(start + pt_len, input.data.len());
         let pt = &input.data[start..end];
         let last = index + 1 == chunk_count;
@@ -603,7 +621,7 @@ pub fn pack_with(input: &PackInput, params: &PackParams) -> Result<Vec<u8>> {
         // AAD 依赖 header 的若干字段，先用等价值拼出来
         let header_for_aad = Header {
             flags: FLAG_SENDER_SIGNED,
-            chunk_size: input.chunk_size,
+            chunk_size,
             chunk_count,
             plaintext_size: input.data.len() as u64,
             wrapped_key_len: WRAPPED_KEY_LEN as u64,
@@ -632,19 +650,19 @@ pub fn pack_with(input: &PackInput, params: &PackParams) -> Result<Vec<u8>> {
     let manifest = Manifest {
         name_mode: NAME_MODE_REAL,
         file_size: input.data.len() as u64,
-        chunk_size: input.chunk_size,
-        chunk_count,
-        created_at_ms: input.created_at_ms,
+        chunk_size,
+        block_count: chunk_count,
+        created_at_ms: options.created_at_ms,
         name: input.name.to_string(),
         mime: input.mime.to_string(),
-        ext: input.ext.to_string(),
+        ext: options.ext.to_string(),
         digests,
     };
     let manifest_pt = manifest.encode()?;
 
     let mut header = Header {
         flags: FLAG_SENDER_SIGNED,
-        chunk_size: input.chunk_size,
+        chunk_size,
         chunk_count,
         plaintext_size: input.data.len() as u64,
         wrapped_key_len: WRAPPED_KEY_LEN as u64,
@@ -696,8 +714,8 @@ pub fn pack_with(input: &PackInput, params: &PackParams) -> Result<Vec<u8>> {
     }
     header.sig_len = sig_der.len() as u64;
 
-    // 封装 DK（C1 带 0x04 前缀）
-    let recipient64 = strip_pub_prefix(input.recipient_public)?;
+    // 封装 DK（契约 C1 带 0x04 前缀；API 入参是 64 字节 X‖Y）
+    let recipient64 = *input.recipient_public;
     let wrapped64 = sm2::encrypt(&recipient64, &params.dk, &params.k_enc)?;
     if wrapped64.len() != WRAPPED_KEY_LEN - 1 {
         return Err(Error::Internal);
@@ -782,12 +800,11 @@ fn open(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
     let wrapped = &pack[pos..pos + WRAPPED_KEY_LEN];
     pos += WRAPPED_KEY_LEN;
     if wrapped[0] != 0x04 {
-        return Err(Error::KeyUnwrapFailed);
+        return Err(Error::BadKeyRecord);
     }
-    let dk_vec =
-        sm2::decrypt(recipient_private, &wrapped[1..]).map_err(|_| Error::KeyUnwrapFailed)?;
+    let dk_vec = sm2::decrypt(recipient_private, &wrapped[1..]).map_err(|_| Error::BadKeyRecord)?;
     if dk_vec.len() != 32 {
-        return Err(Error::KeyUnwrapFailed);
+        return Err(Error::BadKeyRecord);
     }
     let mut dk = [0u8; 32];
     dk.copy_from_slice(&dk_vec);
@@ -809,7 +826,7 @@ fn open(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
 
     if manifest.file_size != header.plaintext_size
         || manifest.chunk_size != header.chunk_size
-        || manifest.chunk_count != header.chunk_count
+        || manifest.block_count != header.chunk_count
         || manifest.digests.len() != header.chunk_count as usize
     {
         return Err(Error::LengthInconsistent);
@@ -838,7 +855,7 @@ fn open(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
         p
     };
     if !sm2::verify(&pub64, &sig_input, sm2::DEFAULT_ID, &raw)? {
-        return Err(Error::SignatureInvalid);
+        return Err(Error::SignatureMismatch);
     }
 
     let sender_code = crate::code::from_public_key(&sender_public);
@@ -853,29 +870,77 @@ fn open(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
     })
 }
 
+/// 只解到清单（不解数据块）的结果。
+pub struct OpenedInfo {
+    pub header: Header,
+    pub manifest: Manifest,
+    pub sender_public: [u8; SENDER_PUB_LEN],
+    pub sender_code: String,
+}
+
+/// 只解到清单（不解数据块，不做发送方校验）。
+pub fn open_only(pack: &[u8], recipient_private: &[u8; 32]) -> Result<OpenedInfo> {
+    let o = open(pack, recipient_private)?;
+    Ok(OpenedInfo {
+        header: o.header,
+        manifest: o.manifest,
+        sender_public: o.sender_public,
+        sender_code: o.sender_code,
+    })
+}
+
 /// 只解到清单（不解数据块），供接收端先展示元信息。
+///
+/// `sender_public`：调用方手里的发送方公钥（64 字节 `X‖Y`）。给了就与包内
+/// `SENDER_PUB` 比对（不一致 → `CRYPTO_SENDER_MISMATCH`），防止"服务器换人"。
 pub fn open_manifest(
     pack: &[u8],
     recipient_private: &[u8; 32],
-) -> Result<(Header, Manifest, [u8; SENDER_PUB_LEN], String)> {
+    sender_public: &[u8; 64],
+) -> Result<(Header, Manifest)> {
     let o = open(pack, recipient_private)?;
-    Ok((o.header, o.manifest, o.sender_public, o.sender_code))
+    if o.sender_public[1..] != sender_public[..] {
+        return Err(Error::SenderMismatch);
+    }
+    Ok((o.header, o.manifest))
 }
 
 /// 严格解包（契约 §13 全表）。
 ///
-/// `expected_sender_code`：调用方从 API 元数据拿到的发送方 4 位码；给 `Some` 时做 §13 #18 比对。
+/// `sender_public`：调用方手里的发送方公钥（64 字节 `X‖Y`），与包内 `SENDER_PUB` 比对。
+/// 需要按"4 位码"校验时用 [`unpack_with_code`]。
 pub fn unpack(
     pack: &[u8],
     recipient_private: &[u8; 32],
-    expected_sender_code: Option<&str>,
+    sender_public: &[u8; 64],
 ) -> Result<Unpacked> {
     let opened = open(pack, recipient_private)?;
-    if let Some(expected) = expected_sender_code {
-        if opened.sender_code != expected {
-            return Err(Error::SenderMismatch);
-        }
+    if opened.sender_public[1..] != sender_public[..] {
+        return Err(Error::SenderMismatch);
     }
+    finish_unpack(pack, opened)
+}
+
+/// 按发送方 4 位码校验（契约 §13 #18）后解包。
+pub fn unpack_with_code(
+    pack: &[u8],
+    recipient_private: &[u8; 32],
+    expected_sender_code: &str,
+) -> Result<Unpacked> {
+    let opened = open(pack, recipient_private)?;
+    if opened.sender_code != expected_sender_code {
+        return Err(Error::SenderMismatch);
+    }
+    finish_unpack(pack, opened)
+}
+
+/// 不做发送方校验的解包（仅测试/内部用）。
+pub fn unpack_unchecked(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Unpacked> {
+    let opened = open(pack, recipient_private)?;
+    finish_unpack(pack, opened)
+}
+
+fn finish_unpack(pack: &[u8], opened: Opened) -> Result<Unpacked> {
     let header = opened.header;
     let manifest = opened.manifest;
     let kc = kek_chunk(&opened.dk, &header.kdf_salt);

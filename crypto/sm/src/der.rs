@@ -34,46 +34,46 @@ pub fn encode_signature(r: &[u8; 32], s: &[u8; 32]) -> Vec<u8> {
 
 fn decode_integer(buf: &[u8], pos: &mut usize, out: &mut [u8; 32]) -> Result<()> {
     if *pos + 2 > buf.len() || buf[*pos] != 0x02 {
-        return Err(Error::SignatureInvalid);
+        return Err(Error::SignatureMismatch);
     }
     let len = buf[*pos + 1] as usize;
     *pos += 2;
     if len == 0 || len > 33 || *pos + len > buf.len() {
-        return Err(Error::SignatureInvalid);
+        return Err(Error::SignatureMismatch);
     }
     let bytes = &buf[*pos..*pos + len];
     *pos += len;
     // 非最短编码：前导 0x00 且下一个字节最高位为 0
     if len > 1 && bytes[0] == 0x00 && bytes[1] & 0x80 == 0 {
-        return Err(Error::SignatureInvalid);
+        return Err(Error::SignatureMismatch);
     }
     if bytes[0] & 0x80 != 0 {
         // 负数：SM2 的 r/s 非负
-        return Err(Error::SignatureInvalid);
+        return Err(Error::SignatureMismatch);
     }
     let significant = if len == 33 {
         if bytes[0] != 0x00 {
-            return Err(Error::SignatureInvalid);
+            return Err(Error::SignatureMismatch);
         }
         &bytes[1..]
     } else {
         bytes
     };
     if significant.len() > 32 {
-        return Err(Error::SignatureInvalid);
+        return Err(Error::SignatureMismatch);
     }
     out.fill(0);
     out[32 - significant.len()..].copy_from_slice(significant);
     Ok(())
 }
 
-/// DER → `(r, s)`；非规范编码返回 [`Error::SignatureInvalid`]。
+/// DER → `(r, s)`；非规范编码返回 [`Error::SignatureMismatch`]。
 pub fn decode_signature(der: &[u8]) -> Result<([u8; 32], [u8; 32])> {
     if der.len() < 8 || der.len() > 72 || der[0] != 0x30 {
-        return Err(Error::SignatureInvalid);
+        return Err(Error::SignatureMismatch);
     }
     if der[1] as usize != der.len() - 2 {
-        return Err(Error::SignatureInvalid);
+        return Err(Error::SignatureMismatch);
     }
     let mut pos = 2usize;
     let mut r = [0u8; 32];
@@ -81,7 +81,7 @@ pub fn decode_signature(der: &[u8]) -> Result<([u8; 32], [u8; 32])> {
     decode_integer(der, &mut pos, &mut r)?;
     decode_integer(der, &mut pos, &mut s)?;
     if pos != der.len() {
-        return Err(Error::SignatureInvalid);
+        return Err(Error::SignatureMismatch);
     }
     Ok((r, s))
 }

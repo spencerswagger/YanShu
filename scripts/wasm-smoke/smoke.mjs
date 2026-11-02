@@ -3,8 +3,9 @@
 // 用法：
 //   node scripts/wasm-smoke/smoke.mjs /path/to/yanshu_sm.wasm
 //
-// 覆盖：内存分配/释放、SM3、SM4-GCM、SM2 密钥对、用户码与校验字符、码规范化、
-//       YSPK/1.0 打包→解包（含 sender code 比对）、篡改拒绝。
+// 覆盖：内存、SM3、SM4-GCM、SM2（64 字节公钥 / 裸 R‖S，首版 ABI）、用户码与校验字符、
+//       码规范化、**两种布局**（默认契约 YSPK/1.0 与 rune-v1 兼容布局）的打包→解包、
+//       布局判别、篡改拒绝、错发送方公钥拒绝。
 // 全部通过打印 "SMOKE OK" 并以 0 退出。
 
 import fs from "node:fs";
@@ -27,9 +28,6 @@ function alloc(n) {
   if (!p) throw new Error("ys_alloc failed");
   return p;
 }
-function check(rc, what) {
-  if (rc !== 0) throw new Error(`${what} failed: rc=${rc} (${errName(rc)})`);
-}
 function errName(code) {
   const cap = 64;
   const p = alloc(cap);
@@ -40,26 +38,32 @@ function errName(code) {
   e.ys_free(lp, 8);
   return s;
 }
+function check(rc, what) {
+  if (rc !== 0) throw new Error(`${what} failed: rc=${rc} (${errName(rc)})`);
+}
+function expectRc(rc, want, what) {
+  if (rc !== want) throw new Error(`${what}: want ${want}, got ${rc} (${errName(rc)})`);
+}
 
-// ---- 密钥对（发送方 / 接收方），seed 由 JS 侧真随机提供
 function keygen() {
   const seed = crypto.randomBytes(32);
   const seedPtr = alloc(seed.length);
   write(seedPtr, seed);
   const privPtr = alloc(32);
-  const pubPtr = alloc(65);
+  const pubPtr = alloc(64);
   check(e.ys_sm2_keygen(seedPtr, seed.length, privPtr, pubPtr), "ys_sm2_keygen");
-  const out = { priv: read(privPtr, 32), pub: read(pubPtr, 65) };
-  [privPtr, pubPtr, seedPtr].forEach((p, i) => e.ys_free(p, [32, 65, seed.length][i]));
+  const out = { priv: read(privPtr, 32), pub: read(pubPtr, 64) };
+  e.ys_free(privPtr, 32);
+  e.ys_free(pubPtr, 64);
+  e.ys_free(seedPtr, seed.length);
   return out;
 }
 
 const sender = keygen();
 const recipient = keygen();
-if (sender.pub[0] !== 0x04) throw new Error("pubkey must start with 0x04");
 
-// ---- 用户码 + 校验字符
-const pubPtr = alloc(65);
+// ---- 用户码（64 字节公钥入参，内核补 0x04 后按契约派生）
+const pubPtr = alloc(64);
 write(pubPtr, sender.pub);
 const codePtr = alloc(4);
 const chkPtr = alloc(1);
@@ -110,91 +114,134 @@ check(
   "ys_sm4_gcm_decrypt",
 );
 if (hex(read(backPtr, pt.length)) !== hex(pt)) throw new Error("gcm roundtrip");
-// 篡改 tag → CRYPTO_CHUNK_AUTH_FAILED (-17)
 const badTagPtr = alloc(16);
 const badTag = read(tagPtr, 16);
 badTag[0] ^= 1;
 write(badTagPtr, badTag);
-if (e.ys_sm4_gcm_decrypt(keyPtr, noncePtr, 12, aadPtr, aad.length, ctPtr, pt.length, badTagPtr, backPtr) !== -17) {
-  throw new Error("tampered tag should be -17");
-}
+expectRc(
+  e.ys_sm4_gcm_decrypt(keyPtr, noncePtr, 12, aadPtr, aad.length, ctPtr, pt.length, badTagPtr, backPtr),
+  -15,
+  "tampered tag",
+);
 
-// ---- 打包
+// ---- 打包/解包（两种布局）
 const name = Buffer.from("报告.pdf");
 const mime = Buffer.from("application/pdf");
-const ext = Buffer.from("pdf");
 const namePtr = alloc(name.length);
 write(namePtr, name);
 const mimePtr = alloc(mime.length);
 write(mimePtr, mime);
-const extPtr = alloc(ext.length);
-write(extPtr, ext);
 const data = crypto.randomBytes(5000);
 const dataPtr = alloc(data.length);
 write(dataPtr, data);
-const seed2 = crypto.randomBytes(32);
-const seed2Ptr = alloc(seed2.length);
-write(seed2Ptr, seed2);
-const lenPtr = alloc(8);
-
-const recipientPubPtr = alloc(65);
-write(recipientPubPtr, recipient.pub);
 const senderPrivPtr = alloc(32);
 write(senderPrivPtr, sender.priv);
+const recipientPubPtr = alloc(64);
+write(recipientPubPtr, recipient.pub);
+const recipientPrivPtr = alloc(32);
+write(recipientPrivPtr, recipient.priv);
+const senderPubPtr = alloc(64);
+write(senderPubPtr, sender.pub);
+const lenPtr = alloc(8);
+const seed = crypto.randomBytes(32);
+const seedPtr = alloc(seed.length);
+write(seedPtr, seed);
 
-const packArgs = [
-  recipientPubPtr, senderPrivPtr,
-  namePtr, name.length, mimePtr, mime.length, extPtr, ext.length,
-  BigInt(1_767_225_600_000), 1024,
-  seed2Ptr, seed2.length, dataPtr, data.length,
-];
-
-let rc = e.ys_pack(...packArgs, 0, 0, lenPtr);
-if (rc !== -2) throw new Error(`pack should ask for size (-2), got ${rc}`);
-const need = dv().getUint32(lenPtr, true);
-const packPtr = alloc(need);
-check(e.ys_pack(...packArgs, packPtr, need, lenPtr), "ys_pack");
-const packLen = dv().getUint32(lenPtr, true);
-const pack = read(packPtr, packLen);
-
-// ---- meta（带 sender code 校验）
-const recipPrivPtr = alloc(32);
-write(recipPrivPtr, recipient.priv);
-const codeBuf = Buffer.from(code, "ascii");
-const codePtr2 = alloc(4);
-write(codePtr2, codeBuf);
-
-let rc2 = e.ys_unpack_meta(packPtr, packLen, recipPrivPtr, 0, 0, 0, 0, lenPtr);
-if (rc2 !== -2) throw new Error(`meta should ask for size (-2), got ${rc2}`);
-const metaNeed = dv().getUint32(lenPtr, true);
-const metaPtr = alloc(metaNeed);
-check(e.ys_unpack_meta(packPtr, packLen, recipPrivPtr, 0, 0, metaPtr, metaNeed, lenPtr), "ys_unpack_meta");
-const meta = JSON.parse(Buffer.from(read(metaPtr, metaNeed)).toString("utf8"));
-if (meta.name !== "报告.pdf" || meta.size !== data.length) throw new Error(`meta: ${JSON.stringify(meta)}`);
-if (meta.sender_code !== code) throw new Error(`sender code mismatch: ${meta.sender_code} vs ${code}`);
-
-// ---- unpack
-let rc3 = e.ys_unpack(packPtr, packLen, recipPrivPtr, 0, 0, 0, 0, lenPtr);
-if (rc3 !== -2) throw new Error(`unpack should ask for size (-2), got ${rc3}`);
-const dataNeed = dv().getUint32(lenPtr, true);
-const plainPtr = alloc(dataNeed);
-check(e.ys_unpack(packPtr, packLen, recipPrivPtr, codePtr2, 4, plainPtr, dataNeed, lenPtr), "ys_unpack");
-if (hex(read(plainPtr, data.length)) !== hex(data)) throw new Error("unpack data mismatch");
-
-// ---- 篡改必须失败；错码必须 CRYPTO_SENDER_MISMATCH(-15)
-const tampered = new Uint8Array(pack);
-tampered[20] ^= 1; // CHUNK_COUNT 邻域
-const tamperedPtr = alloc(tampered.length);
-write(tamperedPtr, tampered);
-if (e.ys_unpack(tamperedPtr, tampered.length, recipPrivPtr, 0, 0, plainPtr, dataNeed, lenPtr) === 0) {
-  throw new Error("tampered pack must fail");
+function packOnce() {
+  const args = [
+    recipientPubPtr, senderPrivPtr,
+    namePtr, name.length, mimePtr, mime.length,
+    1024, seedPtr, seed.length, dataPtr, data.length,
+  ];
+  let rc = e.ys_pack(...args, 0, 0, lenPtr);
+  expectRc(rc, -2, "ys_pack probe");
+  const need = dv().getUint32(lenPtr, true);
+  const p = alloc(need);
+  check(e.ys_pack(...args, p, need, lenPtr), "ys_pack");
+  const n = dv().getUint32(lenPtr, true);
+  return { ptr: p, len: n, bytes: read(p, n) };
 }
-const wrongCode = Buffer.from("ZZZZ");
-const wrongPtr = alloc(4);
-write(wrongPtr, wrongCode);
-const rcWrong = e.ys_unpack(packPtr, packLen, recipPrivPtr, wrongPtr, 4, plainPtr, dataNeed, lenPtr);
-if (rcWrong !== -15) throw new Error(`wrong sender code should be -15, got ${rcWrong}`);
+
+function unpackOnce(packPtr, packLen, outCap) {
+  const out = alloc(outCap);
+  let rc = e.ys_unpack(packPtr, packLen, recipientPrivPtr, senderPubPtr, out, outCap, lenPtr);
+  if (rc === -2) {
+    const need = dv().getUint32(lenPtr, true);
+    e.ys_free(out, outCap);
+    const o2 = alloc(need);
+    rc = e.ys_unpack(packPtr, packLen, recipientPrivPtr, senderPubPtr, o2, need, lenPtr);
+    check(rc, "ys_unpack retry");
+    const got = read(o2, dv().getUint32(lenPtr, true));
+    e.ys_free(o2, need);
+    return got;
+  }
+  check(rc, "ys_unpack");
+  const got = read(out, dv().getUint32(lenPtr, true));
+  e.ys_free(out, outCap);
+  return got;
+}
+
+// 默认 = 契约布局
+if (e.ys_get_layout() !== 0) throw new Error("default layout must be 0 (YSPK/1.0)");
+if (e.ys_header_len() !== 112) throw new Error(`default header len ${e.ys_header_len()} != 112`);
+{
+  const pk = packOnce();
+  if (e.ys_layout_of(pk.ptr, pk.len) !== 0) throw new Error("layout_of != 0");
+  const plain = unpackOnce(pk.ptr, pk.len, 8192);
+  if (hex(plain) !== hex(data)) throw new Error("contract unpack mismatch");
+
+  // meta（带发送方公钥）
+  let rc = e.ys_unpack_meta(pk.ptr, pk.len, recipientPrivPtr, senderPubPtr, 0, 0, lenPtr);
+  expectRc(rc, -2, "meta probe");
+  const need = dv().getUint32(lenPtr, true);
+  const mp = alloc(need);
+  check(e.ys_unpack_meta(pk.ptr, pk.len, recipientPrivPtr, senderPubPtr, mp, need, lenPtr), "meta");
+  const meta = JSON.parse(Buffer.from(read(mp, need)).toString("utf8"));
+  if (meta.name !== "报告.pdf" || meta.size !== data.length) throw new Error(`meta ${JSON.stringify(meta)}`);
+  if (meta.sender_code !== code) throw new Error(`sender_code ${meta.sender_code} != ${code}`);
+
+  // 篡改 + 错发送方公钥
+  const tampered = new Uint8Array(pk.bytes);
+  tampered[8] ^= 1;
+  const tp = alloc(tampered.length);
+  write(tp, tampered);
+  const out = alloc(8192);
+  if (e.ys_unpack(tp, tampered.length, recipientPrivPtr, senderPubPtr, out, 8192, lenPtr) === 0) {
+    throw new Error("tampered pack must fail");
+  }
+  const other = keygen();
+  const otherPubPtr = alloc(64);
+  write(otherPubPtr, other.pub);
+  expectRc(
+    e.ys_unpack(pk.ptr, pk.len, recipientPrivPtr, otherPubPtr, out, 8192, lenPtr),
+    -33,
+    "wrong sender pub",
+  );
+  const mutBuf = new Uint8Array(e.memory.buffer);
+  void mutBuf;
+}
+
+// 切到 rune-v1 兼容布局
+check(e.ys_set_layout(1), "ys_set_layout(1)");
+if (e.ys_header_len() !== 40) throw new Error(`rune-v1 header len ${e.ys_header_len()} != 40`);
+{
+  const pk = packOnce();
+  if (e.ys_layout_of(pk.ptr, pk.len) !== 1) throw new Error("layout_of != 1");
+  const plain = unpackOnce(pk.ptr, pk.len, 8192);
+  if (hex(plain) !== hex(data)) throw new Error("rune-v1 unpack mismatch");
+
+  const tampered = new Uint8Array(pk.bytes);
+  tampered[Math.floor(tampered.length / 2)] ^= 1;
+  const tp = alloc(tampered.length);
+  write(tp, tampered);
+  const out = alloc(8192);
+  if (e.ys_unpack(tp, tampered.length, recipientPrivPtr, senderPubPtr, out, 8192, lenPtr) === 0) {
+    throw new Error("tampered rune-v1 pack must fail");
+  }
+}
+check(e.ys_set_layout(0), "ys_set_layout(0)");
+if (e.ys_header_len() !== 112) throw new Error("layout not restored");
 
 console.log(
-  `SMOKE OK (wasm ${bytes.length}B, code=${code}-${chk}, pack=${packLen}B, chunks=${meta.chunk_count})`,
+  `SMOKE OK (wasm ${bytes.length}B, code=${code}-${chk}, layouts: contract+rune-v1, exports=${Object.keys(e).length})`,
 );

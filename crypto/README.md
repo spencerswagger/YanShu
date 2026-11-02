@@ -51,7 +51,7 @@ let out = pack::unpack(&bytes, &bob.private_key, &alice.public_key).unwrap();
 
 ```sh
 cd crypto
-cargo test                      # 25 单元 + 7 契约样例 + 5 篡改矩阵 + 23 §13 检验
+cargo test                      # 31 单元 + 7 契约样例 + 5 篡改矩阵 + 23 §13 检验 + 1 分层篡改
 cargo test --release            # 同上（快）
 cargo run --release --bin bench-sm4 -- 32
 cargo run --release --bin gen-vectors -- ../testdata/vectors.json
@@ -70,7 +70,7 @@ cargo build --release --target wasm32-unknown-unknown
 node scripts/wasm-smoke/smoke.mjs <上面那个 wasm>
 ```
 
-实测：**约 118 KB，27 个导出，0 个 import**（没有 JS 胶水依赖）。
+实测：**约 141 KB，35 个导出，0 个 import**（没有 JS 胶水依赖；其中首版 25 个签名未变）。
 导出清单见 `include/yanshu_sm.h`，核心是：
 
 `ys_alloc/ys_free/ys_version/ys_error_name` · `ys_default_chunk_size`（+ 别名 `ys_default_block_size`）· `ys_header_len` ·
@@ -84,7 +84,9 @@ node scripts/wasm-smoke/smoke.mjs <上面那个 wasm>
 
 ## 加密包格式
 
-严格按 **`docs/CRYPTO-PACK.md` v1（`YSPK/1.0`）** 实现：
+**默认布局**严格按 **`docs/CRYPTO-PACK.md` v1（`YSPK/1.0`）** 实现；另保留
+`pack_rune_v1`（首版 40 字节头 / 裸 R‖S / 密文摘要）作为**非契约兼容布局**，
+只给 Gate 的历史证据用（`ys_set_layout(1)`），两者不会混：
 
 - HEADER 112 字节（字段偏移集中在 `pack::v1::OFF_*`）、SENDER_PUB 65、WRAPPED_KEY 129；
 - 块记录 = 16 字节块头 + 密文 + 16 字节 tag，nonce = `u64be(index) ‖ 000000 ‖ last`；

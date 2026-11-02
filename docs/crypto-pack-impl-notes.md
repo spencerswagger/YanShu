@@ -114,25 +114,45 @@
   `resign()` 用同一 `k_sig` 重签，专门验证"签名有效但内容不一致"的路径。
 - §13 #11 的判定放在验签之前：先比 `SIG_LEN` 与 DER 自述长度，再解 DER、再验签。
 
-## 7. C ABI 与首版 25 个导出的差异（本轮已上报）
+## 7. 布局可插拔：契约是默认，rune-v1 只作兼容
 
-出于契约要求（65 字节未压缩公钥、DER 签名、清单含 `created_at`/`ext`、发送方码校验），
-以下导出**签名发生了破坏性变更**（不是静默改，已在上报里逐条列出）：
+| 布局 | 默认？ | 头长 | 签名 | 清单摘要 | 谁在用 |
+|---|---|---:|---|---|---|
+| `YSPK/1.0`（`crate::pack`） | ✅ 默认 | 112 | DER | `SM3(明文块)` | 产品、Web、契约验收 |
+| `rune-v1`（`crate::pack_rune_v1`） | ❌ 需显式 `ys_set_layout(1)` | 40 | 裸 `R‖S` | `SM3(密文‖tag)` | Gate 的历史证据（非契约） |
 
-| 导出 | 首版 | 现在 | 契约依据 |
-|---|---|---|---|
-| `ys_sm2_keygen` / `ys_sm2_pubkey` | 公钥 64 字节 | 公钥 65 字节（`0x04‖X‖Y`） | §3.4 / §10.3 |
-| `ys_sm2_encrypt` | 入参公钥 64；输出无前缀 | 入参 65；输出 `0x04‖C1C3C2` | §9.1 |
-| `ys_sm2_decrypt` | 输入无前缀 | 输入 `0x04‖C1C3C2` | §9.1 |
-| `ys_sm2_sign` | 输出裸 `R‖S`(64) | 输出 DER + `(cap, len)` | §10.4 |
-| `ys_sm2_verify` | 裸 `R‖S`(64) | DER + `len` | §10.4 |
-| `ys_user_code` | 公钥 64 | 公钥 65（SM3 覆盖 65 字节） | §3.4 |
-| `ys_pack` | `(…, block_size, seed, …)` | `(…, ext, created_at_ms, chunk_size, seed, …)` | §8.2 |
-| `ys_unpack` / `ys_unpack_meta` | 传发送方公钥 | 传**期望发送方码**（包内已带 `SENDER_PUB`） | §10.3 / §13 #18 |
-| `ys_default_block_size` | 存在 | **保留**（新增 `ys_default_chunk_size` 同值别名） | — |
+- **不会混**：一个产物的字节只属于一种布局；`ys_layout_of()` 用 `HEADER[4..8]` 判别
+  （契约 `01 00 00 70` vs rune-v1 `01 01 …`）。
+- Gate 的探针（`qa/evidence/adapters/ys_pack_probe.rs`）**不改一行**就能编译，默认产契约包；
+  要看 rune-v1 只需在驱动侧调 `ys_set_layout(1)`（或直接用 `pack_rune_v1` 模块）。
+- 已实测：探针 keygen→pack→unpack 往返一致，包 `HEADER_LEN=112`；篡改必失败。
 
-新增导出：`ys_check_symbol`（校验字符，仅供 UI 防误输入）、`ys_default_chunk_size`（别名）。
-当前 wasm 导出 **27 个**、0 import。
+## 8. 错误码与名字：数值向后兼容，名字两套
 
-> 若 Web/Gate 需要"零破坏"，我可以再加一层 `*_legacy64` 兼容导出（旧签名转调新实现）；
-> 但两套 API 并存会增加用错的风险，默认只保留契约口径这一套。
+* **数值**：`-4..-23` 与首版**完全一致**（Web 的 `ERROR_CODES` 表照旧命中），
+  新语义从 `-24` 起（`HEADER_INVALID`、`CHUNK_ORDER`、`CHUNK_AUTH_FAILED`、
+  `CHUNK_MISSING`、`MANIFEST_AUTH_FAILED`、`DIGEST_MISMATCH`、`SENDER_MISMATCH`…）。
+* **名字**：
+  - `Error::name()` / `ys_error_name_v1()` → 契约口径 `CRYPTO_*`（Gate 探针的正则、日志用）；
+  - `ys_error_name()` → 首版 `BAD_MAGIC` 等旧名（Web 映射表按旧名查，仍能落到有意义的 `CRYPTO_*`）。
+* 能区分的要求已满足：块序 → `BLOCK_SEQUENCE`/`CHUNK_ORDER`，清单 → `MANIFEST_MISMATCH`/
+  `MANIFEST_AUTH_FAILED`，截断 → `TRUNCATED`/`LENGTH_INCONSISTENT`，缺块 → `MISSING_BLOCK`/
+  `CHUNK_MISSING`，版本 → `UNSUPPORTED_VERSION`，tag → `TAG_MISMATCH`/`CHUNK_AUTH_FAILED`。
+
+## 9. 两层篡改防线（Gate 实测结论已写进测试）
+
+* **AEAD 层**：AAD 绑 `CHUNK_INDEX / LAST_FLAG / CHUNK_COUNT / CHUNK_SIZE / PLAINTEXT_SIZE / PT_LEN`
+  （契约 §7.2），直接改密文或 tag → `CRYPTO_CHUNK_AUTH_FAILED`（`check_20`）。
+* **序号绑定层**：换两块 / 重复块 / 跳号 / 末块标志被改 → `CRYPTO_CHUNK_ORDER` /
+  `CRYPTO_CHUNK_MISSING`（`check_19`、`check_22`），不需要等清单摘要兜底。
+* **预期现象**：在 **rune-v1** 布局里，清单摘要是对 `密文‖tag` 算的且先于 GCM 校验，
+  所以改密文会被 `MANIFEST_MISMATCH` 先拦住、`TAG_MISMATCH` 端到端取不到 —— 这是设计，
+  不是缺陷（`pack_rune_v1::layered_tamper_tests` 固化）。
+  契约布局反过来：GCM 先校验，`CHUNK_AUTH_FAILED` 可稳定触发。
+* **清单摘要层**：清单被改但签名有效（发送方自己签错）→ `CRYPTO_DIGEST_MISMATCH`（`check_21`）。
+
+## 10. §15 样例的可重算性
+
+契约若要改 AAD（例如把 `CHUNK_INDEX` 再显式加进块 AAD 之外的域），§15 的样例字节会重算。
+本仓库的样例常量**不是手抄**：`crypto/sm/tests/contract_samples.rs` 由脚本从
+`docs/CRYPTO-PACK.md` 抽取生成，契约一更新就重生成再跑测试，不会"悄悄钉死"。

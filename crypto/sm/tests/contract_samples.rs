@@ -4,7 +4,7 @@
 //! 这里的固定 `DK / KDF_SALT / k_enc / k_sig` 只用于测试，生产代码 MUST NOT 出现。
 
 use yanshu_sm::bigint::U256;
-use yanshu_sm::pack::{self, PackInput, PackParams};
+use yanshu_sm::pack::{self, PackInput, PackOptions, PackParams};
 
 fn h(s: &str) -> Vec<u8> {
     (0..s.len() / 2)
@@ -143,34 +143,40 @@ fn v1_pack() -> Vec<u8> {
     let recipient: [u8; 65] = h(PB_R).try_into().unwrap();
     let sender: [u8; 32] = h(D_S).try_into().unwrap();
     let data = b"hello";
+    let recipient64: [u8; 64] = recipient[1..].try_into().unwrap();
     let input = PackInput {
-        recipient_public: &recipient,
+        recipient_public: &recipient64,
         sender_private: &sender,
         name: "hi.txt",
         mime: "text/plain",
-        ext: "txt",
-        created_at_ms: 1_767_225_600_000,
-        chunk_size: 1_048_576,
+        block_size: 1_048_576,
         data,
     };
-    pack::pack_with(&input, &params()).expect("pack")
+    let options = PackOptions {
+        ext: "txt",
+        created_at_ms: 1_767_225_600_000,
+    };
+    pack::pack_with_params(&input, &options, &params()).expect("pack")
 }
 
 fn v2_pack() -> Vec<u8> {
     let recipient: [u8; 65] = h(PB_R).try_into().unwrap();
     let sender: [u8; 32] = h(D_S).try_into().unwrap();
     let data: Vec<u8> = (0u8..0x50).collect();
+    let recipient64: [u8; 64] = recipient[1..].try_into().unwrap();
     let input = PackInput {
-        recipient_public: &recipient,
+        recipient_public: &recipient64,
         sender_private: &sender,
         name: "multi.bin",
         mime: "application/octet-stream",
-        ext: "bin",
-        created_at_ms: 1_767_225_600_000,
-        chunk_size: 32,
+        block_size: 32,
         data: &data,
     };
-    pack::pack_with(&input, &params()).expect("pack")
+    let options = PackOptions {
+        ext: "bin",
+        created_at_ms: 1_767_225_600_000,
+    };
+    pack::pack_with_params(&input, &options, &params()).expect("pack")
 }
 
 #[test]
@@ -194,12 +200,12 @@ fn v1_minimal_single_chunk_matches_contract() {
 fn v1_unpack_roundtrip() {
     let envelope = v1_pack();
     let d_r: [u8; 32] = h(D_R).try_into().unwrap();
-    let out = pack::unpack(&envelope, &d_r, Some("AWQW")).expect("unpack");
+    let out = pack::unpack_with_code(&envelope, &d_r, "AWQW").expect("unpack");
     assert_eq!(out.data, b"hello");
     assert_eq!(out.manifest.name, "hi.txt");
     assert_eq!(out.manifest.mime, "text/plain");
     assert_eq!(out.manifest.ext, "txt");
-    assert_eq!(out.manifest.chunk_count, 1);
+    assert_eq!(out.manifest.block_count, 1);
     assert_eq!(out.manifest.file_size, 5);
     assert_eq!(out.sender_code, "AWQW");
 }
@@ -232,7 +238,7 @@ fn v2_multi_chunk_matches_contract() {
 fn v2_unpack_roundtrip_and_digests() {
     let envelope = v2_pack();
     let d_r: [u8; 32] = h(D_R).try_into().unwrap();
-    let out = pack::unpack(&envelope, &d_r, Some("AWQW")).expect("unpack");
+    let out = pack::unpack_with_code(&envelope, &d_r, "AWQW").expect("unpack");
     let expect: Vec<u8> = (0u8..0x50).collect();
     assert_eq!(out.data, expect);
     assert_eq!(out.manifest.digests.len(), 3);
@@ -281,7 +287,7 @@ fn tampering_breaks_either_auth_or_signature() {
         let mut bad = envelope.clone();
         bad[pos] ^= 0x01;
         assert!(
-            pack::unpack(&bad, &d_r, Some("AWQW")).is_err(),
+            pack::unpack_with_code(&bad, &d_r, "AWQW").is_err(),
             "byte {} tampered but unpacked",
             pos
         );

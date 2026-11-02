@@ -143,8 +143,12 @@ fn main() {
         "pack-meta" => {
             let p = unhex(&args[2]);
             let sk = fixed::<32>(&args[3]);
-            match pack::open_manifest(&p, &sk) {
-                Ok((header, m, sender_pub, sender_code)) => {
+            match pack::open_only(&p, &sk) {
+                Ok(opened) => {
+                    let header = &opened.header;
+                    let m = &opened.manifest;
+                    let sender_pub = &opened.sender_public;
+                    let sender_code = &opened.sender_code;
                     println!(
                         "{{\"version\":\"{}\",\"name\":\"{}\",\"mime\":\"{}\",\"ext\":\"{}\",\"size\":{},\"chunk_size\":{},\"chunk_count\":{},\"created_at_ms\":{},\"sender_code\":\"{}\",\"sender_pub\":\"{}\",\"kdf_salt\":\"{}\"}}",
                         pack::v1::VERSION_STRING,
@@ -153,10 +157,10 @@ fn main() {
                         m.ext,
                         m.file_size,
                         m.chunk_size,
-                        m.chunk_count,
+                        m.chunk_count(),
                         m.created_at_ms,
                         sender_code,
-                        hex(&sender_pub),
+                        hex(sender_pub),
                         hex(&header.kdf_salt)
                     );
                 }
@@ -170,7 +174,11 @@ fn main() {
             let p = unhex(&args[2]);
             let sk = fixed::<32>(&args[3]);
             let expected = args.get(4).map(|s| s.as_str());
-            match pack::unpack(&p, &sk, expected) {
+            let result = match expected {
+                Some(code) => pack::unpack_with_code(&p, &sk, code),
+                None => pack::unpack_unchecked(&p, &sk),
+            };
+            match result {
                 Ok(u) => println!("{}", hex(&u.data)),
                 Err(e) => {
                     println!("ERR {}", e.name());

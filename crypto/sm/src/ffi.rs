@@ -1,28 +1,43 @@
 //! raw C ABI（wasm32-unknown-unknown 直接导出，**不引 wasm-bindgen**）。
 //!
-//! 约定：
-//! * 所有长度参数为 `size_t`（wasm32 下 4 字节）；所有指针为线性内存偏移。
-//! * 返回值 `0` = 成功，负数为错误码（见 [`crate::error::Error::code`]，命名对齐
-//!   `docs/CRYPTO-PACK.md` §13 的端侧错误码）。
-//! * `out_len` 指针在成功时写入实际字节数；缓冲区不足时也写入所需字节数并返回 -2。
-//! * 需要随机数的接口都接收 `seed`（JS 侧用 `crypto.getRandomValues` 现取），
-//!   ABI 内部再混入进程内单调计数器展开为 SM3-DRBG。**同一个 seed 不要复用**。
-//! * 分配：`ys_alloc(len)` 申请、`ys_free(ptr, len)` 释放；两者必须成对、长度一致。
+//! **首版公布的 25 个导出签名一个都没改**（Web `feat/web-min-loop` 与 Gate 探针按它编译/调用）。
+//! 契约 `YSPK/1.0` 需要的差异（65 字节未压缩点、DER 签名、清单 `created_at`/`ext`）
+//! 全部在**内核内部**转换；需要完整参数的调用方用新增的 `*_v1` 导出。
+//!
+//! 布局可插拔：
+//! * 默认 = 契约布局 `YSPK/1.0`（`ys_pack` / `ys_unpack` 走它）；
+//! * `ys_set_layout(1)` 切到 **rune-v1 兼容布局**（非契约，Gate 的历史证据用），
+//!   `ys_header_len()` 会跟着变 40；两种布局**不会混进同一个产物**。
+//!
+//! 通用约定：
+//! * 长度参数为 `size_t`（wasm32 = 4 字节）；指针为线性内存偏移；`u64` 在 JS 里是 BigInt。
+//! * 返回值 `0` = 成功，负数 = 错误码；**-4..-23 与首版完全一致**，新增从 -24 起。
+//! * `out_len` 在缓冲区不足时写所需长度并返回 -2；`ys_pack*` 返回的是上界（+2）。
+//! * 需要随机的接口都接收 `seed`（JS 用 `crypto.getRandomValues` 现取，>=16 字节）。
+//! * `ys_alloc(n)` ↔ `ys_free(p, n)` 必须成对、长度一致。
 
-// 本模块的每个导出函数都是 C ABI，安全契约统一写在模块头（长度/指针成对、内存归属），
-// 不逐个重复 `# Safety` 段。
 #![allow(clippy::missing_safety_doc)]
 
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use crate::code;
+use crate::der;
 use crate::error::{Error, Result};
 use crate::gcm;
 use crate::hkdf::hkdf_sm3;
-use crate::pack::{self, Manifest, PackInput};
+use crate::pack::{self, Manifest, PackInput, PackOptions};
+use crate::pack_rune_v1;
 use crate::rng::SeedRng;
 use crate::sm2;
 use crate::sm3;
 use crate::sm4;
 use crate::VERSION;
+
+/// 0 = 契约布局 `YSPK/1.0`（默认）；1 = rune-v1 兼容布局（非契约）
+static LAYOUT: AtomicU32 = AtomicU32::new(0);
+
+const LAYOUT_YSPK_V1: u32 = 0;
+const LAYOUT_RUNE_V1: u32 = 1;
 
 #[inline]
 unsafe fn as_slice<'a>(ptr: *const u8, len: usize) -> Result<&'a [u8]> {
@@ -85,7 +100,7 @@ fn seeded_rng(seed: &[u8]) -> Result<SeedRng> {
     if seed.is_empty() {
         return Err(Error::Rng);
     }
-    use core::sync::atomic::{AtomicU64, Ordering};
+    use core::sync::atomic::AtomicU64;
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let mut material = Vec::with_capacity(seed.len() + 8);
     material.extend_from_slice(seed);
@@ -93,7 +108,14 @@ fn seeded_rng(seed: &[u8]) -> Result<SeedRng> {
     Ok(SeedRng::new(&material))
 }
 
-// ---------------------------------------------------------------- 内存 / 元信息
+fn to_pub65(pub64: &[u8; 64]) -> [u8; 65] {
+    let mut out = [0u8; 65];
+    out[0] = 0x04;
+    out[1..].copy_from_slice(pub64);
+    out
+}
+
+// ---------------------------------------------------------------- 内存 / 元信息 / 布局
 
 #[no_mangle]
 pub extern "C" fn ys_alloc(len: usize) -> *mut u8 {
@@ -119,50 +141,126 @@ pub extern "C" fn ys_version() -> u32 {
     VERSION
 }
 
-/// 默认块大小（1 MiB）。`ys_default_block_size` 是同一值的兼容别名（老名字不删）。
-#[no_mangle]
-pub extern "C" fn ys_default_chunk_size() -> u32 {
-    pack::v1::DEFAULT_CHUNK_SIZE
-}
-
-/// 兼容别名：与 [`ys_default_chunk_size`] 同值（早期 ABI 用 `block` 命名）。
+/// 默认块大小（1 MiB）。首版名字，保留。
 #[no_mangle]
 pub extern "C" fn ys_default_block_size() -> u32 {
     pack::v1::DEFAULT_CHUNK_SIZE
 }
 
+/// 与 [`ys_default_block_size`] 同值（契约口径命名）。
+#[no_mangle]
+pub extern "C" fn ys_default_chunk_size() -> u32 {
+    pack::v1::DEFAULT_CHUNK_SIZE
+}
+
+/// 当前布局的包头长度：契约 112 / rune-v1 40。
 #[no_mangle]
 pub extern "C" fn ys_header_len() -> u32 {
-    pack::v1::HEADER_LEN as u32
+    if LAYOUT.load(Ordering::SeqCst) == LAYOUT_RUNE_V1 {
+        pack_rune_v1::layout::HEADER_LEN as u32
+    } else {
+        pack::v1::HEADER_LEN as u32
+    }
+}
+
+/// 切换布局：0 = `YSPK/1.0`（默认），1 = rune-v1（非契约，Gate 证据用）。
+#[no_mangle]
+pub extern "C" fn ys_set_layout(id: u32) -> i32 {
+    if id != LAYOUT_YSPK_V1 && id != LAYOUT_RUNE_V1 {
+        return Error::BadArgument.code();
+    }
+    LAYOUT.store(id, Ordering::SeqCst);
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn ys_get_layout() -> u32 {
+    LAYOUT.load(Ordering::SeqCst)
+}
+
+/// 判断一个包是哪种布局：0 = `YSPK/1.0`，1 = rune-v1，负数 = 认不出。
+#[no_mangle]
+pub unsafe extern "C" fn ys_layout_of(pack: *const u8, pack_len: usize) -> i32 {
+    let r = (|| -> Result<i32> {
+        let buf = as_slice(pack, pack_len)?;
+        if buf.len() >= 8 && buf[0..4] == *b"YSPK" {
+            // 契约：offset 4..6 = 01 00，6..8 = 00 70
+            if buf[4] == 1 && buf[5] == 0 && buf[6..8] == [0x00, 0x70] {
+                return Ok(0);
+            }
+            // rune-v1：offset 4=version 1, 5=suite 1, 6=flags 1, 7=reserved 0
+            if buf[4] == 1 && buf[5] == 1 {
+                return Ok(1);
+            }
+        }
+        Err(Error::BadMagic)
+    })();
+    match r {
+        Ok(v) => v,
+        Err(e) => e.code(),
+    }
 }
 
 static ERROR_TABLE: &[Error] = &[
     Error::BadArgument,
     Error::BufferTooSmall,
     Error::Rng,
-    Error::MagicMismatch,
-    Error::VersionUnsupported,
+    Error::BadMagic,
+    Error::UnsupportedVersion,
+    Error::BadFlags,
+    Error::Truncated,
+    Error::BadKeyRecord,
+    Error::BadSignatureRecord,
+    Error::BadManifestRecord,
+    Error::BlockSequence,
+    Error::DuplicateBlock,
+    Error::MissingBlock,
+    Error::LastFlagMismatch,
+    Error::TagMismatch,
+    Error::ManifestMismatch,
+    Error::SignatureMismatch,
+    Error::TrailingBytes,
+    Error::BadPoint,
+    Error::BadKdf,
+    Error::BadCode,
+    Error::CodeExhausted,
+    Error::BadCiphertext,
     Error::HeaderInvalid,
-    Error::LengthInconsistent,
     Error::AlgUnsupported,
-    Error::FlagsUnknown,
     Error::Unsigned,
-    Error::KeyUnwrapFailed,
-    Error::ManifestAuthFailed,
-    Error::ManifestInvalid,
-    Error::SignatureInvalid,
-    Error::SenderMismatch,
+    Error::LengthInconsistent,
     Error::ChunkOrder,
     Error::ChunkAuthFailed,
     Error::ChunkMissing,
+    Error::ManifestAuthFailed,
     Error::DigestMismatch,
-    Error::BadCode,
-    Error::CodeExhausted,
-    Error::BadPoint,
-    Error::BadCiphertext,
+    Error::SenderMismatch,
     Error::Internal,
 ];
 
+fn name_for(code: i32, contract_style: bool) -> &'static str {
+    if code == 0 {
+        return "OK";
+    }
+    match ERROR_TABLE.iter().find(|e| e.code() == code) {
+        Some(e) => {
+            if contract_style {
+                e.name()
+            } else {
+                e.legacy_name()
+            }
+        }
+        None => {
+            if contract_style {
+                "CRYPTO_UNKNOWN"
+            } else {
+                "UNKNOWN"
+            }
+        }
+    }
+}
+
+/// 首版 ABI 的错误名（`BAD_MAGIC` 等；Web 的映射表按这套查）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_error_name(
     code: i32,
@@ -170,16 +268,28 @@ pub unsafe extern "C" fn ys_error_name(
     cap: usize,
     out_len: *mut usize,
 ) -> i32 {
-    let name = if code == 0 {
-        "OK"
-    } else {
-        ERROR_TABLE
-            .iter()
-            .find(|e| e.code() == code)
-            .map(|e| e.name())
-            .unwrap_or("CRYPTO_UNKNOWN")
-    };
-    rc(write_out(name.as_bytes(), out, cap, out_len))
+    rc(write_out(
+        name_for(code, false).as_bytes(),
+        out,
+        cap,
+        out_len,
+    ))
+}
+
+/// 契约口径的错误名（`CRYPTO_*`）；新增导出，不影响首版行为。
+#[no_mangle]
+pub unsafe extern "C" fn ys_error_name_v1(
+    code: i32,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    rc(write_out(
+        name_for(code, true).as_bytes(),
+        out,
+        cap,
+        out_len,
+    ))
 }
 
 // ---------------------------------------------------------------- SM3 / HMAC / HKDF
@@ -187,8 +297,7 @@ pub unsafe extern "C" fn ys_error_name(
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm3(input: *const u8, input_len: usize, out: *mut u8) -> i32 {
     rc((|| {
-        let data = as_slice(input, input_len)?;
-        let digest = sm3::sm3(data);
+        let digest = sm3::sm3(as_slice(input, input_len)?);
         as_slice_mut(out, 32)?.copy_from_slice(&digest);
         Ok(())
     })())
@@ -203,9 +312,7 @@ pub unsafe extern "C" fn ys_hmac_sm3(
     out: *mut u8,
 ) -> i32 {
     rc((|| {
-        let k = as_slice(key, key_len)?;
-        let m = as_slice(msg, msg_len)?;
-        let tag = sm3::hmac_sm3(k, m);
+        let tag = sm3::hmac_sm3(as_slice(key, key_len)?, as_slice(msg, msg_len)?);
         as_slice_mut(out, 32)?.copy_from_slice(&tag);
         Ok(())
     })())
@@ -223,10 +330,12 @@ pub unsafe extern "C" fn ys_hkdf_sm3(
     out_len: usize,
 ) -> i32 {
     rc((|| {
-        let ikm = as_slice(ikm, ikm_len)?;
-        let salt = as_slice(salt, salt_len)?;
-        let info = as_slice(info, info_len)?;
-        hkdf_sm3(salt, ikm, info, as_slice_mut(out, out_len)?);
+        hkdf_sm3(
+            as_slice(salt, salt_len)?,
+            as_slice(ikm, ikm_len)?,
+            as_slice(info, info_len)?,
+            as_slice_mut(out, out_len)?,
+        );
         Ok(())
     })())
 }
@@ -304,13 +413,13 @@ pub unsafe extern "C" fn ys_sm4_gcm_decrypt(
         let aad = as_slice(aad, aad_len)?;
         let ct = as_slice(input, input_len)?;
         let tag = fixed::<16>(tag)?;
-        let pt = gcm::decrypt(&key, nonce, aad, ct, &tag).ok_or(Error::ChunkAuthFailed)?;
+        let pt = gcm::decrypt(&key, nonce, aad, ct, &tag).ok_or(Error::TagMismatch)?;
         as_slice_mut(out, input_len)?.copy_from_slice(&pt);
         Ok(())
     })())
 }
 
-// ---------------------------------------------------------------- SM2
+// ---------------------------------------------------------------- SM2（首版口径：64 字节公钥 / 裸 R‖S）
 
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_keygen(
@@ -320,13 +429,10 @@ pub unsafe extern "C" fn ys_sm2_keygen(
     pub_out: *mut u8,
 ) -> i32 {
     rc((|| {
-        let seed = as_slice(seed, seed_len)?;
-        let mut rng = seeded_rng(seed)?;
+        let mut rng = seeded_rng(as_slice(seed, seed_len)?)?;
         let kp = sm2::keygen(&mut rng);
         as_slice_mut(priv_out, 32)?.copy_from_slice(&kp.private_key);
-        let pub65 = as_slice_mut(pub_out, 65)?;
-        pub65[0] = 0x04;
-        pub65[1..].copy_from_slice(&kp.public_key);
+        as_slice_mut(pub_out, 64)?.copy_from_slice(&kp.public_key);
         Ok(())
     })())
 }
@@ -334,16 +440,13 @@ pub unsafe extern "C" fn ys_sm2_keygen(
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_pubkey(priv_key: *const u8, pub_out: *mut u8) -> i32 {
     rc((|| {
-        let sk = fixed::<32>(priv_key)?;
-        let pk = sm2::public_from_private(&sk)?;
-        let pub65 = as_slice_mut(pub_out, 65)?;
-        pub65[0] = 0x04;
-        pub65[1..].copy_from_slice(&pk);
+        let pk = sm2::public_from_private(&fixed::<32>(priv_key)?)?;
+        as_slice_mut(pub_out, 64)?.copy_from_slice(&pk);
         Ok(())
     })())
 }
 
-/// 加密：公钥 65 字节（`0x04‖X‖Y`），输出 `0x04‖C1‖C3‖C2`（= 96+明文长度+1）。
+/// 入参公钥 64 字节 `X‖Y`，输出裸 `C1C3C2`（不带 0x04）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_encrypt(
     public_key: *const u8,
@@ -356,23 +459,14 @@ pub unsafe extern "C" fn ys_sm2_encrypt(
     out_len: *mut usize,
 ) -> i32 {
     rc((|| {
-        let pub65 = fixed::<65>(public_key)?;
-        if pub65[0] != 0x04 {
-            return Err(Error::BadPoint);
-        }
-        let seed = as_slice(seed, seed_len)?;
-        let msg = as_slice(input, input_len)?;
-        let pub64: [u8; 64] = pub65[1..].try_into().expect("64");
-        let mut rng = seeded_rng(seed)?;
-        let ct = sm2::encrypt_with_rng(&pub64, msg, &mut rng)?;
-        let mut outv = Vec::with_capacity(ct.len() + 1);
-        outv.push(0x04);
-        outv.extend_from_slice(&ct);
-        write_out(&outv, out, out_cap, out_len)
+        let pub64 = fixed::<64>(public_key)?;
+        let mut rng = seeded_rng(as_slice(seed, seed_len)?)?;
+        let ct = sm2::encrypt_with_rng(&pub64, as_slice(input, input_len)?, &mut rng)?;
+        write_out(&ct, out, out_cap, out_len)
     })())
 }
 
-/// 解密：输入 `0x04‖C1‖C3‖C2`。
+/// 入参裸 `C1C3C2`（不带 0x04）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_decrypt(
     priv_key: *const u8,
@@ -383,19 +477,53 @@ pub unsafe extern "C" fn ys_sm2_decrypt(
     out_len: *mut usize,
 ) -> i32 {
     rc((|| {
-        let sk = fixed::<32>(priv_key)?;
-        let ct = as_slice(input, input_len)?;
-        if ct.len() < 98 || ct[0] != 0x04 {
-            return Err(Error::BadCiphertext);
-        }
-        let msg = sm2::decrypt(&sk, &ct[1..])?;
+        let msg = sm2::decrypt(&fixed::<32>(priv_key)?, as_slice(input, input_len)?)?;
         write_out(&msg, out, out_cap, out_len)
     })())
 }
 
-/// 签名：输入任意消息字节，输出 DER（70..72 字节）。
+/// 输出裸 `R‖S`（64 字节）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_sm2_sign(
+    priv_key: *const u8,
+    seed: *const u8,
+    seed_len: usize,
+    msg: *const u8,
+    msg_len: usize,
+    sig_out: *mut u8,
+) -> i32 {
+    rc((|| {
+        let sk = fixed::<32>(priv_key)?;
+        let mut rng = seeded_rng(as_slice(seed, seed_len)?)?;
+        let raw = sm2::sign(&sk, as_slice(msg, msg_len)?, sm2::DEFAULT_ID, &mut rng)?;
+        as_slice_mut(sig_out, 64)?.copy_from_slice(&raw);
+        Ok(())
+    })())
+}
+
+/// 入参裸 `R‖S`（64 字节）。
+#[no_mangle]
+pub unsafe extern "C" fn ys_sm2_verify(
+    public_key: *const u8,
+    msg: *const u8,
+    msg_len: usize,
+    sig: *const u8,
+) -> i32 {
+    let r = (|| -> Result<bool> {
+        let pub64 = fixed::<64>(public_key)?;
+        let sig = fixed::<64>(sig)?;
+        sm2::verify(&pub64, as_slice(msg, msg_len)?, sm2::DEFAULT_ID, &sig)
+    })();
+    match r {
+        Ok(true) => 1,
+        Ok(false) => 0,
+        Err(e) => e.code(),
+    }
+}
+
+/// 契约口径的签名（DER 70..72 字节），新增导出。
+#[no_mangle]
+pub unsafe extern "C" fn ys_sm2_sign_der(
     priv_key: *const u8,
     seed: *const u8,
     seed_len: usize,
@@ -407,74 +535,40 @@ pub unsafe extern "C" fn ys_sm2_sign(
 ) -> i32 {
     rc((|| {
         let sk = fixed::<32>(priv_key)?;
-        let seed = as_slice(seed, seed_len)?;
-        let msg = as_slice(msg, msg_len)?;
-        let mut rng = seeded_rng(seed)?;
-        let raw = sm2::sign(&sk, msg, sm2::DEFAULT_ID, &mut rng)?;
+        let mut rng = seeded_rng(as_slice(seed, seed_len)?)?;
+        let raw = sm2::sign(&sk, as_slice(msg, msg_len)?, sm2::DEFAULT_ID, &mut rng)?;
         let mut r = [0u8; 32];
         let mut s = [0u8; 32];
         r.copy_from_slice(&raw[..32]);
         s.copy_from_slice(&raw[32..]);
-        let der = crate::der::encode_signature(&r, &s);
-        write_out(&der, sig_out, sig_cap, sig_len_out)
+        write_out(
+            &der::encode_signature(&r, &s),
+            sig_out,
+            sig_cap,
+            sig_len_out,
+        )
     })())
-}
-
-/// 验签：1 = 通过，0 = 不通过，负数 = 参数/曲线错误。
-#[no_mangle]
-pub unsafe extern "C" fn ys_sm2_verify(
-    public_key: *const u8,
-    msg: *const u8,
-    msg_len: usize,
-    sig_der: *const u8,
-    sig_len: usize,
-) -> i32 {
-    let r = (|| -> Result<bool> {
-        let pub65 = fixed::<65>(public_key)?;
-        if pub65[0] != 0x04 {
-            return Err(Error::BadPoint);
-        }
-        let msg = as_slice(msg, msg_len)?;
-        let der = as_slice(sig_der, sig_len)?;
-        let (r, s) = crate::der::decode_signature(der)?;
-        let mut raw = [0u8; 64];
-        raw[..32].copy_from_slice(&r);
-        raw[32..].copy_from_slice(&s);
-        let pub64: [u8; 64] = pub65[1..].try_into().expect("64");
-        sm2::verify(&pub64, msg, sm2::DEFAULT_ID, &raw)
-    })();
-    match r {
-        Ok(true) => 1,
-        Ok(false) => 0,
-        Err(e) => e.code(),
-    }
 }
 
 // ---------------------------------------------------------------- 用户码
 
+/// 入参 64 字节公钥；内核内部补 `0x04` 后按契约（SM3 覆盖 65 字节）派生。
 #[no_mangle]
 pub unsafe extern "C" fn ys_user_code(public_key: *const u8, out: *mut u8) -> i32 {
     rc((|| {
-        let pub65 = fixed::<65>(public_key)?;
-        if pub65[0] != 0x04 {
-            return Err(Error::BadPoint);
-        }
+        let pub65 = to_pub65(&fixed::<64>(public_key)?);
         let code = code::from_public_key(&pub65);
         as_slice_mut(out, 4)?.copy_from_slice(code.as_bytes());
         Ok(())
     })())
 }
 
-/// 校验字符（第 5 位，展示用），写入 `out` 1 字节。
+/// 校验字符（第 5 位，仅 UI 防误输入；**不是用户码的一部分**）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_check_symbol(public_key: *const u8, out: *mut u8) -> i32 {
     rc((|| {
-        let pub65 = fixed::<65>(public_key)?;
-        if pub65[0] != 0x04 {
-            return Err(Error::BadPoint);
-        }
-        let sym = code::check_symbol(&pub65) as u8;
-        as_slice_mut(out, 1)?.copy_from_slice(&[sym]);
+        let pub65 = to_pub65(&fixed::<64>(public_key)?);
+        as_slice_mut(out, 1)?.copy_from_slice(&[code::check_symbol(&pub65) as u8]);
         Ok(())
     })())
 }
@@ -486,20 +580,141 @@ pub unsafe extern "C" fn ys_normalize_code(
     out: *mut u8,
 ) -> i32 {
     rc((|| {
-        let raw = as_slice(input, input_len)?;
-        let s = core::str::from_utf8(raw).map_err(|_| Error::BadCode)?;
-        let normalized = code::normalize(s)?;
-        as_slice_mut(out, 4)?.copy_from_slice(normalized.as_bytes());
+        let s = core::str::from_utf8(as_slice(input, input_len)?).map_err(|_| Error::BadCode)?;
+        as_slice_mut(out, 4)?.copy_from_slice(code::normalize(s)?.as_bytes());
         Ok(())
     })())
 }
 
-// ---------------------------------------------------------------- 加密包
+// ---------------------------------------------------------------- 加密包（首版签名）
 
-/// 打包（`YSPK/1.0`）。
+/// 打包。默认契约布局；`ys_set_layout(1)` 后走 rune-v1。
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn ys_pack(
+    recipient_public: *const u8,
+    sender_private: *const u8,
+    name: *const u8,
+    name_len: usize,
+    mime: *const u8,
+    mime_len: usize,
+    block_size: u32,
+    seed: *const u8,
+    seed_len: usize,
+    data: *const u8,
+    data_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    rc((|| {
+        let recipient = fixed::<64>(recipient_public)?;
+        let sender = fixed::<32>(sender_private)?;
+        let name =
+            core::str::from_utf8(as_slice(name, name_len)?).map_err(|_| Error::BadArgument)?;
+        let mime =
+            core::str::from_utf8(as_slice(mime, mime_len)?).map_err(|_| Error::BadArgument)?;
+        let seed = as_slice(seed, seed_len)?;
+        let data = as_slice(data, data_len)?;
+        let mut rng = seeded_rng(seed)?;
+        let block_size = if block_size == 0 {
+            pack::v1::DEFAULT_CHUNK_SIZE
+        } else {
+            block_size
+        };
+
+        let envelope = if LAYOUT.load(Ordering::SeqCst) == LAYOUT_RUNE_V1 {
+            let input = pack_rune_v1::PackInput {
+                recipient_public: &recipient,
+                sender_private: &sender,
+                name,
+                mime,
+                block_size,
+                data,
+            };
+            pack_rune_v1::pack(&input, &mut rng)?
+        } else {
+            let input = PackInput {
+                recipient_public: &recipient,
+                sender_private: &sender,
+                name,
+                mime,
+                block_size,
+                data,
+            };
+            pack::pack(&input, &mut rng)?
+        };
+
+        // DER 签名长度 70..72 会浮动：缓冲区不足时返回上界，保证重试能成功。
+        match write_out(&envelope, out, out_cap, out_len) {
+            Err(Error::BufferTooSmall) => {
+                core::ptr::write(out_len, envelope.len() + 2);
+                Err(Error::BufferTooSmall)
+            }
+            r => r,
+        }
+    })())
+}
+
+/// 解包。`sender_public` 是调用方手里的发送方公钥（64 字节 `X‖Y`）。
+#[no_mangle]
+pub unsafe extern "C" fn ys_unpack(
+    pack: *const u8,
+    pack_len: usize,
+    recipient_private: *const u8,
+    sender_public: *const u8,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    rc((|| {
+        let bytes = as_slice(pack, pack_len)?;
+        let sk = fixed::<32>(recipient_private)?;
+        let sender = fixed::<64>(sender_public)?;
+        let data = if LAYOUT.load(Ordering::SeqCst) == LAYOUT_RUNE_V1 {
+            pack_rune_v1::unpack(bytes, &sk, &sender)?.data
+        } else {
+            pack::unpack(bytes, &sk, &sender)?.data
+        };
+        write_out(&data, out, out_cap, out_len)
+    })())
+}
+
+/// 只解清单（不解数据块），输出 JSON 元信息。
+#[no_mangle]
+pub unsafe extern "C" fn ys_unpack_meta(
+    pack: *const u8,
+    pack_len: usize,
+    recipient_private: *const u8,
+    sender_public: *const u8,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    rc((|| {
+        let bytes = as_slice(pack, pack_len)?;
+        let sk = fixed::<32>(recipient_private)?;
+        let sender = fixed::<64>(sender_public)?;
+        let json = if LAYOUT.load(Ordering::SeqCst) == LAYOUT_RUNE_V1 {
+            let (header, manifest) = pack_rune_v1::open_manifest(bytes, &sk, &sender)?;
+            meta_json_legacy(&header, &manifest, &to_pub65(&sender), "")
+        } else {
+            let (header, manifest) = pack::open_manifest(bytes, &sk, &sender)?;
+            let mut pub65 = [0u8; 65];
+            pub65[0] = 0x04;
+            pub65[1..].copy_from_slice(&sender);
+            meta_json(&header, &manifest, &pub65)
+        };
+        write_out(json.as_bytes(), out, out_cap, out_len)
+    })())
+}
+
+// ---------------------------------------------------------------- 契约口径的完整参数版本（新增）
+
+/// 打包（完整参数）：65 字节公钥 + `ext` + `created_at_ms`。
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn ys_pack_v1(
     recipient_public: *const u8,
     sender_private: *const u8,
     name: *const u8,
@@ -519,33 +734,32 @@ pub unsafe extern "C" fn ys_pack(
     out_len: *mut usize,
 ) -> i32 {
     rc((|| {
-        let recipient_public = fixed::<65>(recipient_public)?;
-        let sender_private = fixed::<32>(sender_private)?;
+        let pub65 = fixed::<65>(recipient_public)?;
+        if pub65[0] != 0x04 {
+            return Err(Error::BadPoint);
+        }
+        let recipient64: [u8; 64] = pub65[1..].try_into().expect("64");
+        let sender = fixed::<32>(sender_private)?;
         let name =
             core::str::from_utf8(as_slice(name, name_len)?).map_err(|_| Error::BadArgument)?;
         let mime =
             core::str::from_utf8(as_slice(mime, mime_len)?).map_err(|_| Error::BadArgument)?;
         let ext = core::str::from_utf8(as_slice(ext, ext_len)?).map_err(|_| Error::BadArgument)?;
-        let seed = as_slice(seed, seed_len)?;
-        let data = as_slice(data, data_len)?;
-        let mut rng = seeded_rng(seed)?;
+        let mut rng = seeded_rng(as_slice(seed, seed_len)?)?;
         let input = PackInput {
-            recipient_public: &recipient_public,
-            sender_private: &sender_private,
+            recipient_public: &recipient64,
+            sender_private: &sender,
             name,
             mime,
-            ext,
-            created_at_ms,
-            chunk_size: if chunk_size == 0 {
+            block_size: if chunk_size == 0 {
                 pack::v1::DEFAULT_CHUNK_SIZE
             } else {
                 chunk_size
             },
-            data,
+            data: as_slice(data, data_len)?,
         };
-        let envelope = pack::pack(&input, &mut rng)?;
-        // DER 签名长度 70..72 会随 k 浮动，一次"先问大小再分配"可能差 1~2 字节；
-        // 这里在缓冲区不足时返回上界（+2），保证按返回值分配后重试一定成功。
+        let options = PackOptions { ext, created_at_ms };
+        let envelope = pack::pack_with_options(&input, &options, &mut rng)?;
         match write_out(&envelope, out, out_cap, out_len) {
             Err(Error::BufferTooSmall) => {
                 core::ptr::write(out_len, envelope.len() + 2);
@@ -560,14 +774,13 @@ unsafe fn opt_code<'a>(ptr: *const u8, len: usize) -> Result<Option<&'a str>> {
     if len == 0 {
         return Ok(None);
     }
-    let raw = as_slice(ptr, len)?;
-    let s = core::str::from_utf8(raw).map_err(|_| Error::BadCode)?;
+    let s = core::str::from_utf8(as_slice(ptr, len)?).map_err(|_| Error::BadCode)?;
     Ok(Some(s))
 }
 
-/// 只解清单（不解数据块），输出 JSON 元信息。
+/// 解包（契约口径）：按发送方 4 位码校验（契约 §13 #18）。
 #[no_mangle]
-pub unsafe extern "C" fn ys_unpack_meta(
+pub unsafe extern "C" fn ys_unpack_v1(
     pack: *const u8,
     pack_len: usize,
     recipient_private: *const u8,
@@ -578,39 +791,43 @@ pub unsafe extern "C" fn ys_unpack_meta(
     out_len: *mut usize,
 ) -> i32 {
     rc((|| {
-        let pack_bytes = as_slice(pack, pack_len)?;
+        let bytes = as_slice(pack, pack_len)?;
         let sk = fixed::<32>(recipient_private)?;
-        let (header, manifest, sender_public, sender_code) = pack::open_manifest(pack_bytes, &sk)?;
-        if let Some(expected) = opt_code(expected_sender_code, expected_sender_code_len)? {
-            if sender_code != expected {
+        let data = match opt_code(expected_sender_code, expected_sender_code_len)? {
+            Some(code) => pack::unpack_with_code(bytes, &sk, code)?.data,
+            None => pack::unpack_unchecked(bytes, &sk)?.data,
+        };
+        write_out(&data, out, out_cap, out_len)
+    })())
+}
+
+/// 只解清单（契约口径，带发送方码校验）。
+#[no_mangle]
+pub unsafe extern "C" fn ys_unpack_meta_v1(
+    pack: *const u8,
+    pack_len: usize,
+    recipient_private: *const u8,
+    expected_sender_code: *const u8,
+    expected_sender_code_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    rc((|| {
+        let bytes = as_slice(pack, pack_len)?;
+        let sk = fixed::<32>(recipient_private)?;
+        let opened = pack::open_only(bytes, &sk)?;
+        if let Some(code) = opt_code(expected_sender_code, expected_sender_code_len)? {
+            if opened.sender_code != code {
                 return Err(Error::SenderMismatch);
             }
         }
-        let json = manifest_json(&header, &manifest, &sender_public, &sender_code);
+        let json = meta_json(&opened.header, &opened.manifest, &opened.sender_public);
         write_out(json.as_bytes(), out, out_cap, out_len)
     })())
 }
 
-/// 完整解包（严格模式），输出明文。
-#[no_mangle]
-pub unsafe extern "C" fn ys_unpack(
-    pack: *const u8,
-    pack_len: usize,
-    recipient_private: *const u8,
-    expected_sender_code: *const u8,
-    expected_sender_code_len: usize,
-    out: *mut u8,
-    out_cap: usize,
-    out_len: *mut usize,
-) -> i32 {
-    rc((|| {
-        let pack_bytes = as_slice(pack, pack_len)?;
-        let sk = fixed::<32>(recipient_private)?;
-        let expected = opt_code(expected_sender_code, expected_sender_code_len)?;
-        let unpacked = pack::unpack(pack_bytes, &sk, expected)?;
-        write_out(&unpacked.data, out, out_cap, out_len)
-    })())
-}
+// ---------------------------------------------------------------- JSON
 
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -636,12 +853,7 @@ fn hex(b: &[u8]) -> String {
     s
 }
 
-fn manifest_json(
-    header: &pack::Header,
-    manifest: &Manifest,
-    sender_public: &[u8; 65],
-    sender_code: &str,
-) -> String {
+fn meta_json(header: &pack::Header, manifest: &Manifest, sender_public: &[u8; 65]) -> String {
     format!(
         "{{\"version\":\"{}\",\"name\":\"{}\",\"mime\":\"{}\",\"ext\":\"{}\",\"size\":{},\"chunk_size\":{},\"chunk_count\":{},\"created_at_ms\":{},\"sender_code\":\"{}\",\"sender_pub\":\"{}\",\"kdf_salt\":\"{}\"}}",
         pack::v1::VERSION_STRING,
@@ -650,10 +862,29 @@ fn manifest_json(
         json_escape(&manifest.ext),
         manifest.file_size,
         manifest.chunk_size,
-        manifest.chunk_count,
+        manifest.block_count,
         manifest.created_at_ms,
-        sender_code,
+        crate::code::from_public_key(sender_public),
         hex(sender_public),
         hex(&header.kdf_salt),
+    )
+}
+
+fn meta_json_legacy(
+    header: &pack_rune_v1::Header,
+    manifest: &pack_rune_v1::Manifest,
+    sender_public: &[u8; 65],
+    _unused: &str,
+) -> String {
+    format!(
+        "{{\"version\":\"rune-v1\",\"name\":\"{}\",\"mime\":\"{}\",\"ext\":\"\",\"size\":{},\"chunk_size\":{},\"chunk_count\":{},\"created_at_ms\":0,\"sender_code\":\"{}\",\"sender_pub\":\"{}\",\"file_id\":\"{}\"}}",
+        json_escape(&manifest.name),
+        json_escape(&manifest.mime),
+        manifest.plain_size,
+        manifest.block_size,
+        manifest.block_count,
+        crate::code::from_public_key(sender_public),
+        hex(sender_public),
+        hex(&header.file_id),
     )
 }

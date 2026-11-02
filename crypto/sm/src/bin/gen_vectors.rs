@@ -14,7 +14,7 @@ use yanshu_sm::bigint::U256;
 use yanshu_sm::der;
 use yanshu_sm::gcm::{self, TAG_SIZE};
 use yanshu_sm::hkdf::hkdf_sm3;
-use yanshu_sm::pack::{self, v1, PackInput, PackParams};
+use yanshu_sm::pack::{self, v1, PackInput, PackOptions, PackParams};
 use yanshu_sm::sm2;
 use yanshu_sm::sm3::{hmac_sm3, sm3};
 
@@ -546,19 +546,22 @@ fn main() {
             }
         };
 
+        let recipient64: [u8; 64] = recipient_pub[1..].try_into().expect("64");
         let input = PackInput {
-            recipient_public: &recipient_pub,
+            recipient_public: &recipient64,
             sender_private: &sender_priv,
             name: c.file_name,
             mime: c.mime,
-            ext: c.ext,
-            created_at_ms: 1_767_225_600_000,
-            chunk_size: c.chunk_size,
+            block_size: c.chunk_size,
             data: &c.data,
         };
-        let packed = pack::pack_with(&input, &params).expect("pack");
+        let options = PackOptions {
+            ext: c.ext,
+            created_at_ms: 1_767_225_600_000,
+        };
+        let packed = pack::pack_with_params(&input, &options, &params).expect("pack");
         // 自检：解包必须还原
-        let out = pack::unpack(&packed, &recipient_priv, None).expect("unpack");
+        let out = pack::unpack_unchecked(&packed, &recipient_priv).expect("unpack");
         assert_eq!(out.data, c.data);
 
         json.push_str(&format!(
