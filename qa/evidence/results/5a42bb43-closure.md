@@ -141,6 +141,21 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 
 → **结论：淘汰 `d8d90a2`，交付绑定 `06c9f56`（`5a42bb43…`）。**
 
+## 四c、在线吊销：递增 EPOCH **不需要重启**（同一进程内实测）
+
+脚本 `qa/evidence/check_epoch_online_revoke.py`（全程只起**一个**进程，中途改库、不重启）：
+
+| 步 | 结果 |
+|---|---|
+| 起一次服务（`EPOCH=1`），签发凭据 → 打 status | **200** |
+| **服务不停**，`UPDATE token_kid_state SET kid = kid + 1` | `UPDATE 1` |
+| 同一进程、同一凭据再打 | **401 `AUTH_TOKEN_STALE`** |
+| 同一进程读 `/v1/config.token_epoch` | **1 → 2** |
+| 进程存活且 **PID 未变** | PASS（pid 未变） |
+
+**结论：递增 EPOCH 立即生效、无需重启**——与"KID 是唯一吊销开关"的设计一致。
+（只换 `TOKEN_SECRET` 的那条在「三、KID 矩阵」里已实测为 **200（不吊销）**。）
+
 ## 五、结论
 
 **建议 spencer 用这份产物重启**（`5a42bbdf…` 见上表；`deliver` 与内核同表），
