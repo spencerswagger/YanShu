@@ -86,7 +86,7 @@
 
 ### 4.4 契约 ↔ 实现字面核对
 
-`check_contract_impl_parity.py`（契约 `origin/docs/contract-clarify@**910cad8**` vs 实现 `06c9f56`）：
+`check_contract_impl_parity.py`（契约 `origin/docs/contract-clarify@**cecc16c**` 与 `910cad8` 两版均核 vs 实现 `06c9f56`）：
 **PASS —— 两侧 14 个码一一对应**：
 `AUTH_TOKEN_STALE` / `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` / `AUTH_SIGNATURE_INVALID` /
 `AUTH_CODE_MISMATCH` / `AUTH_MISSING` / `AUTH_CHALLENGE_INVALID` / `SIG_INPUT_TOO_LONG` /
@@ -94,7 +94,8 @@
 `TRANSFER_NOT_READY` / `TRANSFER_STATE_CONFLICT`；`AUTH_TOKEN_REVOKED` 两侧均 0。
 
 > 历史：本条曾判 **FAIL（实现有、契约无：`SIG_INPUT_TOO_LONG`）**——常驻核对首次真实命中。
-> 契约方已在 `910cad8` 把它写回 `§10.1`（注明"防御性上限 512、HTTP 路径不可达、若触发返 400"），随即转 PASS。
+> 契约方已在 `910cad8` 把它写回 `§10.1`（注明"防御性上限 512、HTTP 路径不可达、若触发返 400"），随即转 PASS；
+> `cecc16c` 只是措辞收紧（该码字面在正文仅 1 处），码集合未变，复核仍 **PASS（14 码）**。
 
 ## 5. 附件清单（每个数字都可回溯）
 
@@ -109,7 +110,7 @@
 | `results/web/c1b87d0a-sm2-auth-branches.json` | `173173b5a34adc6f2b0b1f064466555228af460f27b3e96bee07f7c9debc1950` | 三分支响应体 | 签名/码/挑战 |
 | `results/web/c1b87d0a-closure-web.md` | `31cb989c1481719bdf00756297ba901618a5effbca2e081df70824d9cb92b7d7` | Web 侧收口 | 同上 |
 
-## 6. 已知偏差清单
+## 6. 已知偏差清单（共 6 条；契约↔实现 parity 已 PASS，故不列偏差）
 
 1. **宿主无 `AUTH_TOKEN_EXPIRED`**（`grep` 0 处）：6h/30min 凭据时效未实现，超期走 **410 `TRANSFER_EXPIRED`**。
 2. **宿主"只换 `TOKEN_SECRET` → 401 `AUTH_TOKEN_INVALID`"**，与契约"secret 不吊销"不一致。
@@ -117,7 +118,6 @@
 4. **跨版本 token 不兼容**：`4eda665`（`u64be(KID)`+`v2`）vs `06c9f56`（`u32be(KID)`+`v1`）；换产物失效在传 token（数据无损）。
 5. **旧 head 内核为空 blob**：`97d156c`、`b516cc6` 的 `server/kernel/yanshu_sm.wasm` 在 git 里 0 字节；`fa479d9` 缺 `0002` 迁移。
 6. **过时注释**：`4eda665` 的 `ValidateHash` 写"不重算"，但线上走 `Derives()`（重算）。
-7. ~~契约↔实现不一致：`SIG_INPUT_TOO_LONG`~~ → **已闭合**（契约 `910cad8` 写回 `§10.1`，parity 转 PASS，见 4.4）。
 
 ### 6b. 已澄清项（不计入偏差）：`AUTH_CODE_MISMATCH` 曾被误报
 
