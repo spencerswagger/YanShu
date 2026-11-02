@@ -156,7 +156,7 @@ Rust 侧 API 为 `pack::unpack(pack, recipient_sk, Option<&str>)`（第三个参
 
 * 数值 `-4..-23` 与首版完全一致；新语义从 `-24` 起。
 * `Error::name()` / `ys_error_name_v1()` → 契约 `CRYPTO_*`；
-  `ys_error_name()` → 首版 `BAD_MAGIC` 等旧名（Web 映射表按旧名查）。
+  `ys_error_name()` 与 `ys_error_name_v1()` → 同一套 `CRYPTO_*`（不再返回旧名）。
 * 能区分：块序 `CHUNK_ORDER` / 清单 `MANIFEST_MISMATCH`·`MANIFEST_AUTH_FAILED` /
   截断 `TRUNCATED`·`LENGTH_INCONSISTENT` / 缺块 `CHUNK_MISSING`·`MISSING_BLOCK` /
   版本 `UNSUPPORTED_VERSION` / tag `TAG_MISMATCH`·`CHUNK_AUTH_FAILED`。

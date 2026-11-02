@@ -223,25 +223,12 @@ fn name_for(code: i32, contract_style: bool) -> &'static str {
     }
 }
 
-/// 首版 ABI 的错误名（`BAD_MAGIC` 等；Web 的映射表按这套查）。
+/// 错误名（**唯一格式 `CRYPTO_*`**，与 Rust 侧 `Error::name()` 完全一致）。
+///
+/// 例：`-4 → "CRYPTO_MAGIC_MISMATCH"`、`-33 → "CRYPTO_SENDER_MISMATCH"`。
+/// 不再返回首版的 `BAD_MAGIC` 之类旧名，避免 wasm 与 Rust 两套自由格式。
 #[no_mangle]
 pub unsafe extern "C" fn ys_error_name(
-    code: i32,
-    out: *mut u8,
-    cap: usize,
-    out_len: *mut usize,
-) -> i32 {
-    rc(write_out(
-        name_for(code, false).as_bytes(),
-        out,
-        cap,
-        out_len,
-    ))
-}
-
-/// 契约口径的错误名（`CRYPTO_*`）；新增导出，不影响首版行为。
-#[no_mangle]
-pub unsafe extern "C" fn ys_error_name_v1(
     code: i32,
     out: *mut u8,
     cap: usize,
@@ -253,6 +240,17 @@ pub unsafe extern "C" fn ys_error_name_v1(
         cap,
         out_len,
     ))
+}
+
+/// `ys_error_name` 的别名（保留旧符号，输出与之一致）。
+#[no_mangle]
+pub unsafe extern "C" fn ys_error_name_v1(
+    code: i32,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    ys_error_name(code, out, cap, out_len)
 }
 
 // ---------------------------------------------------------------- SM3 / HMAC / HKDF
@@ -726,17 +724,15 @@ pub unsafe extern "C" fn ys_pack_v1(
     out_len: *mut usize,
 ) -> i32 {
     rc((|| {
-        let pub65 = fixed::<65>(recipient_public)?;
-        if pub65[0] != 0x04 {
-            return Err(Error::BadPoint);
-        }
+        // ABI 公钥统一 64 字节 `X‖Y`；0x04 前缀由内核内部补（与 ys_pack / ys_sm2_* 一致）
+        let pub65 = to_pub65(&fixed::<64>(recipient_public)?);
         let sender = fixed::<32>(sender_private)?;
         let name =
             core::str::from_utf8(as_slice(name, name_len)?).map_err(|_| Error::BadArgument)?;
         let mime =
             core::str::from_utf8(as_slice(mime, mime_len)?).map_err(|_| Error::BadArgument)?;
         let ext = core::str::from_utf8(as_slice(ext, ext_len)?).map_err(|_| Error::BadArgument)?;
-        let mut rng = seeded_rng(as_slice(seed, seed_len)?)?;
+        let seed = as_slice(seed, seed_len)?;
         let input = PackInput {
             recipient_public: &pub65,
             sender_private: &sender,
@@ -751,6 +747,7 @@ pub unsafe extern "C" fn ys_pack_v1(
             },
             data: as_slice(data, data_len)?,
         };
+        // 先算上界（不消耗随机数），"先问大小再分配"不会误触 seed 复用
         let bound = pack::pack_bound(&input)?;
         if out_cap < bound {
             if out_len.is_null() {
@@ -759,6 +756,7 @@ pub unsafe extern "C" fn ys_pack_v1(
             core::ptr::write(out_len, bound);
             return Err(Error::BufferTooSmall);
         }
+        let mut rng = seeded_rng(seed)?;
         let envelope = pack::pack(&input, &mut rng)?;
         write_out(&envelope, out, out_cap, out_len)
     })())

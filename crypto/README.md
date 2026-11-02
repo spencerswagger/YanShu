@@ -58,8 +58,11 @@ cargo run --release --bin gen-vectors -- ../testdata/vectors.json
 cargo run --release --bin gen-host-crosscheck -- ../vectors   # 宿主对照请求（JSON + MD）
 ```
 
-> 有的镜像只有 `gcc` 没有 `cc`，需要时：
-> `export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc`
+> 有的镜像只有 `gcc` 没有 `cc`。**只在宿主（x86_64）构建时**按 target 设置：
+> `export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc`。
+> ⚠️ **不要用全局 `RUSTFLAGS="-C linker=gcc"` 或 `CC=…` 覆盖**：那会给 wasm32 目标
+> 也套上 host linker，报 `linker ... not found` 或产出非 wasm 对象。构建 wasm 时保持
+> `--target wasm32-unknown-unknown` 且不覆盖全局 linker（本仓库的脚本都按 target 设置）。
 
 ## wasm32 构建（raw C ABI，不引 wasm-bindgen）
 

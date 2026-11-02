@@ -98,45 +98,46 @@ const isContract = ys_version() === 0x00010000 && ys_header_len() === 112
 ## 4. 错误码（数值稳定）
 
 - `-4 … -23` 与首版**完全一致**（老映射表照旧命中）；`-24` 起是新增细粒度。
-- `ys_error_name(code)` 返回**首版旧名**（`BAD_MAGIC` 等，Web 现有表用它）；
-  `ys_error_name_v1(code)` 返回**契约名**（`CRYPTO_*`，Gate 探针/日志用它）。
+- `ys_error_name(code)` 与 `ys_error_name_v1(code)` **返回同一套 `CRYPTO_*`**
+  （与 Rust `Error::name()` 逐字一致）；首版 `BAD_MAGIC` 等旧名不再返回，
+  避免 wasm 与 Rust 两套自由格式。
 
-| code | `ys_error_name_v1` | `ys_error_name` | 含义 |
+| code | `ys_error_name`（= `_v1`） | 含义 |
 |---:|---|---|---|
-| -1 | `CRYPTO_BAD_ARGUMENT` | `BAD_ARGUMENT` | 参数非法 |
-| -2 | `CRYPTO_BUFFER_TOO_SMALL` | `BUFFER_TOO_SMALL` | 缓冲区不足（`*out_len` 给所需长度） |
-| -3 | `CRYPTO_RNG_FAILED` | `RNG` | 随机源失败 / **同一 seed 复用** |
-| -4 | `CRYPTO_MAGIC_MISMATCH` | `BAD_MAGIC` | 魔数不是 `YSPK` |
-| -5 | `CRYPTO_VERSION_UNSUPPORTED` | `UNSUPPORTED_VERSION` | 版本/算法 ID 不认识 |
-| -6 | `CRYPTO_FLAGS_UNKNOWN` | `BAD_FLAGS` | FLAGS 保留位 / RESERVED 非 0 |
-| -7 | `CRYPTO_LENGTH_INCONSISTENT` | `TRUNCATED` | 截断 / 长度不符 |
-| -8 | `CRYPTO_KEY_UNWRAP_FAILED` | `BAD_KEY_RECORD` | DK 解封失败 |
-| -9 | `CRYPTO_SIGNATURE_INVALID` | `BAD_SIGNATURE_RECORD` | 签名记录/DER 非法 |
-| -10 | `CRYPTO_MANIFEST_INVALID` | `BAD_MANIFEST_RECORD` | 清单结构非法 |
-| -11 | `CRYPTO_CHUNK_ORDER` | `BLOCK_SEQUENCE` | 块序错 |
-| -12 | `CRYPTO_CHUNK_ORDER` | `DUPLICATE_BLOCK` | 重复块 |
-| -13 | `CRYPTO_CHUNK_MISSING` | `MISSING_BLOCK` | 缺块 |
-| -14 | `CRYPTO_CHUNK_ORDER` | `LAST_FLAG_MISMATCH` | 末块标志不符 |
-| -15 | `CRYPTO_CHUNK_AUTH_FAILED` | `TAG_MISMATCH` | 块 GCM 认证失败 |
-| -16 | `CRYPTO_MANIFEST_AUTH_FAILED` | `MANIFEST_MISMATCH` | 清单认证/一致性 |
-| -17 | `CRYPTO_SIGNATURE_INVALID` | `SIGNATURE_MISMATCH` | 验签失败 |
-| -18 | `CRYPTO_LENGTH_INCONSISTENT` | `TRAILING_BYTES` | 尾部多余字节 |
-| -19 | `CRYPTO_CURVE_INVALID` | `BAD_POINT` | 曲线点非法 |
-| -20 | `CRYPTO_CIPHERTEXT_INVALID` | `BAD_KDF` | KDF/密文非法 |
-| -21 | `CRYPTO_CODE_INVALID` | `BAD_CODE` | 用户码非法 |
-| -22 | `CRYPTO_CODE_EXHAUSTED` | `CODE_EXHAUSTED` | 撞码重试耗尽 |
-| -23 | `CRYPTO_CIPHERTEXT_INVALID` | `BAD_CIPHERTEXT` | 密文非法 |
-| **-24** | `CRYPTO_HEADER_INVALID` | `BAD_FLAGS` | 头部字段非法 |
-| **-25** | `CRYPTO_ALG_UNSUPPORTED` | `UNSUPPORTED_VERSION` | 未知算法 ID |
-| **-26** | `CRYPTO_UNSIGNED` | `BAD_SIGNATURE_RECORD` | `SENDER_SIGNED=0` |
-| **-27** | `CRYPTO_LENGTH_INCONSISTENT` | `TRUNCATED` | 长度不自洽 |
-| **-28** | `CRYPTO_CHUNK_ORDER` | `BLOCK_SEQUENCE` | 块号/末块标志不符 |
-| **-29** | `CRYPTO_CHUNK_AUTH_FAILED` | `TAG_MISMATCH` | 块 AEAD 失败 |
-| **-30** | `CRYPTO_CHUNK_MISSING` | `MISSING_BLOCK` | 缺块 |
-| **-31** | `CRYPTO_MANIFEST_AUTH_FAILED` | `MANIFEST_MISMATCH` | 清单 AEAD 失败 |
-| **-32** | `CRYPTO_DIGEST_MISMATCH` | `MANIFEST_MISMATCH` | 明文摘要与清单不符 |
-| **-33** | `CRYPTO_SENDER_MISMATCH` | `SIGNATURE_MISMATCH` | 调用方给的公钥与包内不符 |
-| -99 | `CRYPTO_INTERNAL` | `INTERNAL` | 内部错误 |
+| -1 | `CRYPTO_BAD_ARGUMENT` | 参数非法 |
+| -2 | `CRYPTO_BUFFER_TOO_SMALL` | 缓冲区不足（`*out_len` 给所需长度） |
+| -3 | `CRYPTO_RNG_FAILED` | 随机源失败 / **同一 seed 复用** |
+| -4 | `CRYPTO_MAGIC_MISMATCH` | 魔数不是 `YSPK` |
+| -5 | `CRYPTO_VERSION_UNSUPPORTED` | 版本/算法 ID 不认识 |
+| -6 | `CRYPTO_FLAGS_UNKNOWN` | FLAGS 保留位 / RESERVED 非 0 |
+| -7 | `CRYPTO_LENGTH_INCONSISTENT` | 截断 / 长度不符 |
+| -8 | `CRYPTO_KEY_UNWRAP_FAILED` | DK 解封失败 |
+| -9 | `CRYPTO_SIGNATURE_INVALID` | 签名记录/DER 非法 |
+| -10 | `CRYPTO_MANIFEST_INVALID` | 清单结构非法 |
+| -11 | `CRYPTO_CHUNK_ORDER` | 块序错 |
+| -12 | `CRYPTO_CHUNK_ORDER` | 重复块 |
+| -13 | `CRYPTO_CHUNK_MISSING` | 缺块 |
+| -14 | `CRYPTO_CHUNK_ORDER` | 末块标志不符 |
+| -15 | `CRYPTO_CHUNK_AUTH_FAILED` | 块 GCM 认证失败 |
+| -16 | `CRYPTO_MANIFEST_AUTH_FAILED` | 清单认证/一致性 |
+| -17 | `CRYPTO_SIGNATURE_INVALID` | 验签失败 |
+| -18 | `CRYPTO_LENGTH_INCONSISTENT` | 尾部多余字节 |
+| -19 | `CRYPTO_CURVE_INVALID` | 曲线点非法 |
+| -20 | `CRYPTO_CIPHERTEXT_INVALID` | KDF/密文非法 |
+| -21 | `CRYPTO_CODE_INVALID` | 用户码非法 |
+| -22 | `CRYPTO_CODE_EXHAUSTED` | 撞码重试耗尽 |
+| -23 | `CRYPTO_CIPHERTEXT_INVALID` | 密文非法 |
+| **-24** | `CRYPTO_HEADER_INVALID` | 头部字段非法 |
+| **-25** | `CRYPTO_ALG_UNSUPPORTED` | 未知算法 ID |
+| **-26** | `CRYPTO_UNSIGNED` | `SENDER_SIGNED=0` |
+| **-27** | `CRYPTO_LENGTH_INCONSISTENT` | 长度不自洽 |
+| **-28** | `CRYPTO_CHUNK_ORDER` | 块号/末块标志不符 |
+| **-29** | `CRYPTO_CHUNK_AUTH_FAILED` | 块 AEAD 失败 |
+| **-30** | `CRYPTO_CHUNK_MISSING` | 缺块 |
+| **-31** | `CRYPTO_MANIFEST_AUTH_FAILED` | 清单 AEAD 失败 |
+| **-32** | `CRYPTO_DIGEST_MISMATCH` | 明文摘要与清单不符 |
+| **-33** | `CRYPTO_SENDER_MISMATCH` | 调用方给的公钥与包内不符 |
+| -99 | `CRYPTO_INTERNAL` | 内部错误 |
 
 ## 5. 导出清单（30 个函数 + `memory`）
 

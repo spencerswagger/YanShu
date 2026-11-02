@@ -223,6 +223,34 @@ if (e.ys_header_len() !== 112) throw new Error(`header len ${e.ys_header_len()} 
   if (meta.name !== "报告.pdf" || meta.size !== data.length) throw new Error(`meta ${JSON.stringify(meta)}`);
   if (meta.sender_code !== code) throw new Error(`sender_code ${meta.sender_code} != ${code}`);
 
+  // ys_pack_v1：ABI 公钥同样是 64 字节 X‖Y（实现与头文件一致）
+  {
+    const ext = Buffer.from("bin");
+    const extPtr2 = alloc(ext.length);
+    write(extPtr2, ext);
+    const seedV1 = crypto.randomBytes(32);
+    const seedV1Ptr = alloc(seedV1.length);
+    write(seedV1Ptr, seedV1);
+    const argsV1 = [
+      recipientPubPtr, senderPrivPtr,
+      namePtr, name.length, mimePtr, mime.length, extPtr2, ext.length,
+      BigInt(1_767_225_600_000), 1024,
+      seedV1Ptr, seedV1.length, dataPtr, data.length,
+    ];
+    let rcV1 = e.ys_pack_v1(...argsV1, 0, 0, lenPtr);
+    expectRc(rcV1, -2, "ys_pack_v1 probe");
+    const needV1 = dv().getUint32(lenPtr, true);
+    const outV1 = alloc(needV1);
+    check(e.ys_pack_v1(...argsV1, outV1, needV1, lenPtr), "ys_pack_v1(64B pubkey)");
+    const nV1 = dv().getUint32(lenPtr, true);
+    if (hex(unpackOnce(outV1, nV1, 8192)) !== hex(data)) {
+      throw new Error("ys_pack_v1 roundtrip mismatch");
+    }
+    e.ys_free(extPtr2, ext.length);
+    e.ys_free(seedV1Ptr, seedV1.length);
+    e.ys_free(outV1, needV1);
+  }
+
   // 篡改包内 SENDER_PUB → 验签失败（来源不能冒充）
   const tampered = new Uint8Array(pk.bytes);
   tampered[112 + 3] ^= 0x01;

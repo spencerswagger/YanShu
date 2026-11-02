@@ -27,8 +27,28 @@
  *   **同一 seed 二次使用会返回 -3（RNG）**，不再静默复用。
  * - `ys_alloc(n)` ↔ `ys_free(p, n)` 成对、长度一致。
  *
- * ## 公钥口径
- * ABI 一律 **64 字节 `X‖Y`**（首版口径）；契约要求的 `0x04‖X‖Y` 由内核内部补/去。
+ * ## 公钥口径（一张表，别再猜）
+ *
+ * | 导出 | 公钥入参/出参 | 长度 | 含 0x04 |
+ * |---|---|---:|---|
+ * | `ys_sm2_keygen` | out `pub_out` | 64 | 否（`X‖Y`） |
+ * | `ys_sm2_pubkey` | out `pub_out` | 64 | 否 |
+ * | `ys_sm2_encrypt` | in `public_key` | 64 | 否 |
+ * | `ys_sm2_decrypt` | 密文 `input`（C1C3C2） | 96+len | 否 |
+ * | `ys_sm2_verify` | in `public_key` | 64 | 否 |
+ * | `ys_user_code` / `ys_check_symbol` | in `public_key` | 64 | 否 |
+ * | `ys_pack` / `ys_pack_v1` | in `recipient_public` | 64 | 否 |
+ * | `ys_sm2_sign_der` | 私钥 32 | — | — |
+ *
+ * **ABI 层一律 64 字节 `X‖Y`，不带 `0x04`**；契约要求的 `0x04‖X‖Y`（包内
+ * `SENDER_PUB`、`WRAPPED_KEY` 的 C1）由内核内部补/去。传出包里的 `sender_pub`
+ * （`ys_unpack_meta` 的 JSON）是 **65 字节含 `0x04`**，因为那就是包内原文。
+ *
+ * ## 错误名（唯一格式）
+ * `ys_error_name()` 与 `ys_error_name_v1()` 都返回 **`CRYPTO_*`**（与 Rust 侧
+ * `Error::name()` 逐字一致）；不再返回 `BAD_MAGIC` 等旧名。例：
+ * `-4 → CRYPTO_MAGIC_MISMATCH`、`-29 → CRYPTO_CHUNK_AUTH_FAILED`、
+ * `-33 → CRYPTO_SENDER_MISMATCH`。
  */
 
 #ifndef YANSHU_SM_H
@@ -49,9 +69,9 @@ uint32_t ys_version(void);            /* 0x0001_0000 */
 uint32_t ys_default_block_size(void); /* 1 MiB */
 uint32_t ys_header_len(void);         /* 112（YSPK/1.0） */
 
-/* 首版错误名（BAD_MAGIC…），Web 的映射表按这套查 */
+/* 错误名，唯一格式 CRYPTO_*（与 Rust `Error::name()` 一致） */
 int32_t ys_error_name(int32_t code, uint8_t *out, size_t cap, size_t *out_len);
-/* 契约错误名（CRYPTO_*），新增 */
+/* `ys_error_name` 的别名，输出相同 */
 int32_t ys_error_name_v1(int32_t code, uint8_t *out, size_t cap, size_t *out_len);
 
 /* ---------------------------------------------------------------- SM3 / HMAC / HKDF */
@@ -146,8 +166,8 @@ int32_t ys_unpack_v1(const uint8_t *pack, size_t pack_len, const uint8_t *recipi
 int32_t ys_unpack_meta_v1(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
                           uint8_t *out, size_t out_cap, size_t *out_len);
 
-/* 打包（完整参数）：多一个 ext 与 created_at_ms（u64） */
-int32_t ys_pack_v1(const uint8_t *recipient_public /* 64 */, const uint8_t *sender_private,
+/* 打包（完整参数）：多一个 ext 与 created_at_ms（u64）。公钥 64 字节 X‖Y。 */
+int32_t ys_pack_v1(const uint8_t *recipient_public /* 64 = X‖Y */, const uint8_t *sender_private,
                    const uint8_t *name, size_t name_len, const uint8_t *mime, size_t mime_len,
                    const uint8_t *ext, size_t ext_len, uint64_t created_at_ms, uint32_t chunk_size,
                    const uint8_t *seed, size_t seed_len, const uint8_t *data, size_t data_len,
