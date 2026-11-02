@@ -370,3 +370,15 @@ python3 qa/evidence/check_restore_from_real_drop.py \
 3. **`[本地]` 结论不代表宿主**：token 五步、删列库恢复 12/12、P0 回归均在沙盒实例完成；宿主只做了只读与投递类实测。
 4. **旧 head 不可交付**：`97d156c`、`b516cc6` 内核为空 blob（0 B）；`fa479d9` 缺 `0002` 迁移。
 5. **跨版本 token 不兼容**：`4eda665`（`u64be`+`v2`）与 `06c9f56`（`u32be`+`v1`）不同；换产物失效在传 token（数据无损）。
+
+## 附：附件 sha256 与"已澄清项"（与 `FINAL-closure-4eda665.md` 一致）
+
+被引用文件的完整 sha256 见 **`qa/evidence/results/FINAL-closure-4eda665.md` §5**（含 Web 的五份：
+`c1b87d0a-closure-web.md` `31cb989c…`、`c1b87d0a-sm2-e2e.md` `8e7feffa…`、`.json` `bb6911db…`、
+`c1b87d0a-sm2-token-heal.json` `1c7ad78b…`、`c1b87d0a-sm2-auth-branches.json` `173173b5…`）。
+
+**已澄清项**（不计入偏差）：`AUTH_CODE_MISMATCH` 曾被前端误报为 `AUTH_SIGNATURE_INVALID`——正确构造
+（`SIG_INPUT` 用头码 `PAWW` 签名、路径改 `AWQW`）实测返回 **401 `AUTH_CODE_MISMATCH`**，与契约一致；
+复现：`cd web && node scripts/repro-code-mismatch.mjs`。**以本结论为准。**
+
+**契约↔实现**：契约 `910cad8` 已把 `SIG_INPUT_TOO_LONG` 写回 `§10.1`，parity **PASS（14 码一一对应）**。

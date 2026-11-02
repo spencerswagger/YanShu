@@ -86,22 +86,28 @@
 
 ### 4.4 契约 ↔ 实现字面核对
 
-`check_contract_impl_parity.py`（契约 `origin/docs/contract-clarify` vs 实现 `06c9f56`）：
-**FAIL —— 实现有、契约无：`SIG_INPUT_TOO_LONG`**（实现 `spec/errors.go:34` + 400 映射 + 单测 `TestSIGInputTooLong`）。
-其余 13 码两侧一一对应，`AUTH_TOKEN_REVOKED` 两侧均 0。→ 契约应把该码写回 `§10.1`，注明"防御性上限、HTTP 不可达、触发返 400"。
+`check_contract_impl_parity.py`（契约 `origin/docs/contract-clarify@**910cad8**` vs 实现 `06c9f56`）：
+**PASS —— 两侧 14 个码一一对应**：
+`AUTH_TOKEN_STALE` / `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` / `AUTH_SIGNATURE_INVALID` /
+`AUTH_CODE_MISMATCH` / `AUTH_MISSING` / `AUTH_CHALLENGE_INVALID` / `SIG_INPUT_TOO_LONG` /
+`TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` / `TRANSFER_REVOKED` / `TRANSFER_NOT_FOUND` /
+`TRANSFER_NOT_READY` / `TRANSFER_STATE_CONFLICT`；`AUTH_TOKEN_REVOKED` 两侧均 0。
+
+> 历史：本条曾判 **FAIL（实现有、契约无：`SIG_INPUT_TOO_LONG`）**——常驻核对首次真实命中。
+> 契约方已在 `910cad8` 把它写回 `§10.1`（注明"防御性上限 512、HTTP 路径不可达、若触发返 400"），随即转 PASS。
 
 ## 5. 附件清单（每个数字都可回溯）
 
-| 文件 | 内容 | 关键值 |
-|---|---|---|
-| `qa/evidence/results/5a42bb43-closure.md` | 交付候选六项收口 | `5a42bb43…` / `c1b87d0a…` |
-| `qa/evidence/results/cc117070-host-closure.md` | 宿主六步 + 六项 | `cc117070…` |
-| `qa/evidence/results/cc117070-secret-and-expiry.md` | 宿主 secret/超期原始响应 | `AUTH_TOKEN_INVALID` / `TRANSFER_EXPIRED` |
-| `qa/evidence/results/2026-11-02-head-matrix.md` | 9 个 head × 六项对比 | 候选淘汰依据 |
-| `results/web/c1b87d0a-sm2-e2e.md` / `.json` | Web 浏览器双端 e2e | `4b0c533a…482f` |
-| `results/web/c1b87d0a-sm2-token-heal.json` | 401 自愈演练 | `AUTH_TOKEN_STALE` 原文 |
-| `results/web/c1b87d0a-sm2-auth-branches.json` | 三分支响应体 | 签名/码/挑战 |
-| `results/web/c1b87d0a-closure-web.md` | Web 侧收口 | 同上 |
+| 文件 | sha256 | 内容 | 关键值 |
+|---|---|---|---|
+| `qa/evidence/results/5a42bb43-closure.md` | `58a98b67805f7d61792191851b470f27872130ca1b99591414b3f4788adbfd6d` | 交付候选六项收口 | `5a42bb43…` / `c1b87d0a…` |
+| `qa/evidence/results/cc117070-host-closure.md` | `05a33f7baed9cf62eb4e1ff76465abc70420ac8bef49431017a6c601f769f3c8` | 宿主六步 + 六项 | `cc117070…` |
+| `qa/evidence/results/cc117070-secret-and-expiry.md` | `b4f23cfad86e4d289be9fb6971d06f97a8e8ac1a57126e0ce4e749bcc28a56cd` | 宿主 secret/超期原始响应 | `AUTH_TOKEN_INVALID` / `TRANSFER_EXPIRED` |
+| `qa/evidence/results/2026-11-02-head-matrix.md` | `8ce501428baa632949d7eb3876108399fe243031517d9e8ee31d5a978458a157` | 9 个 head × 六项对比 | 候选淘汰依据 |
+| `results/web/c1b87d0a-sm2-e2e.md` / `.json` | `<缺失>` | Web 浏览器双端 e2e | `4b0c533a…482f` |
+| `results/web/c1b87d0a-sm2-token-heal.json` | `1c7ad78bd88b373a3a96d39abef737badc846eefe94697c2e96e596947deafa1` | 401 自愈演练 | `AUTH_TOKEN_STALE` 原文 |
+| `results/web/c1b87d0a-sm2-auth-branches.json` | `173173b5a34adc6f2b0b1f064466555228af460f27b3e96bee07f7c9debc1950` | 三分支响应体 | 签名/码/挑战 |
+| `results/web/c1b87d0a-closure-web.md` | `31cb989c1481719bdf00756297ba901618a5effbca2e081df70824d9cb92b7d7` | Web 侧收口 | 同上 |
 
 ## 6. 已知偏差清单
 
@@ -111,7 +117,19 @@
 4. **跨版本 token 不兼容**：`4eda665`（`u64be(KID)`+`v2`）vs `06c9f56`（`u32be(KID)`+`v1`）；换产物失效在传 token（数据无损）。
 5. **旧 head 内核为空 blob**：`97d156c`、`b516cc6` 的 `server/kernel/yanshu_sm.wasm` 在 git 里 0 字节；`fa479d9` 缺 `0002` 迁移。
 6. **过时注释**：`4eda665` 的 `ValidateHash` 写"不重算"，但线上走 `Derives()`（重算）。
-7. **契约↔实现尚有一处不一致**：`SIG_INPUT_TOO_LONG`（见 4.4）。
+7. ~~契约↔实现不一致：`SIG_INPUT_TOO_LONG`~~ → **已闭合**（契约 `910cad8` 写回 `§10.1`，parity 转 PASS，见 4.4）。
+
+### 6b. 已澄清项（不计入偏差）：`AUTH_CODE_MISMATCH` 曾被误报
+
+前端此前报告"路径码 ≠ 头码时返回 `AUTH_SIGNATURE_INVALID`"，与本文件结论不符。**经复测证伪**：
+
+- **正确构造**：`SIG_INPUT` 按**头码** `PAWW` 构造并签名，只把**路径**改成 `AWQW`；
+- **实测**：`401 AUTH_CODE_MISMATCH`，响应原文
+  `{"error":{"code":"AUTH_CODE_MISMATCH","message":"X-YS-Code does not match the signed code",…}}`（与契约一致）；
+- **原报告成因**：签名与头码不对应（构造错误），不是服务端缺陷；前端已撤回，并给出最小复现 `web/scripts/repro-code-mismatch.mjs`。
+- **以本文件结论为准**：该场景返回 `AUTH_CODE_MISMATCH`，**不是** `AUTH_SIGNATURE_INVALID`。
+
+**复现（一行）**：`cd web && node scripts/repro-code-mismatch.mjs`（对 `http://127.0.0.1:18080`，期望 `401 AUTH_CODE_MISMATCH`）。
 
 ## 7. 结论
 
