@@ -100,28 +100,28 @@ echo "== 0) 迁移 =="
 YANSHU_DATABASE_URL="$DSN" "$BIN" -migrate-only >/dev/null 2>&1 || { echo "migrate 失败" >&2; exit 1; }
 
 echo "== 1) 基线：kid=k1 签发并可用 =="
-start_server "rotation-secret-0001" "k1"
+start_server "rotation-secret-0001" "1"
 set -- $(new_transfer)
 PKG1=$1; TOK1=$2
 check "baseline status" 200 "" "$(status_of "$PKG1" "$TOK1")"
 stop_server
 
 echo "== 2) 只改 secret（kid 仍 k1） =="
-start_server "rotation-secret-0002" "k1"
+start_server "rotation-secret-0002" "1"
 check "only-secret: 旧 token" 401 "AUTH_TOKEN_INVALID" "$(status_of "$PKG1" "$TOK1")"
 set -- $(new_transfer); PKG2=$1; TOK2=$2
 check "only-secret: 新 token" 200 "" "$(status_of "$PKG2" "$TOK2")"
 stop_server
 
 echo "== 3) 只改 kid（secret 不变） =="
-start_server "rotation-secret-0002" "k2"
+start_server "rotation-secret-0002" "2"
 check "only-kid: 旧 token" 401 "AUTH_TOKEN_STALE" "$(status_of "$PKG2" "$TOK2")"
 set -- $(new_transfer); PKG3=$1; TOK3=$2
 check "only-kid: 新 token" 200 "" "$(status_of "$PKG3" "$TOK3")"
 stop_server
 
 echo "== 4) 两个都换 =="
-start_server "rotation-secret-0003" "k3"
+start_server "rotation-secret-0003" "3"
 check "both: 旧 token" 401 "AUTH_TOKEN_STALE" "$(status_of "$PKG3" "$TOK3")"
 set -- $(new_transfer); PKG4=$1; TOK4=$2
 check "both: 新 token" 200 "" "$(status_of "$PKG4" "$TOK4")"

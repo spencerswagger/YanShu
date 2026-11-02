@@ -61,7 +61,7 @@ func newEnv(t *testing.T, mode string) *env {
 	e.cfg = config.Config{
 		Verifier:          config.VerifierMode(mode),
 		TokenSecret:       []byte("test-secret"),
-		TokenKID:          "k1",
+		TokenKID:          "1",
 		STUNURLs:          []string{"stun:stun.example:3478"},
 		WSURL:             "wss://example/v1/ws",
 		StorageQuotaBytes: 64 << 20,
@@ -1113,9 +1113,9 @@ func TestTokenRotationMatrix(t *testing.T) {
 		kid      string
 		wantCode spec.ErrorCode
 	}{
-		{"only_secret", "rotated-secret", "k1", spec.ErrAuthTokenInvalid},
-		{"only_kid", "test-secret", "k2", spec.ErrAuthTokenStale},
-		{"both", "rotated-secret", "k2", spec.ErrAuthTokenStale},
+		{"only_secret", "rotated-secret", "1", spec.ErrAuthTokenInvalid},
+		{"only_kid", "test-secret", "2", spec.ErrAuthTokenStale},
+		{"both", "rotated-secret", "2", spec.ErrAuthTokenStale},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1188,7 +1188,7 @@ func TestUploadTokenRotationThreeSteps(t *testing.T) {
 	}
 	cfg2 := e.cfg
 	cfg2.TokenSecret = []byte("rotated-secret")
-	cfg2.TokenKID = "k2"
+	cfg2.TokenKID = "2"
 	e2 := *e
 	e2.cfg = cfg2
 	e2.api = New(e2.cfg, e.st, e.blobs, e.api.verifier, rotatedTokens,

@@ -36,8 +36,11 @@ type Config struct {
 
 	// TokenSecret 是 upload_token 的 HMAC 密钥。
 	TokenSecret []byte
-	// TokenKID 是 token 的密钥版本；轮换 secret 时一并换掉即可一次性吊销全部旧 token。
+	// TokenKID 是 token 的密钥版本（十进制序号，严格单调递增）。
+	// 轮换 secret 时一并换掉即可一次性吊销全部旧 token；服务端拒绝把 kid 调小。
 	TokenKID string
+	// TokenKIDNum 是 TokenKID 的数值形式（启动时校验单调性用）。
+	TokenKIDNum int64
 
 	// 对外配置（GET /v1/config）。
 	STUNURLs []string
@@ -92,15 +95,10 @@ func (c Config) ValidateForServe() error {
 		return fmt.Errorf("config: YANSHU_VERIFIER=sm2 requires the wasm kernel; " +
 			"set YANSHU_KERNEL_WASM=/path/to/yanshu_sm.wasm (repo ships it at server/kernel/yanshu_sm.wasm)")
 	}
-	if c.TokenKID == "" || len(c.TokenKID) > 32 {
+	if c.TokenKID == "" {
 		// fail closed：没有密钥版本就无法判断"旧 token"，宁可拒绝启动也不放行。
-		return fmt.Errorf("config: YANSHU_TOKEN_KID is required when serving (1..32 printable chars); " +
+		return fmt.Errorf("config: YANSHU_TOKEN_KID is required when serving (positive decimal integer); " +
 			"rotate it together with YANSHU_TOKEN_SECRET to revoke all upload tokens")
-	}
-	for i := 0; i < len(c.TokenKID); i++ {
-		if c.TokenKID[i] < 0x21 || c.TokenKID[i] > 0x7e {
-			return fmt.Errorf("config: YANSHU_TOKEN_KID must be printable ASCII without spaces")
-		}
 	}
 	if len(c.TokenSecret) < MinTokenSecretLen {
 		return fmt.Errorf("config: YANSHU_TOKEN_SECRET is required when serving (>=%d bytes); "+
@@ -131,6 +129,13 @@ func Load() (Config, error) {
 		c.TokenSecret = []byte(secret)
 	}
 	c.TokenKID = os.Getenv("YANSHU_TOKEN_KID")
+	if c.TokenKID != "" {
+		n, err := strconv.ParseInt(c.TokenKID, 10, 64)
+		if err != nil || n <= 0 {
+			return Config{}, fmt.Errorf("config: YANSHU_TOKEN_KID must be a positive decimal integer (got %q)", c.TokenKID)
+		}
+		c.TokenKIDNum = n
+	}
 	if c.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: YANSHU_DATABASE_URL is required")
 	}
