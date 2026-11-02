@@ -131,6 +131,33 @@ if (mode === "meta" || mode === "meta-prelude") {
     console.log(`ERR ${errName(err.code)}`);
     process.exit(1);
   }
+} else if (mode === "check-symbol") {
+  // ys_check_symbol(pub64, out1) / ys_check_symbol_wire(pub65, out1)
+  const raw = Buffer.from((rest[1] || "").trim(), "hex");
+  const wire = rest.includes("--wire");
+  const fnName = wire ? "ys_check_symbol_wire" : "ys_check_symbol";
+  const fn = e[fnName];
+  if (typeof fn !== "function") die(`内核没有导出 ${fnName}`);
+  if (fn.length !== 2) die(`${fnName} arity=${fn.length}，期望 2`);
+  const buf = alloc(wire ? 65 : 64);
+  write(buf, wire ? raw : (raw.length === 65 ? raw.subarray(1) : raw));
+  const out = alloc(1);
+  const rc = fn(buf, out);
+  if (rc !== 0) { console.log(`ERR ${errName(rc)}`); process.exit(1); }
+  console.log(Buffer.from(read(out, 1)).toString("ascii"));
+} else if (mode === "user-code-wrong-width") {
+  // **仅供反向用例**：故意把 65 字节（0x04‖X‖Y）喂给只收 64 字节的 `ys_user_code`，
+  // 复现"错宽度静默算出另一个码"。生产调用路径绝不走这里。
+  const raw = Buffer.from((rest[1] || "").trim(), "hex");
+  if (raw.length !== 65) die("user-code-wrong-width 需要 65 字节公钥 hex");
+  const fn = e.ys_user_code;
+  if (typeof fn !== "function") die("内核没有导出 ys_user_code");
+  const buf = alloc(65);
+  write(buf, raw);            // 故意 65 字节，不做任何宽度纠正
+  const out = alloc(4);
+  const rc = fn(buf, out);
+  if (rc !== 0) { console.log(`ERR ${errName(rc)}`); process.exit(1); }
+  console.log(Buffer.from(read(out, 4)).toString("ascii"));
 } else if (mode === "normalize") {
   // ys_normalize_code(input, len, out4)：非法输入返回负错误码（CRYPTO_CODE_INVALID）
   const text = Buffer.from(rest[1] ?? "", "utf8");

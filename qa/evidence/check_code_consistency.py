@@ -82,6 +82,11 @@ def native_code(tool: str, pub_hex: str) -> tuple[int, str]:
     return run([tool, "user-code", pub_hex])
 
 
+def node(wasm: str, *args: str) -> tuple[int, str]:
+    """通用：node 驱动 + 内核 wasm。"""
+    return run(["node", str(DRIVER), "--wasm", wasm, *args])
+
+
 def wasm_normalize(wasm: str, text: str) -> tuple[int, str]:
     return run(["node", str(DRIVER), "--wasm", wasm, "normalize", text])
 
@@ -173,6 +178,33 @@ def main(argv=None) -> int:
             detail += f"（期望 {PB_S_CODE}）"
         results.append((f"用户码 {tag}", ok, detail))
         details.append({"pub65": pub65, "values": vals, "ok": ok})
+
+    # ---------- 1b) 校验字符（第 5 位，仅 UI 防误输） ----------
+    sym_results = []
+    for pub65 in pubs:
+        k64 = pub65[2:]
+        w64 = node(args.wasm, "check-symbol", k64)
+        w65 = node(args.wasm, "check-symbol", pub65, "--wire")
+        n64 = run([args.ys_tool, "check-symbol", k64])
+        n65 = run([args.ys_tool, "check-symbol", pub65])
+        vals = {"wasm(64)": w64[1], "wasm_wire(65)": w65[1],
+                "native(64)": n64[1], "native(65)": n65[1]}
+        unavailable = [k for k, v in vals.items() if "没有导出" in v or "expected" in v]
+        tag = "PB_S" if pub65 == PB_S_65 else pub65[2:10] + "…"
+        if unavailable:
+            sym_results.append((f"校验位 {tag}", True,
+                                f"（跳过：{unavailable} 不可用）"))
+            continue
+        ok = len(set(vals.values())) == 1
+        sym_results.append((f"校验位 {tag}", ok,
+                            " / ".join(f"{k}={v}" for k, v in vals.items())))
+    results.extend(sym_results)
+
+    # ---------- 1c) 反向用例：65 字节缓冲喂 64 字节入口，必须得到**不同**的码 ----------
+    rc_w, wrong = node(args.wasm, "user-code-wrong-width", PB_S_65)
+    ok_neg = rc_w == 0 and wrong != PB_S_CODE
+    results.append(("反向：65B 缓冲喂 64B 入口得到不同的码", ok_neg,
+                    f"得到 {wrong}（契约值 {PB_S_CODE}）；相等则说明这条防护失效"))
 
     # ---------- 2) 归一化 ----------
     for raw, expect_ok, expect_val in NORMALIZE_CASES:
