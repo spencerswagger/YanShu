@@ -135,8 +135,8 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 - **`SIG_INPUT_MAX = 40 + 69 = 109 字节`**（`REGISTER` 最长）。`nickname ≤ 32 字节`（§1.1）、`transfer_id` 固定 32 字符、`CODE` 固定 4 字符——因此**任何合法请求拼接后的长度必然 ≤ 109**，不存在"字段各自合法、拼起来超限"的组合。
 - 服务端 MUST 对 `SIG_INPUT` **按 PURPOSE 解析并逐字段校验**（字段越界报各自错误名，如 `NICKNAME_INVALID` / `CODE_FORMAT_INVALID`）；**MUST NOT** 用一个笼统的字节上限代替字段校验。
-- **防御性硬上限 `SIG_INPUT_HARD_LIMIT = 512` 字节**（实现侧常量）：超长输入 MUST 在解析前被拒，防 DoS；触发时返回 `400 SIG_INPUT_TOO_LONG`（见 §10.1）。**该门在实际请求路径上不可达**——昵称先被字段级校验拒（`≤32` 字节，返回 `400 NICKNAME_INVALID`）、其余字段定长，所以任何请求都到不了 513 字节。
-- **两层限额分工（写死）**：**109 是合法性边界**（越界走字段级错误，如 `NICKNAME_INVALID` / `CODE_FORMAT_INVALID`）；**512 是防御性 DoS 门**（对应 `SIG_INPUT_TOO_LONG`，当前 HTTP 不可达）。服务端 MUST NOT 用字节上限代替字段校验；客户端 MUST 按字段上限本地校验、**不应依赖** `SIG_INPUT_TOO_LONG`。
+- **防御性硬上限 `SIG_INPUT_HARD_LIMIT = 512` 字节**（实现侧常量）：超长输入 MUST 在解析前被拒，防 DoS；触发时返回 §10.1 表中那条专属 400 码（当前仅库层可触发）。**该门在实际请求路径上不可达**——昵称先被字段级校验拒（`≤32` 字节，返回 `400 NICKNAME_INVALID`）、其余字段定长，所以任何请求都到不了 513 字节。
+- **两层限额分工（写死）**：**109 是合法性边界**（越界走字段级错误，如 `NICKNAME_INVALID` / `CODE_FORMAT_INVALID`）；**512 是防御性 DoS 门**（对应 §10.1 那条 400 码，当前 HTTP 不可达、仅库层可触发）。服务端 MUST NOT 用字节上限代替字段校验；客户端 MUST 按字段上限本地校验、**不应依赖**该码。
 - **客户端义务**：发请求前 MUST 在本地按字段上限校验（昵称 ≤32 字节、码 4 位、`transfer_id` 32 字符），**不要依赖服务端兜底**；否则用户会看到"签名无效"这类误导性错误。
 - 未来若新增 PURPOSE 或放宽某字段上限而使 `SIG_INPUT_MAX` 超过 109，必须同步更新本表与常数（走 ADR），并保证 `SIG_INPUT_HARD_LIMIT ≥ SIG_INPUT_MAX`。
 
@@ -980,7 +980,7 @@ v1 的信令与在线表**未实现**（排期见 §15），所以"WS 不可用"
 | `PRELUDE_DIGEST_MISMATCH` | 400 | `SM3(body) != prelude_sm3` | 重算 prelude 并重建传输（prelude 已被签名绑定，不能改） |
 | `RANGE_UNSUPPORTED` | 400 | 多区间或非法 Range | 改成单区间或整块重传 |
 | `SIZE_LIMIT_EXCEEDED` | 400 | **声明值**超上限：`plaintext_size > 4 GiB`、`chunk_count > 1048576`、`prelude_len > 4 MiB` | 提示用户拆分文件 |
-| `SIG_INPUT_TOO_LONG` | 400 | 防御性上限（512 字节）触发；**当前 HTTP 路径不可达**（字段级校验先行，昵称 ≤32 等会先被拒），若触发返回 400 | 客户端按字段上限本地校验，不应依赖该码 |
+| `SIG_INPUT_TOO_LONG` | 400 | **防御性上限（>512 字节）触发；当前 HTTP 路径不可达**（字段级校验先行：昵称 ≤32 等），**仅库层可触发** | 客户端按字段上限本地校验，不要依赖该码 |
 | `AUTH_MISSING` | 401 | 缺 `X-YS-*` 鉴权头 | 补签名后重试 |
 | `AUTH_SIGNATURE_INVALID` | 401 | **仅**签名本身不被接受（伪造 DER、消息被改、公钥不符） | 检查 `SIG_INPUT` 拼接顺序与私钥/公钥配对，用同一挑战重算签名；**不要**无限重试（挑战已作废，需重新申请） |
 | `AUTH_CHALLENGE_INVALID` | 401 | 挑战过期/已用/用途不符 | 重新 `POST /challenges` 后重试一次 |
