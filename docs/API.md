@@ -135,20 +135,23 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 
 - **`SIG_INPUT_MAX = 40 + 69 = 109 字节`**（`REGISTER` 最长）。`nickname ≤ 32 字节`（§1.1）、`transfer_id` 固定 32 字符、`CODE` 固定 4 字符——因此**任何合法请求拼接后的长度必然 ≤ 109**，不存在"字段各自合法、拼起来超限"的组合。
 - 服务端 MUST 对 `SIG_INPUT` **按 PURPOSE 解析并逐字段校验**（字段越界报各自错误名，如 `NICKNAME_INVALID` / `CODE_FORMAT_INVALID`）；**MUST NOT** 用一个笼统的字节上限代替字段校验。
-- **防御性硬上限 `SIG_INPUT_HARD_LIMIT = 512` 字节**：长度超过它时，服务端 MUST 在解析前直接拒绝（`400 SIG_INPUT_TOO_LONG`），这是防 DoS 的最廉价一道门（避免为超长输入分配/解析）。512 只作"安全门"，**不是**合法性边界——合法上限是 109。
+- **防御性硬上限 `SIG_INPUT_HARD_LIMIT = 512` 字节**（实现侧常量）：超长输入 MUST 在解析前被拒，防 DoS。**该门在实际请求路径上不可达**——昵称先被字段级校验拒（`≤32` 字节，返回 `400 NICKNAME_INVALID`）、其余字段定长，所以任何请求都到不了 513 字节；若库层真的触发，返回 `400 BAD_REQUEST`。512 只作"安全门"，**不是**合法性边界——合法上限是 109。
+- **本契约不设专属的"超长"错误码**：实现里没有该码，客户端也不该依赖它——按字段上限本地校验即可。
 - **客户端义务**：发请求前 MUST 在本地按字段上限校验（昵称 ≤32 字节、码 4 位、`transfer_id` 32 字符），**不要依赖服务端兜底**；否则用户会看到"签名无效"这类误导性错误。
 - 未来若新增 PURPOSE 或放宽某字段上限而使 `SIG_INPUT_MAX` 超过 109，必须同步更新本表与常数（走 ADR），并保证 `SIG_INPUT_HARD_LIMIT ≥ SIG_INPUT_MAX`。
 
-| PURPOSE | 名称 | 字段串（按序拼接） |
-|---:|---|---|
-| `0x01` | `REGISTER` | `CODE(4 ASCII) ‖ PUBKEY(65)` |
-| `0x02` | `NICKNAME_UPDATE` | `CODE(4 ASCII) ‖ u16be(NICK_LEN) ‖ NICKNAME(UTF-8)` |
-| `0x03` | `TRANSFER_CREATE` | `SENDER_CODE(4) ‖ RECIPIENT_CODE(4) ‖ u64be(PLAINTEXT_SIZE) ‖ u32be(CHUNK_SIZE) ‖ u32be(CHUNK_COUNT) ‖ u32be(PRELUDE_LEN) ‖ PRELUDE_SM3(32)` |
-| `0x04` | `TRANSFER_REVOKE` | `SENDER_CODE(4) ‖ TRANSFER_ID(32 ASCII 小写 hex)` |
-| `0x05` | `INBOX_LIST` | `CODE(4 ASCII)` |
-| `0x06` | `WS_HELLO` | `CODE(4 ASCII)` |
-| `0x07` | `TRANSFER_ACK` | `RECEIVER_CODE(4) ‖ TRANSFER_ID(32 ASCII)` |
-| `0x08` | `UPLOAD_TOKEN_ISSUE` | `SENDER_CODE(4) ‖ TRANSFER_ID(32 ASCII)` |
+| PURPOSE | 名称 | 字段串（按序拼接） | 字段串上限 | `SIG_INPUT` 总长（实测） |
+|---:|---|---|---:|---:|
+| `0x01` | `REGISTER` | `CODE(4 ASCII) ‖ PUBKEY(65)` | 69 | **109** |
+| `0x02` | `NICKNAME_UPDATE` | `CODE(4 ASCII) ‖ u16be(NICK_LEN) ‖ NICKNAME(UTF-8)` | 38 | **78** |
+| `0x03` | `TRANSFER_CREATE` | `SENDER_CODE(4) ‖ RECIPIENT_CODE(4) ‖ u64be(PLAINTEXT_SIZE) ‖ u32be(CHUNK_SIZE) ‖ u32be(CHUNK_COUNT) ‖ u32be(PRELUDE_LEN) ‖ PRELUDE_SM3(32)` | 60 | **100** |
+| `0x04` | `TRANSFER_REVOKE` | `SENDER_CODE(4) ‖ TRANSFER_ID(32 ASCII 小写 hex)` | 36 | **76** |
+| `0x05` | `INBOX_LIST` | `CODE(4 ASCII)` | 4 | **44** |
+| `0x06` | `WS_HELLO` | `CODE(4 ASCII)` | 4 | **44** |
+| `0x07` | `TRANSFER_ACK` | `RECEIVER_CODE(4) ‖ TRANSFER_ID(32)` | 36 | **76** |
+| `0x08` | `UPLOAD_TOKEN_ISSUE` | `SENDER_CODE(4) ‖ TRANSFER_ID(32)` | 36 | **76** |
+
+共 **8 个** `PURPOSE`（`0x01`–`0x08`）；上表总长 = `7 + 1 + 32 + 字段串` = 40 + 字段串，与实测一致，最长仍是 `REGISTER` 的 **109**。
 
 **`0x08 UPLOAD_TOKEN_ISSUE` 的逐字节定义**（重签发端点 §1.7.5 用）：
 
@@ -978,7 +981,6 @@ v1 的信令与在线表**未实现**（排期见 §15），所以"WS 不可用"
 | `RANGE_UNSUPPORTED` | 400 | 多区间或非法 Range | 改成单区间或整块重传 |
 | `SIZE_LIMIT_EXCEEDED` | 400 | **声明值**超上限：`plaintext_size > 4 GiB`、`chunk_count > 1048576`、`prelude_len > 4 MiB` | 提示用户拆分文件 |
 | `AUTH_MISSING` | 401 | 缺 `X-YS-*` 鉴权头 | 补签名后重试 |
-| `SIG_INPUT_TOO_LONG` | 400 | `SIG_INPUT` 超过防御性硬上限 512 字节（合法上限是 109，见 §1.3） | 客户端本地按字段上限校验后重算签名；不要靠服务端兜底 |
 | `AUTH_SIGNATURE_INVALID` | 401 | **仅**签名本身不被接受（伪造 DER、消息被改、公钥不符） | 检查 `SIG_INPUT` 拼接顺序与私钥/公钥配对，用同一挑战重算签名；**不要**无限重试（挑战已作废，需重新申请） |
 | `AUTH_CHALLENGE_INVALID` | 401 | 挑战过期/已用/用途不符 | 重新 `POST /challenges` 后重试一次 |
 | `AUTH_CODE_MISMATCH` | 401 | `X-YS-Code` 与 `SIG_INPUT` 里被签名的 `CODE(4)` 不一致 | 修 bug；用同一码重算签名 |
