@@ -275,9 +275,8 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 
 **运维「一次性吊销」标准步骤（可直接照抄）**
 
-1. 把配置里的 `YANSHU_TOKEN_KID` 改成**比当前更大的整数**（如 `1 → 2`）；需要更强隔离时**同时**更换 `TOKEN_SECRET`（可选）。
-2. 重启服务（或触发等价的配置重载）。
-3. 生效后**所有既有凭据立即失效**：`KID` 落后的 → `401 AUTH_TOKEN_STALE`（若同时换了 secret，仍是版本失效码，因为先比 `KID`）。
+1. 二选一把当前版本加一：① **直接推进库内版本状态**（等价 `UPDATE token_kid_state SET kid = kid + 1`）——**立即生效，不需要重启、不需要删库**；或 ② 把部署配置项 `YANSHU_TOKEN_EPOCH`（= 本节 `KID`）改成**比当前更大的整数**并重启。需要更强隔离时可**同时**更换 `TOKEN_SECRET`（可选，不影响吊销本身）。
+2. 生效后**所有既有凭据立即失效**：记录 `KID` ≠ 当前 `KID` → `401 AUTH_TOKEN_STALE`（若同时换了 secret，仍是版本失效码，因为先比 `KID`）。
 4. 客户端处置：**重新挑战 → 签名 → 取新凭据**（上传走 §1.7.5，下载重新 `GET /prelude`），**不要重算签名**；已传块不重传。
 5. 记一条运维日志：`KID` 旧值 → 新值、时间、原因（应急吊销）；**不要**把 `TOKEN_SECRET` 写进日志。
 
@@ -310,7 +309,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 
 **终值（定稿）**：凭据类**三个** —— `AUTH_TOKEN_STALE`（`KID` 已轮换）、`AUTH_TOKEN_INVALID`（值不匹配·格式错·不存在）、`AUTH_TOKEN_EXPIRED`（超 6 h / 30 min）；签名类**一个** —— `AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受）。
 
-> 「显式吊销列表」这类独立语义本期**不定义**：本实现没有该机制。若将来确需该语义，**另立 `AUTH_TOKEN_REVOKED`** 专用于"被显式吊销"，**不许**与 `AUTH_TOKEN_STALE`（签发版本已过期）混用同一个名字。
+> 凭据类错误名**只有** `AUTH_TOKEN_STALE` / `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` 三个，签名类只有一个 `AUTH_SIGNATURE_INVALID`；不存在其它凭据错误名。
 
 **客户端处置按名字分叉**：前两个都走"重新挑战 → 签名 → 取新凭据"（**不要重算签名**，那是签名问题的解法）；只有拿到 `AUTH_SIGNATURE_INVALID` 才去查 `SIG_INPUT` 拼接、私钥与公钥是否配对。
 
