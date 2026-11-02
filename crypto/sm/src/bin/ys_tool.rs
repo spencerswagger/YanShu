@@ -157,7 +157,7 @@ fn main() {
                         m.ext,
                         m.file_size,
                         m.chunk_size,
-                        m.chunk_count(),
+                        m.chunk_count,
                         m.created_at_ms,
                         sender_code,
                         hex(sender_pub),
@@ -176,7 +176,7 @@ fn main() {
             let expected = args.get(4).map(|s| s.as_str());
             let result = match expected {
                 Some(code) => pack::unpack_with_code(&p, &sk, code),
-                None => pack::unpack_unchecked(&p, &sk),
+                None => pack::unpack(&p, &sk, None),
             };
             match result {
                 Ok(u) => println!("{}", hex(&u.data)),

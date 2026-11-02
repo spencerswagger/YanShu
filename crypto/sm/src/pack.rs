@@ -317,8 +317,7 @@ pub struct Manifest {
     pub name_mode: u8,
     pub file_size: u64,
     pub chunk_size: u32,
-    /// 块数。字段名沿用首版 API（Gate 的探针读 `manifest.block_count`）。
-    pub block_count: u32,
+    pub chunk_count: u32,
     pub created_at_ms: u64,
     pub name: String,
     pub mime: String,
@@ -365,11 +364,6 @@ pub fn valid_ext(s: &str) -> bool {
 }
 
 impl Manifest {
-    /// 契约口径的别名（`block_count` 是首版 API 的字段名）。
-    pub fn chunk_count(&self) -> u32 {
-        self.block_count
-    }
-
     pub fn encode(&self) -> Result<Vec<u8>> {
         if !valid_name(&self.name) || !valid_mime(&self.mime) || !valid_ext(&self.ext) {
             return Err(Error::BadArgument);
@@ -384,7 +378,7 @@ impl Manifest {
         out.push(DIGEST_LEN);
         out.extend_from_slice(&self.file_size.to_be_bytes());
         out.extend_from_slice(&self.chunk_size.to_be_bytes());
-        out.extend_from_slice(&self.block_count.to_be_bytes());
+        out.extend_from_slice(&self.chunk_count.to_be_bytes());
         out.extend_from_slice(&self.created_at_ms.to_be_bytes());
         out.extend_from_slice(&(self.name.len() as u16).to_be_bytes());
         out.extend_from_slice(self.name.as_bytes());
@@ -416,7 +410,7 @@ impl Manifest {
         }
         let file_size = u64::from_be_bytes(buf[8..16].try_into().expect("8"));
         let chunk_size = u32::from_be_bytes(buf[16..20].try_into().expect("4"));
-        let block_count = u32::from_be_bytes(buf[20..24].try_into().expect("4"));
+        let chunk_count = u32::from_be_bytes(buf[20..24].try_into().expect("4"));
         let created_at_ms = u64::from_be_bytes(buf[24..32].try_into().expect("8"));
 
         let mut pos = 32usize;
@@ -465,14 +459,14 @@ impl Manifest {
         let digest_table_len =
             u32::from_be_bytes(buf[pos..pos + 4].try_into().expect("4")) as usize;
         pos += 4;
-        if digest_table_len != block_count as usize * 32 {
+        if digest_table_len != chunk_count as usize * 32 {
             return Err(Error::LengthInconsistent);
         }
         if pos + digest_table_len != buf.len() {
             return Err(Error::BadManifestRecord);
         }
-        let mut digests = Vec::with_capacity(block_count as usize);
-        for _ in 0..block_count {
+        let mut digests = Vec::with_capacity(chunk_count as usize);
+        for _ in 0..chunk_count {
             let mut d = [0u8; 32];
             d.copy_from_slice(&buf[pos..pos + 32]);
             digests.push(d);
@@ -482,7 +476,7 @@ impl Manifest {
             name_mode,
             file_size,
             chunk_size,
-            block_count,
+            chunk_count,
             created_at_ms,
             name,
             mime,
@@ -492,26 +486,21 @@ impl Manifest {
     }
 }
 
-/// 打包输入（**首版形状**：64 字节公钥 + `block_size`，Gate 的探针按这个编译）。
-///
-/// 契约要求 65 字节未压缩点，内核在内部补 `0x04`；Web/Gate 不需要改。
+/// 打包输入（契约口径：65 字节未压缩公钥、清单 `ext`/`created_at`）。
 pub struct PackInput<'a> {
-    /// 接收方公钥 `X‖Y`（64 字节；内部补 `0x04` 成契约的 65 字节）
-    pub recipient_public: &'a [u8; 64],
+    /// 接收方公钥（65 字节，`0x04 ‖ X ‖ Y`）
+    pub recipient_public: &'a [u8; SENDER_PUB_LEN],
     /// 发送方私钥（32 字节）
     pub sender_private: &'a [u8; 32],
     pub name: &'a str,
     pub mime: &'a str,
-    /// 明文块大小（契约里叫 `CHUNK_SIZE`）
-    pub block_size: u32,
-    pub data: &'a [u8],
-}
-
-/// 契约清单里的可选字段（首版 API 没有；默认空扩展名 + `created_at = 0`）。
-#[derive(Clone, Copy, Default)]
-pub struct PackOptions<'a> {
+    /// 清单里的扩展名（可为空，ASCII 小写、不含点）
     pub ext: &'a str,
+    /// 清单 `CREATED_AT`（Unix 毫秒）
     pub created_at_ms: u64,
+    /// 明文块大小（契约 `CHUNK_SIZE`）
+    pub chunk_size: u32,
+    pub data: &'a [u8],
 }
 
 /// 可复现打包参数（测试向量用；生产中由 [`pack`] 用 CSPRNG 生成）。
@@ -520,6 +509,15 @@ pub struct PackParams {
     pub kdf_salt: [u8; KDF_SALT_LEN],
     pub k_enc: U256,
     pub k_sig: U256,
+}
+
+fn strip_pub_prefix(pub65: &[u8; SENDER_PUB_LEN]) -> Result<[u8; 64]> {
+    if pub65[0] != 0x04 {
+        return Err(Error::BadPoint);
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(&pub65[1..]);
+    Ok(out)
 }
 
 fn kek_chunk(dk: &[u8; 32], salt: &[u8; KDF_SALT_LEN]) -> [u8; KEK_LEN] {
@@ -547,20 +545,8 @@ fn random_scalar(rng: &mut impl Rng) -> Result<U256> {
     Err(Error::Rng)
 }
 
-/// 打包（契约默认布局；随机 DK / KDF_SALT / k_enc / k_sig）。
-///
-/// 清单里的 `ext` 为空、`created_at = 0`（首版 API 没有这两个字段）；
-/// 需要完整清单字段时用 [`pack_with_options`]。
+/// 打包（随机 DK / KDF_SALT / k_enc / k_sig）。
 pub fn pack(input: &PackInput, rng: &mut impl Rng) -> Result<Vec<u8>> {
-    pack_with_options(input, &PackOptions::default(), rng)
-}
-
-/// 打包并指定清单的可选字段。
-pub fn pack_with_options(
-    input: &PackInput,
-    options: &PackOptions,
-    rng: &mut impl Rng,
-) -> Result<Vec<u8>> {
     let mut dk = [0u8; 32];
     rng.fill(&mut dk);
     let mut kdf_salt = [0u8; KDF_SALT_LEN];
@@ -569,7 +555,6 @@ pub fn pack_with_options(
     let k_sig = random_scalar(rng)?;
     pack_with_params(
         input,
-        options,
         &PackParams {
             dk,
             kdf_salt,
@@ -579,13 +564,35 @@ pub fn pack_with_options(
     )
 }
 
+/// 打包结果的**上界**（不消耗随机数）。
+///
+/// 唯一不确定的是 DER 签名长度（70..72），这里按 72 算。调用方可以先用它申请缓冲区，
+/// 再真正打包一次——这样"先问大小再分配"不会因为随机 k 而差 1~2 字节。
+pub fn pack_bound(input: &PackInput) -> Result<usize> {
+    if !(MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&input.chunk_size) {
+        return Err(Error::BadArgument);
+    }
+    if input.data.len() as u64 > MAX_PLAINTEXT_SIZE {
+        return Err(Error::BadArgument);
+    }
+    if !valid_name(input.name) || !valid_mime(input.mime) || !valid_ext(input.ext) {
+        return Err(Error::BadArgument);
+    }
+    let n = expected_chunk_count(input.data.len() as u64, input.chunk_size);
+    if n > MAX_CHUNK_COUNT as u64 {
+        return Err(Error::BadArgument);
+    }
+    let manifest_pt =
+        42 + input.name.len() + input.mime.len() + input.ext.len() + (n as usize) * 32;
+    let prelude =
+        HEADER_LEN + SENDER_PUB_LEN + WRAPPED_KEY_LEN + (manifest_pt + TAG_LEN) + MAX_SIG_LEN;
+    let chunks = input.data.len() + (n as usize) * (CHUNK_HEADER_LEN + TAG_LEN);
+    Ok(prelude + chunks)
+}
+
 /// 用固定参数打包（测试向量可复现；生产 MUST NOT 用固定值）。
-pub fn pack_with_params(
-    input: &PackInput,
-    options: &PackOptions,
-    params: &PackParams,
-) -> Result<Vec<u8>> {
-    let chunk_size = input.block_size;
+pub fn pack_with_params(input: &PackInput, params: &PackParams) -> Result<Vec<u8>> {
+    let chunk_size = input.chunk_size;
     if !(MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&chunk_size) {
         return Err(Error::BadArgument);
     }
@@ -651,11 +658,11 @@ pub fn pack_with_params(
         name_mode: NAME_MODE_REAL,
         file_size: input.data.len() as u64,
         chunk_size,
-        block_count: chunk_count,
-        created_at_ms: options.created_at_ms,
+        chunk_count,
+        created_at_ms: input.created_at_ms,
         name: input.name.to_string(),
         mime: input.mime.to_string(),
-        ext: options.ext.to_string(),
+        ext: input.ext.to_string(),
         digests,
     };
     let manifest_pt = manifest.encode()?;
@@ -714,8 +721,8 @@ pub fn pack_with_params(
     }
     header.sig_len = sig_der.len() as u64;
 
-    // 封装 DK（契约 C1 带 0x04 前缀；API 入参是 64 字节 X‖Y）
-    let recipient64 = *input.recipient_public;
+    // 封装 DK（契约 C1 带 0x04 前缀；API 入参是 65 字节未压缩点）
+    let recipient64 = strip_pub_prefix(input.recipient_public)?;
     let wrapped64 = sm2::encrypt(&recipient64, &params.dk, &params.k_enc)?;
     if wrapped64.len() != WRAPPED_KEY_LEN - 1 {
         return Err(Error::Internal);
@@ -826,7 +833,7 @@ fn open(pack: &[u8], recipient_private: &[u8; 32]) -> Result<Opened> {
 
     if manifest.file_size != header.plaintext_size
         || manifest.chunk_size != header.chunk_size
-        || manifest.block_count != header.chunk_count
+        || manifest.chunk_count != header.chunk_count
         || manifest.digests.len() != header.chunk_count as usize
     {
         return Err(Error::LengthInconsistent);
@@ -889,49 +896,41 @@ pub fn open_only(pack: &[u8], recipient_private: &[u8; 32]) -> Result<OpenedInfo
     })
 }
 
-/// 只解到清单（不解数据块），供接收端先展示元信息。
-///
-/// `sender_public`：调用方手里的发送方公钥（64 字节 `X‖Y`）。给了就与包内
-/// `SENDER_PUB` 比对（不一致 → `CRYPTO_SENDER_MISMATCH`），防止"服务器换人"。
+/// 只解到清单（不解数据块），返回包头、清单与包内自证的发送方信息。
 pub fn open_manifest(
     pack: &[u8],
     recipient_private: &[u8; 32],
-    sender_public: &[u8; 64],
-) -> Result<(Header, Manifest)> {
+) -> Result<(Header, Manifest, [u8; SENDER_PUB_LEN], String)> {
     let o = open(pack, recipient_private)?;
-    if o.sender_public[1..] != sender_public[..] {
-        return Err(Error::SenderMismatch);
-    }
-    Ok((o.header, o.manifest))
+    Ok((o.header, o.manifest, o.sender_public, o.sender_code))
 }
 
 /// 严格解包（契约 §13 全表）。
 ///
-/// `sender_public`：调用方手里的发送方公钥（64 字节 `X‖Y`），与包内 `SENDER_PUB` 比对。
-/// 需要按"4 位码"校验时用 [`unpack_with_code`]。
+/// 来源由包内 `SENDER_PUB` 自证：验签用包里的公钥，发送方 4 位码也由它派生
+/// （契约 §10.3），调用方**不需要**再传公钥。`expected_sender_code` 给了就顺带做
+/// §13 #18 的比对（可与 API 元数据里的码对一遍）。
 pub fn unpack(
     pack: &[u8],
     recipient_private: &[u8; 32],
-    sender_public: &[u8; 64],
+    expected_sender_code: Option<&str>,
 ) -> Result<Unpacked> {
     let opened = open(pack, recipient_private)?;
-    if opened.sender_public[1..] != sender_public[..] {
-        return Err(Error::SenderMismatch);
+    if let Some(code) = expected_sender_code {
+        if opened.sender_code != code {
+            return Err(Error::SenderMismatch);
+        }
     }
     finish_unpack(pack, opened)
 }
 
-/// 按发送方 4 位码校验（契约 §13 #18）后解包。
+/// 按发送方 4 位码校验后解包（等价于 `unpack(..., Some(code))`）。
 pub fn unpack_with_code(
     pack: &[u8],
     recipient_private: &[u8; 32],
     expected_sender_code: &str,
 ) -> Result<Unpacked> {
-    let opened = open(pack, recipient_private)?;
-    if opened.sender_code != expected_sender_code {
-        return Err(Error::SenderMismatch);
-    }
-    finish_unpack(pack, opened)
+    unpack(pack, recipient_private, Some(expected_sender_code))
 }
 
 /// 不做发送方校验的解包（仅测试/内部用）。

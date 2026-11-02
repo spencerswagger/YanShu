@@ -4,10 +4,7 @@
 //! 契约 `YSPK/1.0` 需要的差异（65 字节未压缩点、DER 签名、清单 `created_at`/`ext`）
 //! 全部在**内核内部**转换；需要完整参数的调用方用新增的 `*_v1` 导出。
 //!
-//! 布局可插拔：
-//! * 默认 = 契约布局 `YSPK/1.0`（`ys_pack` / `ys_unpack` 走它）；
-//! * `ys_set_layout(1)` 切到 **rune-v1 兼容布局**（非契约，Gate 的历史证据用），
-//!   `ys_header_len()` 会跟着变 40；两种布局**不会混进同一个产物**。
+//! 只有一种格式：`docs/CRYPTO-PACK.md` 的 `YSPK/1.0`。首版的 rune-v1 兼容布局已删除。
 //!
 //! 通用约定：
 //! * 长度参数为 `size_t`（wasm32 = 4 字节）；指针为线性内存偏移；`u64` 在 JS 里是 BigInt。
@@ -18,26 +15,19 @@
 
 #![allow(clippy::missing_safety_doc)]
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::Ordering;
 
 use crate::code;
 use crate::der;
 use crate::error::{Error, Result};
 use crate::gcm;
 use crate::hkdf::hkdf_sm3;
-use crate::pack::{self, Manifest, PackInput, PackOptions};
-use crate::pack_rune_v1;
+use crate::pack::{self, Manifest, PackInput};
 use crate::rng::SeedRng;
 use crate::sm2;
 use crate::sm3;
 use crate::sm4;
 use crate::VERSION;
-
-/// 0 = 契约布局 `YSPK/1.0`（默认）；1 = rune-v1 兼容布局（非契约）
-static LAYOUT: AtomicU32 = AtomicU32::new(0);
-
-const LAYOUT_YSPK_V1: u32 = 0;
-const LAYOUT_RUNE_V1: u32 = 1;
 
 #[inline]
 unsafe fn as_slice<'a>(ptr: *const u8, len: usize) -> Result<&'a [u8]> {
@@ -96,10 +86,31 @@ fn rc(r: Result<()>) -> i32 {
     }
 }
 
+/// P2：同一个 seed 复用会直接报错（不再静默混计数器续用）。
+///
+/// 保留最近 64 个 seed 的 SM3 指纹做判重；命中 → `CRYPTO_RNG_FAILED`。
+/// 调用方每次操作都应该用 `crypto.getRandomValues` 现取新 seed。
+fn note_seed_once(seed: &[u8]) -> Result<()> {
+    use std::sync::Mutex;
+    const CAP: usize = 64;
+    static SEEN: Mutex<Vec<[u8; 32]>> = Mutex::new(Vec::new());
+    let digest = sm3::sm3(seed);
+    let mut seen = SEEN.lock().map_err(|_| Error::Internal)?;
+    if seen.contains(&digest) {
+        return Err(Error::Rng);
+    }
+    if seen.len() >= CAP {
+        seen.remove(0);
+    }
+    seen.push(digest);
+    Ok(())
+}
+
 fn seeded_rng(seed: &[u8]) -> Result<SeedRng> {
     if seed.is_empty() {
         return Err(Error::Rng);
     }
+    note_seed_once(seed)?;
     use core::sync::atomic::AtomicU64;
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let mut material = Vec::with_capacity(seed.len() + 8);
@@ -147,58 +158,10 @@ pub extern "C" fn ys_default_block_size() -> u32 {
     pack::v1::DEFAULT_CHUNK_SIZE
 }
 
-/// 与 [`ys_default_block_size`] 同值（契约口径命名）。
-#[no_mangle]
-pub extern "C" fn ys_default_chunk_size() -> u32 {
-    pack::v1::DEFAULT_CHUNK_SIZE
-}
-
-/// 当前布局的包头长度：契约 112 / rune-v1 40。
+/// 包头长度（契约 `YSPK/1.0` 固定 112 字节）。
 #[no_mangle]
 pub extern "C" fn ys_header_len() -> u32 {
-    if LAYOUT.load(Ordering::SeqCst) == LAYOUT_RUNE_V1 {
-        pack_rune_v1::layout::HEADER_LEN as u32
-    } else {
-        pack::v1::HEADER_LEN as u32
-    }
-}
-
-/// 切换布局：0 = `YSPK/1.0`（默认），1 = rune-v1（非契约，Gate 证据用）。
-#[no_mangle]
-pub extern "C" fn ys_set_layout(id: u32) -> i32 {
-    if id != LAYOUT_YSPK_V1 && id != LAYOUT_RUNE_V1 {
-        return Error::BadArgument.code();
-    }
-    LAYOUT.store(id, Ordering::SeqCst);
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn ys_get_layout() -> u32 {
-    LAYOUT.load(Ordering::SeqCst)
-}
-
-/// 判断一个包是哪种布局：0 = `YSPK/1.0`，1 = rune-v1，负数 = 认不出。
-#[no_mangle]
-pub unsafe extern "C" fn ys_layout_of(pack: *const u8, pack_len: usize) -> i32 {
-    let r = (|| -> Result<i32> {
-        let buf = as_slice(pack, pack_len)?;
-        if buf.len() >= 8 && buf[0..4] == *b"YSPK" {
-            // 契约：offset 4..6 = 01 00，6..8 = 00 70
-            if buf[4] == 1 && buf[5] == 0 && buf[6..8] == [0x00, 0x70] {
-                return Ok(0);
-            }
-            // rune-v1：offset 4=version 1, 5=suite 1, 6=flags 1, 7=reserved 0
-            if buf[4] == 1 && buf[5] == 1 {
-                return Ok(1);
-            }
-        }
-        Err(Error::BadMagic)
-    })();
-    match r {
-        Ok(v) => v,
-        Err(e) => e.code(),
-    }
+    pack::v1::HEADER_LEN as u32
 }
 
 static ERROR_TABLE: &[Error] = &[
@@ -588,7 +551,7 @@ pub unsafe extern "C" fn ys_normalize_code(
 
 // ---------------------------------------------------------------- 加密包（首版签名）
 
-/// 打包。默认契约布局；`ys_set_layout(1)` 后走 rune-v1。
+/// 打包（`YSPK/1.0`）。清单 `ext` 为空、`created_at = 0`；完整字段用 [`ys_pack_v1`]。
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn ys_pack(
@@ -616,53 +579,43 @@ pub unsafe extern "C" fn ys_pack(
             core::str::from_utf8(as_slice(mime, mime_len)?).map_err(|_| Error::BadArgument)?;
         let seed = as_slice(seed, seed_len)?;
         let data = as_slice(data, data_len)?;
-        let mut rng = seeded_rng(seed)?;
         let block_size = if block_size == 0 {
             pack::v1::DEFAULT_CHUNK_SIZE
         } else {
             block_size
         };
 
-        let envelope = if LAYOUT.load(Ordering::SeqCst) == LAYOUT_RUNE_V1 {
-            let input = pack_rune_v1::PackInput {
-                recipient_public: &recipient,
-                sender_private: &sender,
-                name,
-                mime,
-                block_size,
-                data,
-            };
-            pack_rune_v1::pack(&input, &mut rng)?
-        } else {
-            let input = PackInput {
-                recipient_public: &recipient,
-                sender_private: &sender,
-                name,
-                mime,
-                block_size,
-                data,
-            };
-            pack::pack(&input, &mut rng)?
+        let input = PackInput {
+            recipient_public: &to_pub65(&recipient),
+            sender_private: &sender,
+            name,
+            mime,
+            ext: "",
+            created_at_ms: 0,
+            chunk_size: block_size,
+            data,
         };
-
-        // DER 签名长度 70..72 会浮动：缓冲区不足时返回上界，保证重试能成功。
-        match write_out(&envelope, out, out_cap, out_len) {
-            Err(Error::BufferTooSmall) => {
-                core::ptr::write(out_len, envelope.len() + 2);
-                Err(Error::BufferTooSmall)
+        // 先算上界（不消耗随机数），缓冲区不够就直接返回上界。
+        let bound = pack::pack_bound(&input)?;
+        if out_cap < bound {
+            if out_len.is_null() {
+                return Err(Error::BadArgument);
             }
-            r => r,
+            core::ptr::write(out_len, bound);
+            return Err(Error::BufferTooSmall);
         }
+        let mut rng = seeded_rng(seed)?;
+        let envelope = pack::pack(&input, &mut rng)?;
+        write_out(&envelope, out, out_cap, out_len)
     })())
 }
 
-/// 解包。`sender_public` 是调用方手里的发送方公钥（64 字节 `X‖Y`）。
+/// 解包。来源由包内 `SENDER_PUB` 自证（验签 + 派生发送方码），**不再需要调用方传公钥**。
 #[no_mangle]
 pub unsafe extern "C" fn ys_unpack(
     pack: *const u8,
     pack_len: usize,
     recipient_private: *const u8,
-    sender_public: *const u8,
     out: *mut u8,
     out_cap: usize,
     out_len: *mut usize,
@@ -670,23 +623,17 @@ pub unsafe extern "C" fn ys_unpack(
     rc((|| {
         let bytes = as_slice(pack, pack_len)?;
         let sk = fixed::<32>(recipient_private)?;
-        let sender = fixed::<64>(sender_public)?;
-        let data = if LAYOUT.load(Ordering::SeqCst) == LAYOUT_RUNE_V1 {
-            pack_rune_v1::unpack(bytes, &sk, &sender)?.data
-        } else {
-            pack::unpack(bytes, &sk, &sender)?.data
-        };
+        let data = pack::unpack(bytes, &sk, None)?.data;
         write_out(&data, out, out_cap, out_len)
     })())
 }
 
-/// 只解清单（不解数据块），输出 JSON 元信息。
+/// 只解清单（不解数据块），输出 JSON 元信息（含包内 `SENDER_PUB` 派生的发送方码）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_unpack_meta(
     pack: *const u8,
     pack_len: usize,
     recipient_private: *const u8,
-    sender_public: *const u8,
     out: *mut u8,
     out_cap: usize,
     out_len: *mut usize,
@@ -694,17 +641,8 @@ pub unsafe extern "C" fn ys_unpack_meta(
     rc((|| {
         let bytes = as_slice(pack, pack_len)?;
         let sk = fixed::<32>(recipient_private)?;
-        let sender = fixed::<64>(sender_public)?;
-        let json = if LAYOUT.load(Ordering::SeqCst) == LAYOUT_RUNE_V1 {
-            let (header, manifest) = pack_rune_v1::open_manifest(bytes, &sk, &sender)?;
-            meta_json_legacy(&header, &manifest, &to_pub65(&sender), "")
-        } else {
-            let (header, manifest) = pack::open_manifest(bytes, &sk, &sender)?;
-            let mut pub65 = [0u8; 65];
-            pub65[0] = 0x04;
-            pub65[1..].copy_from_slice(&sender);
-            meta_json(&header, &manifest, &pub65)
-        };
+        let opened = pack::open_only(bytes, &sk)?;
+        let json = meta_json(&opened.header, &opened.manifest, &opened.sender_public);
         write_out(json.as_bytes(), out, out_cap, out_len)
     })())
 }
@@ -738,7 +676,6 @@ pub unsafe extern "C" fn ys_pack_v1(
         if pub65[0] != 0x04 {
             return Err(Error::BadPoint);
         }
-        let recipient64: [u8; 64] = pub65[1..].try_into().expect("64");
         let sender = fixed::<32>(sender_private)?;
         let name =
             core::str::from_utf8(as_slice(name, name_len)?).map_err(|_| Error::BadArgument)?;
@@ -747,83 +684,29 @@ pub unsafe extern "C" fn ys_pack_v1(
         let ext = core::str::from_utf8(as_slice(ext, ext_len)?).map_err(|_| Error::BadArgument)?;
         let mut rng = seeded_rng(as_slice(seed, seed_len)?)?;
         let input = PackInput {
-            recipient_public: &recipient64,
+            recipient_public: &pub65,
             sender_private: &sender,
             name,
             mime,
-            block_size: if chunk_size == 0 {
+            ext,
+            created_at_ms,
+            chunk_size: if chunk_size == 0 {
                 pack::v1::DEFAULT_CHUNK_SIZE
             } else {
                 chunk_size
             },
             data: as_slice(data, data_len)?,
         };
-        let options = PackOptions { ext, created_at_ms };
-        let envelope = pack::pack_with_options(&input, &options, &mut rng)?;
-        match write_out(&envelope, out, out_cap, out_len) {
-            Err(Error::BufferTooSmall) => {
-                core::ptr::write(out_len, envelope.len() + 2);
-                Err(Error::BufferTooSmall)
+        let bound = pack::pack_bound(&input)?;
+        if out_cap < bound {
+            if out_len.is_null() {
+                return Err(Error::BadArgument);
             }
-            r => r,
+            core::ptr::write(out_len, bound);
+            return Err(Error::BufferTooSmall);
         }
-    })())
-}
-
-unsafe fn opt_code<'a>(ptr: *const u8, len: usize) -> Result<Option<&'a str>> {
-    if len == 0 {
-        return Ok(None);
-    }
-    let s = core::str::from_utf8(as_slice(ptr, len)?).map_err(|_| Error::BadCode)?;
-    Ok(Some(s))
-}
-
-/// 解包（契约口径）：按发送方 4 位码校验（契约 §13 #18）。
-#[no_mangle]
-pub unsafe extern "C" fn ys_unpack_v1(
-    pack: *const u8,
-    pack_len: usize,
-    recipient_private: *const u8,
-    expected_sender_code: *const u8,
-    expected_sender_code_len: usize,
-    out: *mut u8,
-    out_cap: usize,
-    out_len: *mut usize,
-) -> i32 {
-    rc((|| {
-        let bytes = as_slice(pack, pack_len)?;
-        let sk = fixed::<32>(recipient_private)?;
-        let data = match opt_code(expected_sender_code, expected_sender_code_len)? {
-            Some(code) => pack::unpack_with_code(bytes, &sk, code)?.data,
-            None => pack::unpack_unchecked(bytes, &sk)?.data,
-        };
-        write_out(&data, out, out_cap, out_len)
-    })())
-}
-
-/// 只解清单（契约口径，带发送方码校验）。
-#[no_mangle]
-pub unsafe extern "C" fn ys_unpack_meta_v1(
-    pack: *const u8,
-    pack_len: usize,
-    recipient_private: *const u8,
-    expected_sender_code: *const u8,
-    expected_sender_code_len: usize,
-    out: *mut u8,
-    out_cap: usize,
-    out_len: *mut usize,
-) -> i32 {
-    rc((|| {
-        let bytes = as_slice(pack, pack_len)?;
-        let sk = fixed::<32>(recipient_private)?;
-        let opened = pack::open_only(bytes, &sk)?;
-        if let Some(code) = opt_code(expected_sender_code, expected_sender_code_len)? {
-            if opened.sender_code != code {
-                return Err(Error::SenderMismatch);
-            }
-        }
-        let json = meta_json(&opened.header, &opened.manifest, &opened.sender_public);
-        write_out(json.as_bytes(), out, out_cap, out_len)
+        let envelope = pack::pack(&input, &mut rng)?;
+        write_out(&envelope, out, out_cap, out_len)
     })())
 }
 
@@ -862,29 +745,10 @@ fn meta_json(header: &pack::Header, manifest: &Manifest, sender_public: &[u8; 65
         json_escape(&manifest.ext),
         manifest.file_size,
         manifest.chunk_size,
-        manifest.block_count,
+        manifest.chunk_count,
         manifest.created_at_ms,
         crate::code::from_public_key(sender_public),
         hex(sender_public),
         hex(&header.kdf_salt),
-    )
-}
-
-fn meta_json_legacy(
-    header: &pack_rune_v1::Header,
-    manifest: &pack_rune_v1::Manifest,
-    sender_public: &[u8; 65],
-    _unused: &str,
-) -> String {
-    format!(
-        "{{\"version\":\"rune-v1\",\"name\":\"{}\",\"mime\":\"{}\",\"ext\":\"\",\"size\":{},\"chunk_size\":{},\"chunk_count\":{},\"created_at_ms\":0,\"sender_code\":\"{}\",\"sender_pub\":\"{}\",\"file_id\":\"{}\"}}",
-        json_escape(&manifest.name),
-        json_escape(&manifest.mime),
-        manifest.plain_size,
-        manifest.block_size,
-        manifest.block_count,
-        crate::code::from_public_key(sender_public),
-        hex(sender_public),
-        hex(&header.file_id),
     )
 }

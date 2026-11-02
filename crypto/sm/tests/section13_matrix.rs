@@ -7,7 +7,7 @@ use yanshu_sm::bigint::U256;
 use yanshu_sm::error::Error;
 use yanshu_sm::gcm;
 use yanshu_sm::hkdf::hkdf_sm3;
-use yanshu_sm::pack::{self, v1, PackInput, PackOptions, PackParams};
+use yanshu_sm::pack::{self, v1, PackInput, PackParams};
 use yanshu_sm::rng::{Rng, SeedRng};
 use yanshu_sm::sm2;
 
@@ -65,20 +65,17 @@ fn build(plain_len: usize, chunk_size: u32) -> Fx {
         k_enc: scalar(&mut rng),
         k_sig,
     };
-    let recipient64: [u8; 64] = recipient_pub[1..].try_into().expect("64");
     let input = PackInput {
-        recipient_public: &recipient64,
+        recipient_public: &recipient_pub,
         sender_private: &sender.private_key,
         name: "f.bin",
         mime: "application/octet-stream",
-        block_size: chunk_size,
-        data: &plain,
-    };
-    let options = PackOptions {
         ext: "bin",
         created_at_ms: 1_767_225_600_000,
+        chunk_size,
+        data: &plain,
     };
-    let pack = pack::pack_with_params(&input, &options, &params).expect("pack");
+    let pack = pack::pack_with_params(&input, &params).expect("pack");
     let header = pack::read_header(&pack).expect("header");
     let manifest_off = HDR + PUB + WRAP;
     let sig_off = manifest_off + header.manifest_len as usize;
@@ -155,7 +152,7 @@ fn resign(f: &mut Fx) {
 }
 
 fn err(f: &Fx, p: &[u8]) -> Error {
-    pack::unpack_unchecked(p, &f.recipient_priv).unwrap_err()
+    pack::unpack(p, &f.recipient_priv, None).unwrap_err()
 }
 
 /// 解出清单明文 → 让调用方改 → 用同一 KEK/nonce/AAD 重新加密并写回。
@@ -343,7 +340,7 @@ fn check_13_key_unwrap() {
     let mut rng = SeedRng::new(b"other-recipient-13");
     let other = sm2::keygen(&mut rng);
     assert_eq!(
-        pack::unpack_unchecked(&f.pack, &other.private_key).unwrap_err(),
+        pack::unpack(&f.pack, &other.private_key, None).unwrap_err(),
         Error::BadKeyRecord
     );
     // 段落被改（C1 前缀错）
@@ -374,21 +371,21 @@ fn check_15_manifest_header() {
     let mut p = f.pack.clone();
     tamper_manifest(&mut f, |m| m[0] ^= 0x01);
     assert_eq!(
-        pack::unpack_unchecked(&f.pack, &f.recipient_priv).unwrap_err(),
+        pack::unpack(&f.pack, &f.recipient_priv, None).unwrap_err(),
         Error::BadManifestRecord
     );
     // MANIFEST_VERSION 改 2
     let mut f2 = build(8, 16);
     tamper_manifest(&mut f2, |m| m[4] = 2);
     assert_eq!(
-        pack::unpack_unchecked(&f2.pack, &f2.recipient_priv).unwrap_err(),
+        pack::unpack(&f2.pack, &f2.recipient_priv, None).unwrap_err(),
         Error::BadManifestRecord
     );
     // DIGEST_ALG / DIGEST_LEN
     let mut f3 = build(8, 16);
     tamper_manifest(&mut f3, |m| m[6] = 2);
     assert_eq!(
-        pack::unpack_unchecked(&f3.pack, &f3.recipient_priv).unwrap_err(),
+        pack::unpack(&f3.pack, &f3.recipient_priv, None).unwrap_err(),
         Error::BadManifestRecord
     );
     let _ = p.pop();
@@ -406,7 +403,7 @@ fn check_16_manifest_cross_check() {
         m[8..16].copy_from_slice(&(n + 1).to_be_bytes());
     });
     assert_eq!(
-        pack::unpack_unchecked(&f.pack, &f.recipient_priv).unwrap_err(),
+        pack::unpack(&f.pack, &f.recipient_priv, None).unwrap_err(),
         Error::LengthInconsistent
     );
 
@@ -414,7 +411,7 @@ fn check_16_manifest_cross_check() {
     let mut f2 = build(96, 32);
     tamper_manifest(&mut f2, |m| m[20..24].copy_from_slice(&2u32.to_be_bytes()));
     assert_eq!(
-        pack::unpack_unchecked(&f2.pack, &f2.recipient_priv).unwrap_err(),
+        pack::unpack(&f2.pack, &f2.recipient_priv, None).unwrap_err(),
         Error::LengthInconsistent
     );
 
@@ -425,7 +422,7 @@ fn check_16_manifest_cross_check() {
         m[off..off + 4].copy_from_slice(&32u32.to_be_bytes());
     });
     assert_eq!(
-        pack::unpack_unchecked(&f3.pack, &f3.recipient_priv).unwrap_err(),
+        pack::unpack(&f3.pack, &f3.recipient_priv, None).unwrap_err(),
         Error::LengthInconsistent
     );
 }
@@ -441,21 +438,21 @@ fn check_17_signature() {
     // 换 SENDER_PUB → 验签失败（或曲线错误），总之必须拒绝
     let mut p = f.pack.clone();
     p[HDR + 1] ^= 0x01;
-    assert!(pack::unpack_unchecked(&p, &f.recipient_priv).is_err());
+    assert!(pack::unpack(&p, &f.recipient_priv, None).is_err());
 }
 
 /// #18 发送方码与元数据不一致
 #[test]
 fn check_18_sender_code() {
     let f = build(8, 16);
-    assert!(pack::unpack_with_code(&f.pack, &f.recipient_priv, &f.sender_code).is_ok());
+    assert!(pack::unpack(&f.pack, &f.recipient_priv, Some(&f.sender_code)).is_ok());
     let wrong = if f.sender_code == "ZZZZ" {
         "YYYY"
     } else {
         "ZZZZ"
     };
     assert_eq!(
-        pack::unpack_with_code(&f.pack, &f.recipient_priv, wrong).unwrap_err(),
+        pack::unpack(&f.pack, &f.recipient_priv, Some(wrong)).unwrap_err(),
         Error::SenderMismatch
     );
 }
@@ -525,7 +522,7 @@ fn check_21_digest_mismatch() {
     });
     resign(&mut f); // 签名有效，但摘要与明文不符
     assert_eq!(
-        pack::unpack_unchecked(&f.pack, &f.recipient_priv).unwrap_err(),
+        pack::unpack(&f.pack, &f.recipient_priv, None).unwrap_err(),
         Error::DigestMismatch
     );
 }
@@ -541,7 +538,7 @@ fn check_22_missing_chunk() {
     assert_eq!(err(&f, &p), Error::ChunkMissing);
 
     // 正常包仍可解，且数据一致
-    let out = pack::unpack_with_code(&f.pack, &f.recipient_priv, &f.sender_code).expect("ok");
+    let out = pack::unpack(&f.pack, &f.recipient_priv, Some(&f.sender_code)).expect("ok");
     assert_eq!(out.data, f.plain);
     assert_eq!(out.sender_public, f.sender_pub);
 }
@@ -563,20 +560,17 @@ fn section_3_3_string_rules() {
             k_enc: U256::from_be_bytes(&[3u8; 32]),
             k_sig: U256::from_be_bytes(&[5u8; 32]),
         };
-        let recipient64: [u8; 64] = recipient_pub[1..].try_into().expect("64");
         let input = PackInput {
-            recipient_public: &recipient64,
+            recipient_public: &recipient_pub,
             sender_private: &sender.private_key,
             name,
             mime,
-            block_size: 16,
-            data: b"x",
-        };
-        let options = PackOptions {
             ext,
             created_at_ms: 1,
+            chunk_size: 16,
+            data: b"x",
         };
-        pack::pack_with_params(&input, &options, &params)
+        pack::pack_with_params(&input, &params)
     };
 
     assert!(mk("ok.txt", "text/plain", "txt").is_ok());

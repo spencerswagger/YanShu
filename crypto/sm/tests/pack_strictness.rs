@@ -2,7 +2,7 @@
 
 use yanshu_sm::bigint::U256;
 use yanshu_sm::error::Error;
-use yanshu_sm::pack::{self, PackInput, PackOptions, PackParams};
+use yanshu_sm::pack::{self, PackInput, PackParams};
 use yanshu_sm::rng::{Rng, SeedRng};
 use yanshu_sm::sm2;
 
@@ -52,20 +52,17 @@ fn build(plain_len: usize, chunk_size: u32) -> Fixture {
             b
         }),
     };
-    let recipient64: [u8; 64] = recipient_pub[1..].try_into().expect("64");
     let input = PackInput {
-        recipient_public: &recipient64,
+        recipient_public: &recipient_pub,
         sender_private: &sender.private_key,
         name: "f.bin",
         mime: "application/octet-stream",
-        block_size: chunk_size,
-        data: &plain,
-    };
-    let options = PackOptions {
         ext: "bin",
         created_at_ms: 1_767_225_600_000,
+        chunk_size,
+        data: &plain,
     };
-    let pack = pack::pack_with_params(&input, &options, &params).expect("pack");
+    let pack = pack::pack_with_params(&input, &params).expect("pack");
     let header = pack::read_header(&pack).expect("header");
     let manifest_off = HDR + PUB + WRAP;
     let sig_off = manifest_off + header.manifest_len as usize;
@@ -105,7 +102,7 @@ fn build(plain_len: usize, chunk_size: u32) -> Fixture {
 }
 
 fn err(f: &Fixture, p: &[u8]) -> Error {
-    pack::unpack_unchecked(p, &f.recipient_priv).unwrap_err()
+    pack::unpack(p, &f.recipient_priv, None).unwrap_err()
 }
 
 #[test]
@@ -173,7 +170,7 @@ fn truncation_and_trailing_are_rejected() {
     let f = build(64, 32);
     // 截掉尾部
     for cut in [1usize, 10, HDR, HDR + PUB + WRAP, f.pack.len() - 1] {
-        assert!(pack::unpack_unchecked(&f.pack[..cut], &f.recipient_priv).is_err());
+        assert!(pack::unpack(&f.pack[..cut], &f.recipient_priv, None).is_err());
     }
     // 尾部多字节
     let mut p = f.pack.clone();
@@ -209,18 +206,18 @@ fn crypto_sections_map_to_errors() {
     let mut rng = SeedRng::new(b"other-recipient");
     let other = sm2::keygen(&mut rng);
     assert_eq!(
-        pack::unpack_unchecked(&f.pack, &other.private_key).unwrap_err(),
+        pack::unpack(&f.pack, &other.private_key, None).unwrap_err(),
         Error::BadKeyRecord
     );
 
     // SENDER_PUB 换掉 → 签名失败或曲线错误（C1 与签名都绑了公钥）
     let mut p = f.pack.clone();
     p[HDR + 10] ^= 0x01;
-    assert!(pack::unpack_unchecked(&p, &f.recipient_priv).is_err());
+    assert!(pack::unpack(&p, &f.recipient_priv, None).is_err());
 
     // 期望码不匹配 → CRYPTO_SENDER_MISMATCH
     assert_eq!(
-        pack::unpack_with_code(&f.pack, &f.recipient_priv, "ZZZZ").unwrap_err(),
+        pack::unpack(&f.pack, &f.recipient_priv, Some("ZZZZ")).unwrap_err(),
         Error::SenderMismatch
     );
 }
@@ -269,7 +266,7 @@ fn chunk_order_missing_duplicate() {
     assert_eq!(err(&f, &p), Error::LengthInconsistent);
 
     // 正常包可解
-    let out = pack::unpack_with_code(&f.pack, &f.recipient_priv, &f.sender_code).expect("ok");
+    let out = pack::unpack(&f.pack, &f.recipient_priv, Some(&f.sender_code)).expect("ok");
     assert_eq!(out.data, f.plain);
     let _ = f.sender_pub;
 }
@@ -281,7 +278,7 @@ fn every_byte_flip_is_rejected_or_covered() {
         let mut p = f.pack.clone();
         p[pos] ^= 0x01;
         assert!(
-            pack::unpack_unchecked(&p, &f.recipient_priv).is_err(),
+            pack::unpack(&p, &f.recipient_priv, None).is_err(),
             "byte {} flipped but unpacked",
             pos
         );

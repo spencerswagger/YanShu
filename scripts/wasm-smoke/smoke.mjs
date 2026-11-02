@@ -4,8 +4,8 @@
 //   node scripts/wasm-smoke/smoke.mjs /path/to/yanshu_sm.wasm
 //
 // 覆盖：内存、SM3、SM4-GCM、SM2（64 字节公钥 / 裸 R‖S，首版 ABI）、用户码与校验字符、
-//       码规范化、**两种布局**（默认契约 YSPK/1.0 与 rune-v1 兼容布局）的打包→解包、
-//       布局判别、篡改拒绝、错发送方公钥拒绝。
+//       码规范化、契约布局 YSPK/1.0 的打包→**离线解包**（来源由包内 SENDER_PUB 自证）、
+//       发送方码派生、篡改拒绝、seed 复用拒绝。
 // 全部通过打印 "SMOKE OK" 并以 0 退出。
 
 import fs from "node:fs";
@@ -43,6 +43,12 @@ function check(rc, what) {
 }
 function expectRc(rc, want, what) {
   if (rc !== want) throw new Error(`${what}: want ${want}, got ${rc} (${errName(rc)})`);
+}
+
+function msgPtrConst() {
+  const m = alloc(4);
+  write(m, Buffer.from("seed"));
+  return m;
 }
 
 function keygen() {
@@ -164,12 +170,12 @@ function packOnce() {
 
 function unpackOnce(packPtr, packLen, outCap) {
   const out = alloc(outCap);
-  let rc = e.ys_unpack(packPtr, packLen, recipientPrivPtr, senderPubPtr, out, outCap, lenPtr);
+  let rc = e.ys_unpack(packPtr, packLen, recipientPrivPtr, out, outCap, lenPtr);
   if (rc === -2) {
     const need = dv().getUint32(lenPtr, true);
     e.ys_free(out, outCap);
     const o2 = alloc(need);
-    rc = e.ys_unpack(packPtr, packLen, recipientPrivPtr, senderPubPtr, o2, need, lenPtr);
+    rc = e.ys_unpack(packPtr, packLen, recipientPrivPtr, o2, need, lenPtr);
     check(rc, "ys_unpack retry");
     const got = read(o2, dv().getUint32(lenPtr, true));
     e.ys_free(o2, need);
@@ -181,67 +187,57 @@ function unpackOnce(packPtr, packLen, outCap) {
   return got;
 }
 
-// 默认 = 契约布局
-if (e.ys_get_layout() !== 0) throw new Error("default layout must be 0 (YSPK/1.0)");
-if (e.ys_header_len() !== 112) throw new Error(`default header len ${e.ys_header_len()} != 112`);
+// 唯一布局 = 契约 YSPK/1.0
+if (e.ys_header_len() !== 112) throw new Error(`header len ${e.ys_header_len()} != 112`);
 {
   const pk = packOnce();
-  if (e.ys_layout_of(pk.ptr, pk.len) !== 0) throw new Error("layout_of != 0");
   const plain = unpackOnce(pk.ptr, pk.len, 8192);
   if (hex(plain) !== hex(data)) throw new Error("contract unpack mismatch");
 
   // meta（带发送方公钥）
-  let rc = e.ys_unpack_meta(pk.ptr, pk.len, recipientPrivPtr, senderPubPtr, 0, 0, lenPtr);
+  let rc = e.ys_unpack_meta(pk.ptr, pk.len, recipientPrivPtr, 0, 0, lenPtr);
   expectRc(rc, -2, "meta probe");
   const need = dv().getUint32(lenPtr, true);
   const mp = alloc(need);
-  check(e.ys_unpack_meta(pk.ptr, pk.len, recipientPrivPtr, senderPubPtr, mp, need, lenPtr), "meta");
+  check(e.ys_unpack_meta(pk.ptr, pk.len, recipientPrivPtr, mp, need, lenPtr), "meta");
   const meta = JSON.parse(Buffer.from(read(mp, need)).toString("utf8"));
   if (meta.name !== "报告.pdf" || meta.size !== data.length) throw new Error(`meta ${JSON.stringify(meta)}`);
   if (meta.sender_code !== code) throw new Error(`sender_code ${meta.sender_code} != ${code}`);
 
-  // 篡改 + 错发送方公钥
+  // 篡改包内 SENDER_PUB → 验签失败（来源不能冒充）
   const tampered = new Uint8Array(pk.bytes);
-  tampered[8] ^= 1;
+  tampered[112 + 3] ^= 0x01;
   const tp = alloc(tampered.length);
   write(tp, tampered);
   const out = alloc(8192);
-  if (e.ys_unpack(tp, tampered.length, recipientPrivPtr, senderPubPtr, out, 8192, lenPtr) === 0) {
-    throw new Error("tampered pack must fail");
+  if (e.ys_unpack(tp, tampered.length, recipientPrivPtr, out, 8192, lenPtr) === 0) {
+    throw new Error("tampered sender pub must fail");
   }
-  const other = keygen();
-  const otherPubPtr = alloc(64);
-  write(otherPubPtr, other.pub);
-  expectRc(
-    e.ys_unpack(pk.ptr, pk.len, recipientPrivPtr, otherPubPtr, out, 8192, lenPtr),
-    -33,
-    "wrong sender pub",
-  );
-  const mutBuf = new Uint8Array(e.memory.buffer);
-  void mutBuf;
+  // 改块密文 → 必失败
+  const tampered2 = new Uint8Array(pk.bytes);
+  tampered2[tampered2.length - 1] ^= 1;
+  write(tp, tampered2);
+  if (e.ys_unpack(tp, tampered2.length, recipientPrivPtr, out, 8192, lenPtr) === 0) {
+    throw new Error("tampered chunk must fail");
+  }
+  e.ys_free(tp, tampered.length);
+  e.ys_free(out, 8192);
 }
 
-// 切到 rune-v1 兼容布局
-check(e.ys_set_layout(1), "ys_set_layout(1)");
-if (e.ys_header_len() !== 40) throw new Error(`rune-v1 header len ${e.ys_header_len()} != 40`);
+// P2：同一 seed 二次使用必须报错
 {
-  const pk = packOnce();
-  if (e.ys_layout_of(pk.ptr, pk.len) !== 1) throw new Error("layout_of != 1");
-  const plain = unpackOnce(pk.ptr, pk.len, 8192);
-  if (hex(plain) !== hex(data)) throw new Error("rune-v1 unpack mismatch");
-
-  const tampered = new Uint8Array(pk.bytes);
-  tampered[Math.floor(tampered.length / 2)] ^= 1;
-  const tp = alloc(tampered.length);
-  write(tp, tampered);
-  const out = alloc(8192);
-  if (e.ys_unpack(tp, tampered.length, recipientPrivPtr, senderPubPtr, out, 8192, lenPtr) === 0) {
-    throw new Error("tampered rune-v1 pack must fail");
-  }
+  const s2 = crypto.randomBytes(32);
+  const sp = alloc(s2.length);
+  write(sp, s2);
+  const sig1 = alloc(64);
+  check(e.ys_sm2_sign(senderPrivPtr, sp, s2.length, msgPtrConst(), 4, sig1), "sign #1");
+  expectRc(
+    e.ys_sm2_sign(senderPrivPtr, sp, s2.length, msgPtrConst(), 4, sig1),
+    -3,
+    "reused seed",
+  );
 }
-check(e.ys_set_layout(0), "ys_set_layout(0)");
-if (e.ys_header_len() !== 112) throw new Error("layout not restored");
 
 console.log(
-  `SMOKE OK (wasm ${bytes.length}B, code=${code}-${chk}, layouts: contract+rune-v1, exports=${Object.keys(e).length})`,
+  `SMOKE OK (wasm ${bytes.length}B, code=${code}-${chk}, layout=YSPK/1.0, exports=${Object.keys(e).length})`,
 );

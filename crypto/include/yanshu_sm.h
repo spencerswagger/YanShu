@@ -4,27 +4,31 @@
  * 由 Rust `crypto/sm` 导出（`#[no_mangle] extern "C"`，不用 wasm-bindgen）。
  * wasm 模块导出 `memory` 与下列函数，**没有任何 import**。
  *
- * ## ABI 稳定性
- * 首版公布的 25 个导出**签名未变**（Web `feat/web-min-loop` 与 Gate 探针按它编译）。
- * 契约 YSPK/1.0 需要的 65 字节未压缩点、DER 签名、清单 created_at/ext 全在内核内部转换。
- * 新增能力放在 `*_v1` 导出里，不改变既有函数。
+ * ## 只有一种包格式
+ * 全库只实现 `docs/CRYPTO-PACK.md` 的 `YSPK/1.0`：HEADER 112 字节、SENDER_PUB 65、
+ * WRAPPED_KEY 129（C1 带 0x04）、清单 `YSM1`、签名 DER、块记录 16 字节头 + 密文 + tag。
+ * 不再保留任何第二套格式。
  *
- * ## 布局（可插拔，默认契约）
- * - 默认 `ys_pack` / `ys_unpack` 产/解 **契约布局 `YSPK/1.0`**（HEADER 112）。
- * - `ys_set_layout(1)` 切到 **rune-v1 兼容布局**（非契约、HEADER 40，仅 Gate 历史证据）；
- *   `ys_header_len()` 随布局返回 112 / 40；`ys_layout_of()` 可判别一个包属于哪种。
- *   两种布局不会混进同一个产物。
+ * ## ABI 变更（Owl 授权的 P1）
+ * 只有两个导出改了签名（来源改为包内自证）：
+ *   旧：ys_unpack(pack, pack_len, recipient_priv, sender_pub, out, cap, out_len)
+ *   新：ys_unpack(pack, pack_len, recipient_priv, out, cap, out_len)
+ *   旧：ys_unpack_meta(pack, pack_len, recipient_priv, sender_pub, out, cap, out_len)
+ *   新：ys_unpack_meta(pack, pack_len, recipient_priv, out, cap, out_len)
+ * 其余 23 个导出签名未变。新增：ys_pack_v1 / ys_sm2_sign_der / ys_check_symbol /
+ * ys_error_name_v1。
  *
  * ## 通用约定
  * - 长度参数 size_t（wasm32 = 4 字节）；指针 = 线性内存偏移；u64 参数在 JS 里是 BigInt。
  * - 返回 0 = 成功，负数 = 错误码；-4..-23 与首版一致，新增从 -24 起。
- * - `out_len`：缓冲区不足时写所需长度并返回 -2；`ys_pack*` 返回上界（+2，DER 签名 70..72 浮动）。
- * - 需要随机的接口都传 `seed`（JS 用 crypto.getRandomValues 现取，>=16 字节，不要复用）。
+ * - `out_len`：缓冲区不足时写所需长度并返回 -2；`ys_pack*` 返回的是**上界**
+ *   （DER 签名按 72 算），按它分配再调用一次即可成功，且**不会消耗随机数**。
+ * - 需要随机的接口都传 `seed`（JS 用 crypto.getRandomValues 现取，>=16 字节）。
+ *   **同一 seed 二次使用会返回 -3（RNG）**，不再静默复用。
  * - `ys_alloc(n)` ↔ `ys_free(p, n)` 成对、长度一致。
  *
  * ## 公钥口径
- * ABI 一律 **64 字节 `X‖Y`**（首版口径）。契约要求的 `0x04‖X‖Y` 由内核内部补/去；
- * `ys_pack_v1` / `ys_sm2_sign_der` 等 `_v1` 导出同样接受 64 字节公钥。
+ * ABI 一律 **64 字节 `X‖Y`**（首版口径）；契约要求的 `0x04‖X‖Y` 由内核内部补/去。
  */
 
 #ifndef YANSHU_SM_H
@@ -37,18 +41,13 @@
 extern "C" {
 #endif
 
-/* ---------------------------------------------------------------- 内存 / 元信息 / 布局 */
+/* ---------------------------------------------------------------- 内存 / 元信息 */
 
 uint8_t *ys_alloc(size_t len);
 void ys_free(uint8_t *ptr, size_t len);
 uint32_t ys_version(void);            /* 0x0001_0000 */
-uint32_t ys_default_block_size(void); /* 1 MiB（首版名，保留） */
-uint32_t ys_default_chunk_size(void); /* 同上（契约命名） */
-uint32_t ys_header_len(void);         /* 当前布局：契约 112 / rune-v1 40 */
-
-int32_t ys_set_layout(uint32_t id);   /* 0 = YSPK/1.0（默认），1 = rune-v1 */
-uint32_t ys_get_layout(void);
-int32_t ys_layout_of(const uint8_t *pack, size_t pack_len); /* 0 / 1 / 负数 */
+uint32_t ys_default_block_size(void); /* 1 MiB */
+uint32_t ys_header_len(void);         /* 112（YSPK/1.0） */
 
 /* 首版错误名（BAD_MAGIC…），Web 的映射表按这套查 */
 int32_t ys_error_name(int32_t code, uint8_t *out, size_t cap, size_t *out_len);
@@ -78,7 +77,7 @@ int32_t ys_sm4_gcm_decrypt(const uint8_t *key /* 16 */, const uint8_t *nonce, si
                            const uint8_t *aad, size_t aad_len, const uint8_t *input, size_t input_len,
                            const uint8_t *tag /* 16 */, uint8_t *out);
 
-/* ---------------------------------------------------------------- SM2（64 字节公钥 / 裸 R‖S，首版口径） */
+/* ---------------------------------------------------------------- SM2（64 字节公钥 / 裸 R‖S） */
 
 int32_t ys_sm2_keygen(const uint8_t *seed, size_t seed_len, uint8_t *priv_out /* 32 */,
                       uint8_t *pub_out /* 64 = X‖Y */);
@@ -94,7 +93,6 @@ int32_t ys_sm2_decrypt(const uint8_t *priv_key /* 32 */, const uint8_t *input, s
 /* 输出裸 R‖S（64 字节） */
 int32_t ys_sm2_sign(const uint8_t *priv_key /* 32 */, const uint8_t *seed, size_t seed_len,
                     const uint8_t *msg, size_t msg_len, uint8_t *sig_out /* 64 */);
-/* 1 = 通过，0 = 不通过，负数 = 错误 */
 int32_t ys_sm2_verify(const uint8_t *public_key /* 64 */, const uint8_t *msg, size_t msg_len,
                       const uint8_t *sig /* 64 */);
 
@@ -107,30 +105,31 @@ int32_t ys_sm2_sign_der(const uint8_t *priv_key /* 32 */, const uint8_t *seed, s
 
 /* 入参 64 字节公钥；内核补 0x04 后按契约（SM3 覆盖 65 字节）派生 4 位码 */
 int32_t ys_user_code(const uint8_t *public_key /* 64 */, uint8_t *out /* 4 ASCII */);
-/* 第 5 位校验字符：仅 UI 防误输入，**不是用户码的一部分**，不上 wire */
+/* 第 5 位校验字符：仅 UI 防误输入，**不是用户码的一部分** */
 int32_t ys_check_symbol(const uint8_t *public_key /* 64 */, uint8_t *out /* 1 ASCII */);
 int32_t ys_normalize_code(const uint8_t *input, size_t input_len, uint8_t *out /* 4 ASCII */);
 
-/* ---------------------------------------------------------------- 加密包 */
+/* ---------------------------------------------------------------- 加密包 YSPK/1.0 */
 
 /*
- * 打包（默认契约布局）：name(UTF-8) / mime(ASCII 小写) / block_size(0 = 1 MiB)。
- * 契约清单里的 ext 为空、created_at = 0；需要它们用 ys_pack_v1。
+ * 打包：name(UTF-8) / mime(ASCII 小写) / block_size(0 = 1 MiB)。
+ * 清单里 ext 为空、created_at = 0；需要它们用 ys_pack_v1。
  */
 int32_t ys_pack(const uint8_t *recipient_public /* 64 */, const uint8_t *sender_private /* 32 */,
                 const uint8_t *name, size_t name_len, const uint8_t *mime, size_t mime_len,
                 uint32_t block_size, const uint8_t *seed, size_t seed_len, const uint8_t *data,
                 size_t data_len, uint8_t *out, size_t out_cap, size_t *out_len);
 
-/* 解包；sender_public 是调用方手里的发送方公钥（64 字节），与包内 SENDER_PUB 比对 */
+/*
+ * 解包（P1：来源自证）。验签用包内 SENDER_PUB，发送方 4 位码由它派生，
+ * 调用方不需要（也不能）再传公钥。
+ */
 int32_t ys_unpack(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private /* 32 */,
-                  const uint8_t *sender_public /* 64 */, uint8_t *out, size_t out_cap,
-                  size_t *out_len);
+                  uint8_t *out, size_t out_cap, size_t *out_len);
 
-/* 只解清单（不解数据块），输出 JSON 元信息 */
+/* 只解清单（不解数据块），JSON 里含 sender_code / sender_pub（来自包内） */
 int32_t ys_unpack_meta(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
-                       const uint8_t *sender_public, uint8_t *out, size_t out_cap,
-                       size_t *out_len);
+                       uint8_t *out, size_t out_cap, size_t *out_len);
 
 /* 打包（完整参数）：多一个 ext 与 created_at_ms（u64） */
 int32_t ys_pack_v1(const uint8_t *recipient_public /* 64 */, const uint8_t *sender_private,
@@ -138,14 +137,6 @@ int32_t ys_pack_v1(const uint8_t *recipient_public /* 64 */, const uint8_t *send
                    const uint8_t *ext, size_t ext_len, uint64_t created_at_ms, uint32_t chunk_size,
                    const uint8_t *seed, size_t seed_len, const uint8_t *data, size_t data_len,
                    uint8_t *out, size_t out_cap, size_t *out_len);
-
-/* 解包（契约口径）：按 4 位发送方码校验（NULL/0 = 不校验） */
-int32_t ys_unpack_v1(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
-                     const uint8_t *expected_sender_code, size_t expected_sender_code_len,
-                     uint8_t *out, size_t out_cap, size_t *out_len);
-int32_t ys_unpack_meta_v1(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
-                          const uint8_t *expected_sender_code, size_t expected_sender_code_len,
-                          uint8_t *out, size_t out_cap, size_t *out_len);
 
 /* ---------------------------------------------------------------- 错误码（稳定） */
 
@@ -173,7 +164,7 @@ int32_t ys_unpack_meta_v1(const uint8_t *pack, size_t pack_len, const uint8_t *r
 #define YS_ERR_BAD_CODE (-21)
 #define YS_ERR_CODE_EXHAUSTED (-22)
 #define YS_ERR_BAD_CIPHERTEXT (-23)
-/* 新增（契约细粒度；旧映射表会落到 CRYPTO_INTERNAL，不影响旧语义） */
+/* 新增（契约细粒度） */
 #define YS_ERR_HEADER_INVALID (-24)
 #define YS_ERR_ALG_UNSUPPORTED (-25)
 #define YS_ERR_UNSIGNED (-26)

@@ -23,7 +23,6 @@ pub mod ffi;
 pub mod gcm;
 pub mod hkdf;
 pub mod pack;
-pub mod pack_rune_v1;
 pub mod rng;
 pub mod sm2;
 pub mod sm3;

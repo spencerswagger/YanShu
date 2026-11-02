@@ -16,7 +16,7 @@ use yanshu_sm::bigint::U256;
 use yanshu_sm::der;
 use yanshu_sm::gcm;
 use yanshu_sm::hkdf::hkdf_sm3;
-use yanshu_sm::pack::{self, v1, PackInput, PackOptions, PackParams};
+use yanshu_sm::pack::{self, v1, PackInput, PackParams};
 use yanshu_sm::sm2;
 use yanshu_sm::sm3::{hmac_sm3, sm3};
 
@@ -648,38 +648,32 @@ fn fixture_params() -> PackParams {
 fn contract_v1_pack() -> String {
     let recipient = arr65(PB_R);
     let sender = arr32(D_S);
-    let recipient64: [u8; 64] = recipient[1..].try_into().expect("64");
     let input = PackInput {
-        recipient_public: &recipient64,
+        recipient_public: &recipient,
         sender_private: &sender,
         name: "hi.txt",
         mime: "text/plain",
-        block_size: 1_048_576,
-        data: b"hello",
-    };
-    let options = PackOptions {
         ext: "txt",
         created_at_ms: 1_767_225_600_000,
+        chunk_size: 1_048_576,
+        data: b"hello",
     };
-    hex(&pack::pack_with_params(&input, &options, &fixture_params()).expect("pack"))
+    hex(&pack::pack_with_params(&input, &fixture_params()).expect("pack"))
 }
 
 fn contract_v2_pack() -> String {
     let recipient = arr65(PB_R);
     let sender = arr32(D_S);
     let data: Vec<u8> = (0u8..0x50).collect();
-    let recipient64: [u8; 64] = recipient[1..].try_into().expect("64");
     let input = PackInput {
-        recipient_public: &recipient64,
+        recipient_public: &recipient,
         sender_private: &sender,
         name: "multi.bin",
         mime: "application/octet-stream",
-        block_size: 32,
-        data: &data,
-    };
-    let options = PackOptions {
         ext: "bin",
         created_at_ms: 1_767_225_600_000,
+        chunk_size: 32,
+        data: &data,
     };
-    hex(&pack::pack_with_params(&input, &options, &fixture_params()).expect("pack"))
+    hex(&pack::pack_with_params(&input, &fixture_params()).expect("pack"))
 }

@@ -114,45 +114,59 @@
   `resign()` 用同一 `k_sig` 重签，专门验证"签名有效但内容不一致"的路径。
 - §13 #11 的判定放在验签之前：先比 `SIG_LEN` 与 DER 自述长度，再解 DER、再验签。
 
-## 7. 布局可插拔：契约是默认，rune-v1 只作兼容
+## 7. 只有一种格式：YSPK/1.0
 
-| 布局 | 默认？ | 头长 | 签名 | 清单摘要 | 谁在用 |
-|---|---|---:|---|---|---|
-| `YSPK/1.0`（`crate::pack`） | ✅ 默认 | 112 | DER | `SM3(明文块)` | 产品、Web、契约验收 |
-| `rune-v1`（`crate::pack_rune_v1`） | ❌ 需显式 `ys_set_layout(1)` | 40 | 裸 `R‖S` | `SM3(密文‖tag)` | Gate 的历史证据（非契约） |
+`pack_rune_v1`（首版 40 字节头 / 裸 R‖S / 密文摘要）已**删除**。仓库里只存在
+`docs/CRYPTO-PACK.md` 的 `YSPK/1.0`：HEADER 112、SENDER_PUB 65、WRAPPED_KEY 129（C1 带 0x04）、
+清单 `YSM1`、签名 DER、块记录 16 字节头 + 密文 + tag、块 nonce `u64be(index)‖000000‖last`、
+清单 nonce `ff*8‖00000001`、块 AAD 32 字节 / 清单 AAD 31 字节、HKDF salt=`KDF_SALT`、
+info=`YANSHU/v1/{chunk,manifest}-key`。不再有第二套格式，也不会混淆 `YSPK`。
 
-- **不会混**：一个产物的字节只属于一种布局；`ys_layout_of()` 用 `HEADER[4..8]` 判别
-  （契约 `01 00 00 70` vs rune-v1 `01 01 …`）。
-- Gate 的探针（`qa/evidence/adapters/ys_pack_probe.rs`）**不改一行**就能编译，默认产契约包；
-  要看 rune-v1 只需在驱动侧调 `ys_set_layout(1)`（或直接用 `pack_rune_v1` 模块）。
-- 已实测：探针 keygen→pack→unpack 往返一致，包 `HEADER_LEN=112`；篡改必失败。
+## 8. C ABI 变更（Owl 授权的 P1）
 
-## 8. 错误码与名字：数值向后兼容，名字两套
+| 导出 | 旧签名 | 新签名 |
+|---|---|---|
+| `ys_unpack` | `(pack, pack_len, recipient_priv, sender_pub, out, cap, out_len)` | `(pack, pack_len, recipient_priv, out, cap, out_len)` |
+| `ys_unpack_meta` | `(pack, pack_len, recipient_priv, sender_pub, out, cap, out_len)` | `(pack, pack_len, recipient_priv, out, cap, out_len)` |
 
-* **数值**：`-4..-23` 与首版**完全一致**（Web 的 `ERROR_CODES` 表照旧命中），
-  新语义从 `-24` 起（`HEADER_INVALID`、`CHUNK_ORDER`、`CHUNK_AUTH_FAILED`、
-  `CHUNK_MISSING`、`MANIFEST_AUTH_FAILED`、`DIGEST_MISMATCH`、`SENDER_MISMATCH`…）。
-* **名字**：
-  - `Error::name()` / `ys_error_name_v1()` → 契约口径 `CRYPTO_*`（Gate 探针的正则、日志用）；
-  - `ys_error_name()` → 首版 `BAD_MAGIC` 等旧名（Web 映射表按旧名查，仍能落到有意义的 `CRYPTO_*`）。
-* 能区分的要求已满足：块序 → `BLOCK_SEQUENCE`/`CHUNK_ORDER`，清单 → `MANIFEST_MISMATCH`/
-  `MANIFEST_AUTH_FAILED`，截断 → `TRUNCATED`/`LENGTH_INCONSISTENT`，缺块 → `MISSING_BLOCK`/
-  `CHUNK_MISSING`，版本 → `UNSUPPORTED_VERSION`，tag → `TAG_MISMATCH`/`CHUNK_AUTH_FAILED`。
+其余 23 个导出签名未变。新增 4 个导出：`ys_pack_v1`（清单 `ext`/`created_at`）、
+`ys_sm2_sign_der`（契约 DER 签名）、`ys_check_symbol`（第 5 位校验字符，仅 UI 防误）、
+`ys_error_name_v1`（契约 `CRYPTO_*` 错误名）。已删除上一轮临时加的
+`ys_set_layout/ys_get_layout/ys_layout_of/ys_unpack_v1/ys_unpack_meta_v1/ys_default_chunk_size`
+（格式归一后冗余）。
 
-## 9. 两层篡改防线（Gate 实测结论已写进测试）
+**P1 效果**：`ys_unpack` / `ys_unpack_meta` 只给收件人私钥即可——验签用包内
+`SENDER_PUB`，发送方 4 位码也由它派生（契约 §10.3）；换掉包内公钥任一字节即验签失败。
+`ys_unpack_meta` 的 JSON 直接带 `sender_code` / `sender_pub`。
+Rust 侧 API 为 `pack::unpack(pack, recipient_sk, Option<&str>)`（第三个参数是可选的
+"期望发送方码"比对，不是公钥）；Gate 的探针一行未改即可编译并跑通离线解包。
 
-* **AEAD 层**：AAD 绑 `CHUNK_INDEX / LAST_FLAG / CHUNK_COUNT / CHUNK_SIZE / PLAINTEXT_SIZE / PT_LEN`
-  （契约 §7.2），直接改密文或 tag → `CRYPTO_CHUNK_AUTH_FAILED`（`check_20`）。
-* **序号绑定层**：换两块 / 重复块 / 跳号 / 末块标志被改 → `CRYPTO_CHUNK_ORDER` /
-  `CRYPTO_CHUNK_MISSING`（`check_19`、`check_22`），不需要等清单摘要兜底。
-* **预期现象**：在 **rune-v1** 布局里，清单摘要是对 `密文‖tag` 算的且先于 GCM 校验，
-  所以改密文会被 `MANIFEST_MISMATCH` 先拦住、`TAG_MISMATCH` 端到端取不到 —— 这是设计，
-  不是缺陷（`pack_rune_v1::layered_tamper_tests` 固化）。
-  契约布局反过来：GCM 先校验，`CHUNK_AUTH_FAILED` 可稳定触发。
-* **清单摘要层**：清单被改但签名有效（发送方自己签错）→ `CRYPTO_DIGEST_MISMATCH`（`check_21`）。
+## 9. 错误码与名字：数值向后兼容，名字两套
 
-## 10. §15 样例的可重算性
+* 数值 `-4..-23` 与首版完全一致；新语义从 `-24` 起。
+* `Error::name()` / `ys_error_name_v1()` → 契约 `CRYPTO_*`；
+  `ys_error_name()` → 首版 `BAD_MAGIC` 等旧名（Web 映射表按旧名查）。
+* 能区分：块序 `CHUNK_ORDER` / 清单 `MANIFEST_MISMATCH`·`MANIFEST_AUTH_FAILED` /
+  截断 `TRUNCATED`·`LENGTH_INCONSISTENT` / 缺块 `CHUNK_MISSING`·`MISSING_BLOCK` /
+  版本 `UNSUPPORTED_VERSION` / tag `TAG_MISMATCH`·`CHUNK_AUTH_FAILED`。
 
-契约若要改 AAD（例如把 `CHUNK_INDEX` 再显式加进块 AAD 之外的域），§15 的样例字节会重算。
-本仓库的样例常量**不是手抄**：`crypto/sm/tests/contract_samples.rs` 由脚本从
-`docs/CRYPTO-PACK.md` 抽取生成，契约一更新就重生成再跑测试，不会"悄悄钉死"。
+## 10. 两层篡改防线
+
+* **AEAD 层**：AAD 绑 `CHUNK_INDEX / LAST_FLAG / CHUNK_COUNT / CHUNK_SIZE / PLAINTEXT_SIZE / PT_LEN`，
+  改密文或 tag → `CRYPTO_CHUNK_AUTH_FAILED`（`check_20`）。
+* **序号绑定层**：换序 / 重复 / 跳号 / 末块标志被改 → `CRYPTO_CHUNK_ORDER` / `CRYPTO_CHUNK_MISSING`
+  （`check_19`、`check_22`）。
+* **清单摘要层**：签名有效但摘要不符 → `CRYPTO_DIGEST_MISMATCH`（`check_21`）。
+* 三种"搬块"（把别的包的合法块搬进来）也会因 AAD 里的 `CHUNK_COUNT/CHUNK_SIZE/PLAINTEXT_SIZE`
+  不一致而失败。
+
+## 11. P2 / P3 状态
+
+* **P2-①**：块头存明文长度 —— 已满足（块记录 offset 4 的 `PT_LEN`，§6.2），
+  `check_19` 覆盖 PT_LEN/CT_LEN 篡改。
+* **P2-②**：同一 seed 二次使用 —— 已实现：`ys_*` 随机接口记住最近 64 个 seed 的 SM3 指纹，
+  命中直接返回 `-3 CRYPTO_RNG_FAILED`，不再静默混计数器续用。
+  另：`ys_pack*` 的"先问大小"用 `pack_bound()` 算上界，**不消耗随机数**，所以
+  "探针 + 重试"不会误触 seed 复用。
+* **P3**（只登记不实现）：产品级 `MAX_BLOCK_SIZE`（单文件总量上限）与流式接口
+  （prelude/块切片分批处理），已在 `crypto/README.md` 的"已知限制"里排期。

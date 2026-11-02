@@ -51,7 +51,7 @@ let out = pack::unpack(&bytes, &bob.private_key, &alice.public_key).unwrap();
 
 ```sh
 cd crypto
-cargo test                      # 31 单元 + 7 契约样例 + 5 篡改矩阵 + 23 §13 检验 + 1 分层篡改
+cargo test                      # 25 单元 + 8 契约样例 + 5 篡改矩阵 + 23 §13 检验
 cargo test --release            # 同上（快）
 cargo run --release --bin bench-sm4 -- 32
 cargo run --release --bin gen-vectors -- ../testdata/vectors.json
@@ -70,14 +70,14 @@ cargo build --release --target wasm32-unknown-unknown
 node scripts/wasm-smoke/smoke.mjs <上面那个 wasm>
 ```
 
-实测：**约 141 KB，35 个导出，0 个 import**（没有 JS 胶水依赖；其中首版 25 个签名未变）。
+实测：**约 121 KB，29 个函数导出，0 个 import**（没有 JS 胶水依赖；其中 23 个签名与首版一致，2 个按 P1 改了）。
 导出清单见 `include/yanshu_sm.h`，核心是：
 
-`ys_alloc/ys_free/ys_version/ys_error_name` · `ys_default_chunk_size`（+ 别名 `ys_default_block_size`）· `ys_header_len` ·
+`ys_alloc/ys_free/ys_version/ys_error_name` · `ys_default_block_size` · `ys_header_len`（112）·
 `ys_sm3/ys_hmac_sm3/ys_hkdf_sm3` ·
 `ys_sm4_encrypt_block/ys_sm4_decrypt_block/ys_sm4_gcm_encrypt/ys_sm4_gcm_decrypt` ·
 `ys_sm2_keygen/ys_sm2_pubkey/ys_sm2_encrypt/ys_sm2_decrypt/ys_sm2_sign/ys_sm2_verify` ·
-`ys_user_code/ys_check_symbol/ys_normalize_code` · `ys_pack/ys_unpack/ys_unpack_meta`
+`ys_user_code/ys_check_symbol/ys_normalize_code` · `ys_pack/ys_pack_v1` · `ys_unpack/ys_unpack_meta`（P1：包内自证来源）· `ys_sm2_sign_der` · `ys_error_name_v1`
 
 约定：长度用 `size_t`（wasm32 = 4 字节）；返回 0 成功、负数为错误码；`out_len` 在缓冲区
 不足时也会写入所需长度（返回 -2），JS 可以"先问大小再分配"。
@@ -85,8 +85,7 @@ node scripts/wasm-smoke/smoke.mjs <上面那个 wasm>
 ## 加密包格式
 
 **默认布局**严格按 **`docs/CRYPTO-PACK.md` v1（`YSPK/1.0`）** 实现；另保留
-`pack_rune_v1`（首版 40 字节头 / 裸 R‖S / 密文摘要）作为**非契约兼容布局**，
-只给 Gate 的历史证据用（`ys_set_layout(1)`），两者不会混：
+全库只有这一种格式（首版 rune-v1 已删除，不再有第二套）：
 
 - HEADER 112 字节（字段偏移集中在 `pack::v1::OFF_*`）、SENDER_PUB 65、WRAPPED_KEY 129；
 - 块记录 = 16 字节块头 + 密文 + 16 字节 tag，nonce = `u64be(index) ‖ 000000 ‖ last`；
