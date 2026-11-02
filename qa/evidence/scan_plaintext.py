@@ -136,6 +136,9 @@ CORE_BLOB_DIR_DEFAULT = "./data/blobs"
 CORE_DSN_ENV = "YANSHU_DATABASE_URL"
 CORE_LOG_DIR_ENV = "YANSHU_LOG_DIR"
 
+# 白名单基线：对齐到哪个 commit 的 migrations（表结构变了就要改这里，并在结果文件写明）
+CORE_SCHEMA_BASELINE = "feat/server-skeleton@c3c2fc9 (server/internal/store/migrations/0001_init.sql)"
+
 CORE_SCHEMA = {
     # 对齐 feat/server-skeleton @ c3c2fc9（server/internal/store/migrations/0001_init.sql）
     "codes": {"code", "public_key", "nickname", "registered_at", "updated_at"},
@@ -733,6 +736,7 @@ def dump_json(path: str, items: Sequence[SearchItem], hits: Sequence[Hit],
             "log_files": stats.log_files, "log_bytes": stats.log_bytes,
             "db_tables": stats.db_tables, "db_rows": stats.db_rows, "db_cells": stats.db_cells,
         },
+        "schema_baseline": CORE_SCHEMA_BASELINE,
         "items": [{"id": it.item_id, "kind": it.kind, "strength": it.strength,
                    "note": it.note, "forms": len(it.patterns)} for it in items],
         "hits": [{"item": h.item_id, "form": h.form, "target": h.target, "loc": h.loc,
@@ -1180,6 +1184,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         schema_notes.extend(extra)
         for note in schema_notes:
             print(f"[schema] {note}")
+        if extra:
+            # 白名单外的表/列一律 FAIL：否则实现方改表时，白名单会静默放过
+            print(f"[FAIL] schema 漂移：基线 {CORE_SCHEMA_BASELINE} 之外还有 "
+                  f"{len(extra)} 处（见上面 [schema] 行）——先确认是契约变更还是多余字段",
+                  file=sys.stderr)
+            return EXIT_HIT
         if len(missing_tables) == len(CORE_SCHEMA):
             print("[PENDING] 待 Core 合入 + 参数确认 —— 库里一张服务端表都没有"
                   "（migrations 未跑），现在扫出的「没命中」不能算证据。", file=sys.stderr)

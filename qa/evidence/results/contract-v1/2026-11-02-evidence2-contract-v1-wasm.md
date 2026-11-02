@@ -1,8 +1,8 @@
 # 证据二实测结果：密文篡改必报错（**生产导出路径**：wasm32 raw C ABI）
 
 - 日期：2026-11-02
-- 对象：`crypto/sm`，分支 `feat/endcrypto-wasm` @ `73e4b2a`（Rune 已删除 rune-v1 旧布局，
-  仓库只剩 `YSPK/1.0`；解密调用走 6 参 `ys_unpack_v2`）
+- 对象：`crypto/sm`，分支 `feat/endcrypto-wasm` @ `dbd66c4`（Rune 已删除 rune-v1 旧布局，
+  仓库只剩 `YSPK/1.0`；解密调用走 6 参 `ys_unpack_v1`，没有则回退 7 参 `ys_unpack` 传 NULL）
 - 包布局：`contract-v1`（默认）
 - 解密入口：**`yanshu_sm.wasm` 的 `ys_unpack`**（`--entry-kind production`）——
   就是 Web 将来要调的同一批导出，不是 Rust 原生 API、也不是测试替身
@@ -89,6 +89,13 @@ qa/evidence/run_evidence2_wasm.sh /tmp/rune/crypto/sm /tmp/ys-ev2-wasm
    `--error-regex 'ERR [A-Z_]+'` 兼容，但建议统一。
 3. `RUSTFLAGS=-C linker=gcc` 这类全局设置会把 wasm 目标也带偏（rust-lld 被替换成 gcc
    直接报错）。已改成按 host target 变量设置，脚本里留了注释。
+
+## 待补：Web 集成后的 C 份
+
+本份是 Gate 直接用 Rune 构建出的 `.wasm` 跑的（入口就是生产 ABI，但**不是** Web 适配层
+实际加载的那个产物）。等 Web 用同一份内核接好并通过它自己的页面链路跑通，再用
+`--entry-kind production` 复跑一份（C 份）存到同目录，才算"浏览器里那条路"的验收。
+在那之前本份定位是"生产 ABI 已验"，不是"Web 已验"。
 
 ## 边界
 

@@ -84,8 +84,9 @@ python3 qa/evidence/scan_plaintext.py \
 * 存储根目录：`YANSHU_BLOB_DIR`（默认 `./data/blobs`），布局
   `<root>/<pkg[0:2]>/<pkg>/prelude`、`…/chunks/<index>`（`server/internal/blob/disk.go`）
 * 数据库：`YANSHU_DATABASE_URL`
-* 表/列白名单来自 `server/internal/store/migrations/0001_init.sql`（7 张表）；检索前先核对，
-  缺表或出现白名单外的表/列都会在报告里点名
+* 表/列白名单来自 `server/internal/store/migrations/0001_init.sql`；检索前先核对：
+  **缺表 → PENDING（服务端没跑起来）；出现基线之外的任何表/列 → FAIL（exit 1）并打印差异**，
+  防止实现方改表后白名单静默放过。基线与 commit 记在 `CORE_SCHEMA_BASELINE` 并写进结果文件
 
 任一必需项拿不到 → 打印缺什么、以退出码 4 结束，不出假结论。
 
