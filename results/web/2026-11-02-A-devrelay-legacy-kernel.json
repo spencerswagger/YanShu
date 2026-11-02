@@ -26,5 +26,7 @@
   "bytesEqual": true,
   "downloadName": "ys-e2e-input.bin",
   "finishedAt": "2026-11-02T16:31:15.247Z",
-  "ok": true
+  "ok": true,
+  "acceptance": false,
+  "note": "dev relay + 旧布局内核：仅跨浏览器链路证据，不作验收"
 }

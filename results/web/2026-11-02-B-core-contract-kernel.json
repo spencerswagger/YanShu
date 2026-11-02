@@ -26,5 +26,7 @@
   "bytesEqual": true,
   "downloadName": "ys-e2e-input.bin",
   "finishedAt": "2026-11-02T16:31:36.663Z",
-  "ok": true
+  "ok": true,
+  "acceptance": true,
+  "note": "Core 真服务 + 契约布局内核；服务端仍 stub-allow 不验签，验签后需复跑"
 }
