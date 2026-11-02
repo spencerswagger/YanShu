@@ -50,10 +50,11 @@ export class PackSession {
 
 /** 接收会话：先喂 prelude 之外的所有块，再一次性 `ys_unpack`。 */
 export class UnpackSession {
-  constructor({ kernel, recipientPrivate, senderPublic, plaintextSize, chunkSize, prelude }) {
+  constructor({ kernel, recipientPrivate, senderPublic, senderCode, plaintextSize, chunkSize, prelude }) {
     this.kernel = kernel
     this.recipientPrivate = recipientPrivate
     this.senderPublic = senderPublic
+    this.senderCode = senderCode
     this.plaintextSize = plaintextSize
     this.chunkSize = chunkSize
     this.prelude = prelude
@@ -61,7 +62,16 @@ export class UnpackSession {
     this.slices = new Array(this.chunkCount)
     this.received = 0
     this.closed = false
-    this.meta = kernel.unpackMeta({ pack: prelude, recipientPrivate, senderPublic })
+    // 契约布局的 `ys_unpack_meta` 会校验整包长度，只给 prelude 会被判 TRUNCATED；
+    // 所以这里先试一次，失败就等收齐所有块后再解（UI 用列表里的元数据兜底）。
+    try {
+      this.meta = kernel.unpackMeta({ pack: prelude, recipientPrivate, senderPublic, senderCode })
+      this.metaFromPrelude = true
+    } catch (err) {
+      this.meta = null
+      this.metaError = err
+      this.metaFromPrelude = false
+    }
   }
 
   /** 喂入第 index 块切片（`CHUNK_CT‖TAG`）；长度先做一次本地校验，省得攒到最后才炸。 */
@@ -93,7 +103,20 @@ export class UnpackSession {
       plaintextSize: this.plaintextSize,
       chunkSize: this.chunkSize,
     })
-    const plain = this.kernel.unpack({ pack, recipientPrivate: this.recipientPrivate, senderPublic: this.senderPublic })
+    if (!this.meta) {
+      this.meta = this.kernel.unpackMeta({
+        pack,
+        recipientPrivate: this.recipientPrivate,
+        senderPublic: this.senderPublic,
+        senderCode: this.senderCode,
+      })
+    }
+    const plain = this.kernel.unpack({
+      pack,
+      recipientPrivate: this.recipientPrivate,
+      senderPublic: this.senderPublic,
+      senderCode: this.senderCode,
+    })
     if (plain.length !== Number(this.meta.size)) {
       throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '解密结果与清单大小不一致')
     }

@@ -8,6 +8,7 @@ const props = defineProps({
   registered: { type: Boolean, default: false },
   realCrypto: { type: Boolean, default: false },
   kernelMode: { type: String, default: 'loading' },
+  kernelLayout: { type: String, default: '' },
 })
 
 const display = computed(() => props.code || '——')
@@ -34,5 +35,8 @@ async function copy() {
       当前是开发桩（未加密），这个码只能用于本地流程联调。
     </p>
     <p v-else-if="!realCrypto" class="hint">端侧加密内核未就绪，码暂时不能用于真实传输。</p>
+    <p v-else-if="kernelLayout !== 'contract'" class="hint">
+      当前内核是旧布局（非契约），码与加密都真实，但结果不能作为 YSPK/1.0 验收。
+    </p>
   </section>
 </template>

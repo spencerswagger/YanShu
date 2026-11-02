@@ -19,6 +19,18 @@ import { segmenterFor, splitPack, joinPack } from './layout.js'
 import { normalizeSignature, decodeSignature } from '../lib/der.js'
 import { PackSession, UnpackSession } from './session.js'
 
+/** 文件名 → 扩展名（契约 §3.3：ASCII 小写、不含点、≤16 字节；无扩展名给空串）。 */
+function extensionOf(name) {
+  const base = String(name || '').split(/[\\/]/).pop()
+  const dot = base.lastIndexOf('.')
+  if (dot <= 0 || dot === base.length - 1) return ''
+  return base
+    .slice(dot + 1)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, 16)
+}
+
 export async function loadKernelWasm(url) {
   let buffer
   try {
@@ -71,14 +83,30 @@ export class WasmKernel {
       throw new CryptoError('CRYPTO_ABI_MISMATCH', `内核版本 0x${version.toString(16)} ≠ 0x${ABI_VERSION.toString(16)}`)
     }
     this.version = version
-    this.headerLen = typeof exports.ys_header_len === 'function' ? exports.ys_header_len() : 112
-    this.blockSize =
-      typeof exports.ys_default_block_size === 'function' ? exports.ys_default_block_size() : 1048576
+    const has = (name) => typeof exports[name] === 'function'
+    this.layoutId = has('ys_get_layout') ? exports.ys_get_layout() : undefined
+    this.headerLen = has('ys_header_len') ? exports.ys_header_len() : 112
+    // 布局名只影响 UI 标注与切分策略；密码学一律由内核决定
+    this.layout = this.layoutId === 1 || this.headerLen === 40 ? 'legacy-40' : 'contract'
+    this.layoutLabel =
+      this.layout === 'contract' ? '契约布局 YSPK/1.0（HEADER 112）' : '旧布局（HEADER 40，非契约，仅供联调）'
+    this.blockSize = has('ys_default_chunk_size')
+      ? exports.ys_default_chunk_size()
+      : has('ys_default_block_size')
+        ? exports.ys_default_block_size()
+        : 1048576
     this.segmenter = segmenterFor(this.headerLen)
-    if (this.headerLen !== 112) {
-      this.notes.push(`内核包头 ${this.headerLen} 字节（契约是 112），切分用临时策略 ${this.segmenter.name}`)
+    this.capabilities = {
+      signDer: has('ys_sm2_sign_der'),
+      packV1: has('ys_pack_v1'),
+      unpackByCode: has('ys_unpack_v1') && has('ys_unpack_meta_v1'),
+      layoutSwitch: has('ys_set_layout'),
+      errorNameV1: has('ys_error_name_v1'),
     }
-    const missingOptional = OPTIONAL_EXPORTS.filter((n) => typeof exports[n] !== 'function')
+    if (this.layout !== 'contract') {
+      this.notes.push(`内核当前是${this.layoutLabel}；契约验收前必须切回契约布局`)
+    }
+    const missingOptional = OPTIONAL_EXPORTS.filter((n) => !has(n))
     if (missingOptional.length) this.notes.push(`缺少可选导出：${missingOptional.join(', ')}`)
   }
 
@@ -258,16 +286,27 @@ export class WasmKernel {
     const priv = this.#write(privateKey)
     const msg = this.#write(message)
     const seed = this.#write(this.#seed())
-    const sig = this.alloc(64)
     try {
-      this.#check(this.exports.ys_sm2_sign(priv.ptr, seed.ptr, seed.len, msg.ptr, msg.len, sig), 'ys_sm2_sign')
-      // 内核给 r‖s；wire 上要 DER（契约 §10.4）
-      return normalizeSignature(this.#read(sig, 64))
+      if (this.capabilities.signDer) {
+        return this.#outCall(
+          'ys_sm2_sign_der',
+          (out, cap, outLen) =>
+            this.exports.ys_sm2_sign_der(priv.ptr, seed.ptr, seed.len, msg.ptr, msg.len, out, cap, outLen),
+          128,
+        )
+      }
+      const sig = this.alloc(64)
+      try {
+        this.#check(this.exports.ys_sm2_sign(priv.ptr, seed.ptr, seed.len, msg.ptr, msg.len, sig), 'ys_sm2_sign')
+        // 内核给 r‖s；wire 上要 DER（契约 §10.4）
+        return normalizeSignature(this.#read(sig, 64))
+      } finally {
+        this.free(sig, 64)
+      }
     } finally {
       priv.release()
       msg.release()
       seed.release()
-      this.free(sig, 64)
     }
   }
 
@@ -310,17 +349,65 @@ export class WasmKernel {
    * @param {Uint8Array} p.senderPrivate 32 字节
    * @param {number} [p.blockSize] 0 = 内核默认
    */
-  pack({ data, name, mime, recipientPublic, senderPrivate, blockSize = 0 }) {
+  pack({ data, name, mime, recipientPublic, senderPrivate, blockSize = 0, createdAt = Date.now(), ext }) {
     const recipient = this.#write(WasmKernel.toKernel(recipientPublic))
     const sender = this.#write(senderPrivate)
     const nameBytes = this.#write(name || 'file')
     const mimeBytes = this.#write(mime || 'application/octet-stream')
     const seed = this.#write(this.#seed())
     const payload = this.#write(data)
+    const extension = ext === undefined ? extensionOf(name) : ext
+    const extBytes = this.#write(extension)
     try {
+      const cap = data.length + 64 * 1024 + 4096
+      if (this.capabilities.packV1) {
+        // 契约清单里有 EXT 与 CREATED_AT：用 v1 导出把这两个字段写实。
+        // 注意：头文件注释说 `_v1` 也收 64 字节公钥，实现里却是 `fixed::<65>`（要求 0x04 开头），
+        // 所以这里按"先 65 后 64"试一次并记住哪种形式可用。
+        const wire = WasmKernel.toWire(recipientPublic)
+        const forms = this.packPubkeyForm === 'wire' ? [wire] : this.packPubkeyForm === 'raw' ? [WasmKernel.toKernel(recipientPublic)] : [wire, WasmKernel.toKernel(recipientPublic)]
+        let lastErr
+        for (const form of forms) {
+          const key = this.#write(form)
+          try {
+            const out = this.#outCall(
+              'ys_pack_v1',
+              (outPtr, outCap, outLen) =>
+                this.exports.ys_pack_v1(
+                  key.ptr,
+                  sender.ptr,
+                  nameBytes.ptr,
+                  nameBytes.len,
+                  mimeBytes.ptr,
+                  mimeBytes.len,
+                  extBytes.ptr,
+                  extBytes.len,
+                  BigInt(createdAt),
+                  blockSize,
+                  seed.ptr,
+                  seed.len,
+                  payload.ptr,
+                  payload.len,
+                  outPtr,
+                  outCap,
+                  outLen,
+                ),
+              cap,
+            )
+            this.packPubkeyForm = form.length === 65 ? 'wire' : 'raw'
+            return out
+          } catch (err) {
+            lastErr = err
+            if (!/BAD_ARGUMENT|KEY_UNWRAP|BAD_POINT/.test(String(err.code))) throw err
+          } finally {
+            key.release()
+          }
+        }
+        throw lastErr
+      }
       return this.#outCall(
         'ys_pack',
-        (out, cap, outLen) =>
+        (out, outCap, outLen) =>
           this.exports.ys_pack(
             recipient.ptr,
             sender.ptr,
@@ -334,12 +421,13 @@ export class WasmKernel {
             payload.ptr,
             payload.len,
             out,
-            cap,
+            outCap,
             outLen,
           ),
-        data.length + 64 * 1024 + 4096,
+        cap,
       )
     } finally {
+      extBytes.release()
       recipient.release()
       sender.release()
       nameBytes.release()
@@ -349,42 +437,95 @@ export class WasmKernel {
     }
   }
 
-  unpackMeta({ pack, recipientPrivate, senderPublic }) {
+  /**
+   * 解包入参：新内核用 `_v1`（按 4 位发送方码校验，公钥来自包内，§13 #18）；
+   * 没有 `_v1` 时退回老导出（需要发送方公钥，与包内 `SENDER_PUB` 比对）。
+   * 内核原型再变，只改这两个函数。
+   */
+  #unpackArgs({ pack, recipientPrivate, senderPublic, senderCode }) {
     const p = this.#write(pack)
     const priv = this.#write(recipientPrivate)
+    // 优先按"发送方 4 位码"校验（契约 §13 #18，公钥在包内）；
+    // 只给了公钥时走老导出（与包内 SENDER_PUB 逐字节比对，绑定更强）。
+    if (senderCode && this.capabilities.unpackByCode) {
+      const code = this.#write(new TextEncoder().encode(senderCode))
+      return {
+        mode: 'code',
+        p,
+        priv,
+        code,
+        pub: null,
+        release: () => {
+          p.release()
+          priv.release()
+          code.release()
+        },
+      }
+    }
+    if (!senderPublic) {
+      p.release()
+      priv.release()
+      throw new CryptoError('CRYPTO_BAD_ARGUMENT', '解包需要发送方 4 位码（新内核）或发送方公钥（老内核）')
+    }
     const pub = this.#write(WasmKernel.toKernel(senderPublic))
+    return {
+      mode: 'pub',
+      p,
+      priv,
+      code: null,
+      pub,
+      release: () => {
+        p.release()
+        priv.release()
+        pub.release()
+      },
+    }
+  }
+
+  unpackMeta({ pack, recipientPrivate, senderPublic, senderCode }) {
+    const args = this.#unpackArgs({ pack, recipientPrivate, senderPublic, senderCode })
     try {
-      const json = this.#outCall(
-        'ys_unpack_meta',
-        (out, cap, outLen) => this.exports.ys_unpack_meta(p.ptr, p.len, priv.ptr, pub.ptr, out, cap, outLen),
-        1024,
-      )
+      const json = args.mode === 'code'
+        ? this.#outCall(
+            'ys_unpack_meta_v1',
+            (out, cap, outLen) =>
+              this.exports.ys_unpack_meta_v1(args.p.ptr, args.p.len, args.priv.ptr, args.code.ptr, args.code.len, out, cap, outLen),
+            1024,
+          )
+        : this.#outCall(
+            'ys_unpack_meta',
+            (out, cap, outLen) =>
+              this.exports.ys_unpack_meta(args.p.ptr, args.p.len, args.priv.ptr, args.pub.ptr, out, cap, outLen),
+            1024,
+          )
       try {
         return JSON.parse(new TextDecoder().decode(json))
       } catch {
         throw new CryptoError('CRYPTO_MANIFEST_INVALID', '清单 JSON 解析失败')
       }
     } finally {
-      p.release()
-      priv.release()
-      pub.release()
+      args.release()
     }
   }
 
-  unpack({ pack, recipientPrivate, senderPublic }) {
-    const p = this.#write(pack)
-    const priv = this.#write(recipientPrivate)
-    const pub = this.#write(WasmKernel.toKernel(senderPublic))
+  unpack({ pack, recipientPrivate, senderPublic, senderCode }) {
+    const args = this.#unpackArgs({ pack, recipientPrivate, senderPublic, senderCode })
     try {
-      return this.#outCall(
-        'ys_unpack',
-        (out, cap, outLen) => this.exports.ys_unpack(p.ptr, p.len, priv.ptr, pub.ptr, out, cap, outLen),
-        pack.length + 4096,
-      )
+      return args.mode === 'code'
+        ? this.#outCall(
+            'ys_unpack_v1',
+            (out, cap, outLen) =>
+              this.exports.ys_unpack_v1(args.p.ptr, args.p.len, args.priv.ptr, args.code.ptr, args.code.len, out, cap, outLen),
+            pack.length + 4096,
+          )
+        : this.#outCall(
+            'ys_unpack',
+            (out, cap, outLen) =>
+              this.exports.ys_unpack(args.p.ptr, args.p.len, args.priv.ptr, args.pub.ptr, out, cap, outLen),
+            pack.length + 4096,
+          )
     } finally {
-      p.release()
-      priv.release()
-      pub.release()
+      args.release()
     }
   }
 
@@ -411,7 +552,15 @@ export class WasmKernel {
     return new PackSession({ kernel: this, ...state })
   }
 
-  openUnpackSession({ prelude, recipientPrivate, senderPublic, plaintextSize, chunkSize }) {
-    return new UnpackSession({ kernel: this, prelude, recipientPrivate, senderPublic, plaintextSize, chunkSize })
+  openUnpackSession({ prelude, recipientPrivate, senderPublic, senderCode, plaintextSize, chunkSize }) {
+    return new UnpackSession({
+      kernel: this,
+      prelude,
+      recipientPrivate,
+      senderPublic,
+      senderCode,
+      plaintextSize,
+      chunkSize,
+    })
   }
 }

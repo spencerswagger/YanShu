@@ -11,14 +11,16 @@
  * - 返回 0 = 成功，负数为错误码；缓冲区不足返回 -2 并写所需长度。
  * - 需要随机的接口传 `seed`（>=16 字节，每次现取，不复用）。
  *
- * 当前内核（PR #4，`feat/endcrypto-wasm`）与已冻结契约的差异（**等 Rune 返工，前端不改业务**）：
- * - 公钥：内核 64 字节（X‖Y）；契约 §9.1 / §3.4 是 65 字节未压缩点（`0x04‖X‖Y`）。
- *   适配层在边界上补/去 `0x04`（`WIRE_PUBKEY_LEN` / `KERNEL_PUBKEY_LEN`）。
- * - 签名：内核输出 `r‖s`（64 字节）；契约 §10.4 要 DER（70..72）。`lib/der.js` 在边界转换。
- * - 包头：内核 `ys_header_len()` = 40；契约是 112（含 `SENDER_PUB` 段）。段的切分算术按
- *   `ys_header_len()` 选（见 `layout.js`），返工后自动落到契约那一套。
- * - `ys_unpack*` 仍要调用方传 `sender_public`；契约 §10.3 要求公钥在包内、可离线解包。
- *   返工后这两个入参会消失——调用点只在 `wasm.js`。
+ * 布局（内核可插拔，默认契约）：
+ * - 默认 `ys_pack` / `ys_unpack` 产/解 **契约布局 YSPK/1.0**（HEADER 112、`SENDER_PUB` 入包）；`ys_header_len()` = 112。
+ * - `ys_set_layout(1)` 可切到 rune-v1 兼容布局（HEADER 40，仅历史证据用）。切分算术按 `ys_header_len()` 选（`layout.js`）。
+ *
+ * 边界转换（都在 `wasm.js`，业务无感）：
+ * - 公钥：ABI 一律 64 字节 `X‖Y`；契约 §9.1 / §3.4 的 wire 形态是 65 字节未压缩点（`0x04‖X‖Y`），
+ *   适配层补/去 `0x04`。内核内部也做同样的补/去，所以 `ys_user_code` 的口径与契约一致。
+ * - 签名：优先用 `ys_sm2_sign_der`（契约 §10.4 的 DER 70..72）；没有该导出时用 `ys_sm2_sign`（`r‖s`）在本地转 DER。
+ * - 解包：优先用 `ys_unpack_v1` / `ys_unpack_meta_v1`（按 4 位发送方码校验，§13 #18，公钥来自包内）；
+ *   没有 `_v1` 时退回 `ys_unpack`（调用方传发送方公钥，与包内 `SENDER_PUB` 比对）。
  */
 
 /** ABI 版本：0x00010000（与 `ys_version()` 比对） */
@@ -50,8 +52,20 @@ export const REQUIRED_EXPORTS = [
   'ys_unpack',
 ]
 
-/** 可选导出（有则用）。 */
-export const OPTIONAL_EXPORTS = ['ys_default_block_size', 'ys_header_len']
+/** 可选导出（有则用；缺失就走等价回退）。 */
+export const OPTIONAL_EXPORTS = [
+  'ys_default_block_size',
+  'ys_default_chunk_size',
+  'ys_header_len',
+  'ys_get_layout',
+  'ys_layout_of',
+  'ys_sm2_sign_der',
+  'ys_check_symbol',
+  'ys_pack_v1',
+  'ys_unpack_v1',
+  'ys_unpack_meta_v1',
+  'ys_error_name_v1',
+]
 
 /** 内核公钥 / 契约 wire 公钥长度。 */
 export const KERNEL_PUBKEY_LEN = 64
@@ -59,6 +73,16 @@ export const WIRE_PUBKEY_LEN = 65
 
 /** 内核错误码（头文件末尾的稳定契约）→ 错误名；`ys_error_name` 不可用时用它兜底。 */
 export const ERROR_CODES = {
+  [-24]: 'HEADER_INVALID',
+  [-25]: 'ALG_UNSUPPORTED',
+  [-26]: 'UNSIGNED',
+  [-27]: 'LENGTH_INCONSISTENT',
+  [-28]: 'CHUNK_ORDER',
+  [-29]: 'CHUNK_AUTH_FAILED',
+  [-30]: 'CHUNK_MISSING',
+  [-31]: 'MANIFEST_AUTH_FAILED',
+  [-32]: 'DIGEST_MISMATCH',
+  [-33]: 'SENDER_MISMATCH',
   [-1]: 'BAD_ARGUMENT',
   [-2]: 'BUFFER_TOO_SMALL',
   [-3]: 'RNG',
@@ -114,4 +138,14 @@ export const ERROR_NAME_TO_CODE = {
   CODE_EXHAUSTED: 'CRYPTO_RNG',
   BAD_CIPHERTEXT: 'CRYPTO_KEY_UNWRAP_FAILED',
   INTERNAL: 'CRYPTO_INTERNAL',
+  HEADER_INVALID: 'CRYPTO_HEADER_INVALID',
+  ALG_UNSUPPORTED: 'CRYPTO_ALG_UNSUPPORTED',
+  UNSIGNED: 'CRYPTO_UNSIGNED',
+  LENGTH_INCONSISTENT: 'CRYPTO_LENGTH_INCONSISTENT',
+  CHUNK_ORDER: 'CRYPTO_CHUNK_ORDER',
+  CHUNK_AUTH_FAILED: 'CRYPTO_CHUNK_AUTH_FAILED',
+  CHUNK_MISSING: 'CRYPTO_CHUNK_MISSING',
+  MANIFEST_AUTH_FAILED: 'CRYPTO_MANIFEST_AUTH_FAILED',
+  DIGEST_MISMATCH: 'CRYPTO_DIGEST_MISMATCH',
+  SENDER_MISMATCH: 'CRYPTO_SENDER_MISMATCH',
 }

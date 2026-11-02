@@ -40,17 +40,20 @@ export async function receiveTransfer({ api, kernel, session, transferId, sender
   const prelude = await api.getPrelude(transferId)
   if (!prelude.downloadId) throw new ApiError({ code: 'DOWNLOAD_NOT_STARTED', status: 409, message: 'no download id' })
 
-  // 内核当前把发送方公钥当入参（契约 §10.3 要求公钥在包内）：先从码查，再验签
-  const pub = await senderPublic(meta.sender_code)
+  // 新内核按 4 位发送方码校验（公钥来自包内，§13 #18）；老内核才需要另取发送方公钥
+  const byCode = kernel.capabilities?.unpackByCode
+  const pub = byCode ? null : await senderPublic(meta.sender_code)
   const unpack = kernel.openUnpackSession({
     prelude: prelude.bytes,
     recipientPrivate: session.privateKey,
     senderPublic: pub,
+    senderCode: byCode ? meta.sender_code : null,
     plaintextSize: Number(meta.plaintext_size),
     chunkSize: Number(meta.chunk_size),
   })
+  // 契约布局下 prelude 单独解不出清单（内核校验整包长度），此时先信 API 元数据，收齐后再核
   const manifest = unpack.meta
-  if (meta.plaintext_size !== undefined && Number(manifest.size) !== Number(meta.plaintext_size)) {
+  if (manifest && meta.plaintext_size !== undefined && Number(manifest.size) !== Number(meta.plaintext_size)) {
     throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '清单大小与元数据不一致')
   }
 
@@ -70,7 +73,7 @@ export async function receiveTransfer({ api, kernel, session, transferId, sender
       { concurrency: config.uploadConcurrency, signal },
     )
 
-    report({ phase: 'decrypting', done: 0, total: Number(manifest.size), message: '端侧验签并解密' })
+    report({ phase: 'decrypting', done: 0, total: Number(manifest?.size ?? meta.plaintext_size), message: '端侧验签并解密' })
     const finished = unpack.finish()
     plain = finished.plain
     if (Number(finished.meta.size) !== plain.length) {
@@ -80,10 +83,11 @@ export async function receiveTransfer({ api, kernel, session, transferId, sender
     unpack.close()
   }
 
-  const blob = new Blob([plain], { type: manifest.mime || 'application/octet-stream' })
+  const finalMeta = unpack.meta || {}
+  const blob = new Blob([plain], { type: finalMeta.mime || 'application/octet-stream' })
   if (save) {
     report({ phase: 'saving', done: plain.length, total: plain.length, message: '落盘' })
-    save(blob, safeFileName(manifest.name))
+    save(blob, safeFileName(finalMeta.name))
   }
   if (ack) {
     report({ phase: 'acking', done: plain.length, total: plain.length, message: '确认取件（服务端随即删除密文）' })
@@ -93,8 +97,8 @@ export async function receiveTransfer({ api, kernel, session, transferId, sender
   report({ phase: 'done', done: plain.length, total: plain.length, message: '已取回' })
   return {
     transferId,
-    name: manifest.name,
-    mime: manifest.mime,
+    name: finalMeta.name,
+    mime: finalMeta.mime,
     size: plain.length,
     chunkCount,
     blob,

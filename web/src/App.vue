@@ -42,12 +42,24 @@ const session = reactive({
 })
 
 const realCrypto = computed(() => Boolean(kernel.value?.isRealCrypto))
+const kernelLayout = computed(() => kernel.value?.layout || '')
+/** 标签必须如实区分：契约布局 / 旧布局 / 桩 / 未就绪，别让人把旧布局当契约验收。 */
 const kernelLabel = computed(() => {
-  if (kernelMode.value === 'wasm') return '真内核（YSPK/1.0）'
+  if (kernelMode.value === 'wasm') {
+    return kernelLayout.value === 'contract'
+      ? '真实加密 · 契约布局（YSPK/1.0）'
+      : '真实加密 · 旧布局内核（待对齐契约）'
+  }
   if (kernelMode.value === 'stub-fake') return '开发桩（未加密）'
   if (kernelMode.value === 'unavailable') return '内核未就绪'
   return '加载中'
 })
+const layoutWarning = computed(
+  () =>
+    kernelMode.value === 'wasm' &&
+    kernelLayout.value !== 'contract' &&
+    '当前内核是契约返工前的旧布局（HEADER 40 / 公钥 64 字节 / r‖s 签名）：加密是真的，但结果不能作为 YSPK/1.0 契约的验收。',
+)
 
 function syncSession() {
   const s = identityManager.value?.session
@@ -200,6 +212,8 @@ async function doReceive({ transferId, onProgress }) {
     </div>
   </div>
 
+  <div v-if="layoutWarning" class="banner warn">{{ layoutWarning }}</div>
+
   <div v-if="kernelMode === 'stub-fake'" class="banner warn">
     开发桩模式：<strong>数据没有加密</strong>（可逆异或 + 明文密钥），只用于打通 UI 与传输流程，
     禁止传真实文件。生产构建里这个模式会被拒绝。
@@ -221,6 +235,7 @@ async function doReceive({ transferId, onProgress }) {
     :registered="session.registered"
     :real-crypto="realCrypto"
     :kernel-mode="kernelMode"
+    :kernel-layout="kernelLayout"
   />
 
   <div class="tabs" role="tablist">

@@ -50,10 +50,11 @@ async function roundTrip(kernel, size = 500) {
     plaintextSize: data.length,
     chunkSize: 64,
   })
-  assert.equal(unpack.meta.name, 'session.bin')
+  if (unpack.meta) assert.equal(unpack.meta.name, 'session.bin')
   // 乱序喂
   for (const i of [...Array(unpack.chunkCount).keys()].reverse()) unpack.feed(i, restored.slices[i])
   const { plain, meta } = unpack.finish()
+  assert.equal(meta.name, 'session.bin')
   assert.equal(meta.size, data.length)
   assert.deepEqual([...plain], [...data], '会话收到的明文必须与源文件一致')
   unpack.close()

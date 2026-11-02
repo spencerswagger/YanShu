@@ -88,9 +88,11 @@ test('真内核：打包 → 切分 → 拼回 → 解包，明文一致；改�
   assert.equal(chunkCount, Math.ceil(data.length / kernel.blockSize))
   assert.equal(preludeLen, pack.length - (kernel.segmenter.recordHeaderLen + 16) * chunkCount - data.length)
 
-  const meta = kernel.unpackMeta({ pack: prelude, recipientPrivate: bob.privateKey, senderPublic: alice.publicKey })
+  // 契约布局的内核会校验整包长度，所以这里用完整包解清单
+  const meta = kernel.unpackMeta({ pack, recipientPrivate: bob.privateKey, senderPublic: alice.publicKey })
   assert.equal(meta.size, data.length)
-  assert.equal(meta.block_count, chunkCount)
+  // 内核 JSON 用契约命名（chunk_count）；老版本叫 block_count
+  assert.equal(meta.chunk_count ?? meta.block_count, chunkCount)
   assert.equal(meta.name, '真包.bin')
 
   const restored = kernel.joinPack({ prelude, slices, plaintextSize: data.length, chunkSize: kernel.blockSize })

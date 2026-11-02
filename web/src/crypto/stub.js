@@ -97,8 +97,11 @@ export class DevStubKernel {
     this.isRealCrypto = false
     this.version = 0x00010000
     this.headerLen = 112
+    this.layout = 'contract'
+    this.layoutLabel = '开发桩（无布局语义）'
     this.blockSize = 1048576
     this.segmenter = segmenterFor(112)
+    this.capabilities = { signDer: false, packV1: false, unpackByCode: false, layoutSwitch: false }
     this.notes = ['开发桩：可逆异或，不是加密']
   }
 
@@ -225,7 +228,8 @@ export class DevStubKernel {
     }
   }
 
-  unpack({ pack, recipientPrivate, senderPublic }) {
+  unpack({ pack, recipientPrivate, senderPublic, senderCode }) {
+    void senderCode
     const header = this.#parsePrelude(pack)
     const me = this.publicKeyFromPrivate(recipientPrivate)
     if (me.join(',') !== header.recipient_pub.join(',')) {
@@ -272,7 +276,15 @@ export class DevStubKernel {
     return new PackSession({ kernel: this, ...state })
   }
 
-  openUnpackSession({ prelude, recipientPrivate, senderPublic, plaintextSize, chunkSize }) {
-    return new UnpackSession({ kernel: this, prelude, recipientPrivate, senderPublic, plaintextSize, chunkSize })
+  openUnpackSession({ prelude, recipientPrivate, senderPublic, senderCode, plaintextSize, chunkSize }) {
+    return new UnpackSession({
+      kernel: this,
+      prelude,
+      recipientPrivate,
+      senderPublic,
+      senderCode,
+      plaintextSize,
+      chunkSize,
+    })
   }
 }
