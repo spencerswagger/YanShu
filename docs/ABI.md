@@ -126,6 +126,31 @@ int32_t ys_sm2_verify_der(const uint8_t *public_key /* 64 = X‖Y */,
   `ys_version()=0x00010000`，`ys_sm2_verify_der` 对上述向量 4/4 结果符合预期
   （正常 1；签名改字节/消息改/公钥不符均 0）。Core 可直接用同一份 `.wasm`。
 
+## 3.45 验签口径（前端 / 测试 / 服务端唯一依据）
+
+- **userID**：固定国标默认串 **`1234567812345678`**（16 字节 ASCII，`ENTL = 0x0080`）。
+  不用空串、不用业务自定义串；`ys_sm2_sign` / `ys_sm2_verify` / `ys_sm2_sign_der` /
+  `ys_sm2_verify_der` 全部写死这一个。
+- **ZA**：**参与**，算法为
+  `ZA = SM3( ENTL(2 字节，= 128) ‖ ID(16) ‖ a(32) ‖ b(32) ‖ Gx(32) ‖ Gy(32) ‖ Px(32) ‖ Py(32) )`
+  （全部大端；`a/b/Gx/Gy` 是 SM2 推荐曲线常量，`P` 是签名者公钥）。
+- **签名摘要**：`e = SM3( ZA ‖ M )`，其中 **`M` 就是 `SIG_INPUT` 的原始字节**。
+  调用方**不要把 `SIG_INPUT` 先算一遍 SM3 再传**——`ys_sm2_sign/verify` 内部做
+  `SM3(ZA‖msg)`；传进去的 `msg` 必须是 `SIG_INPUT` 原文（服务端同理）。
+- **`SIG_INPUT` 构造**（契约 `docs/API.md §1.3`）：
+  `"YSAUTH1"(7) ‖ PURPOSE(1) ‖ NONCE(32) ‖ <用途字段串>`，整数一律大端；
+  字段串第一位都是 `CODE(4 ASCII)`（`TRANSFER_ACK` 用接收方码），昵称带 `u16be` 长度前缀。
+- **服务端顺序**：先验签（`ys_sm2_verify_der`），再把 `X-YS-Code` 与 `SIG_INPUT` 里的
+  `CODE(4)` 逐字节比对（不符 → `AUTH_CODE_MISMATCH`）；密码学失败 → `CRYPTO_SIGNATURE_INVALID`。
+- **供给包**：`vectors/sm2-verify-vectors.json` —— 7 种 `PURPOSE` 各一条正例（含逐字段
+  拆解与完整 hex）+ 8 条负例，共 15 条：其中 5 条密码学失败（消息改字节 / 签名改字节 /
+  换公钥 / 长度前缀写错 / userID 不同）、3 条服务端策略拒绝（CODE 与请求头不一致 →
+  `AUTH_CODE_MISMATCH`、空输入、超长输入 → `BAD_INPUT`）。每条给 `za`、`digest_e`、
+  `sig_der`、`expect_verify`（密码学）与 `expect_server`（服务端策略）。
+- **GmSSL 交叉验证用的 ID 与上面一致**（默认 `1234567812345678`）：oracle 里
+  `sm2_compute_z(..., SM2_DEFAULT_ID, ...)`，所以"GmSSL 签 ↔ 我验"与"我签 ↔ GmSSL 验"
+  双向逐字节成立。
+
 ## 3.5 版本判定（前端做标签用）
 
 `ys_version()` 返回的是 **`uint32_t` 编号 `0x00010000`，不是字符串**。
