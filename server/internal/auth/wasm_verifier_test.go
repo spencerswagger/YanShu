@@ -171,8 +171,9 @@ func TestVerifyVectorsServerPolicy(t *testing.T) {
 				t.Fatalf("%s: want ErrSignature, got %v", vec.Name, err)
 			}
 		case "BAD_INPUT":
-			if !errors.Is(err, ErrBadInput) {
-				t.Fatalf("%s: want ErrBadInput, got %v", vec.Name, err)
+			// oversized_input（>512）现在归 SIG_INPUT_TOO_LONG；其余仍是 BAD_INPUT。
+			if !errors.Is(err, ErrBadInput) && !errors.Is(err, ErrSIGInputTooLong) {
+				t.Fatalf("%s: want ErrBadInput/ErrSIGInputTooLong, got %v", vec.Name, err)
 			}
 		default:
 			t.Fatalf("%s: unknown expect_server %q", vec.Name, vec.ExpectServer)
