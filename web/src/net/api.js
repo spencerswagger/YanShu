@@ -9,14 +9,14 @@ import { encode as b64uEncode, decode as b64uDecode } from '../lib/base64url.js'
 
 export function createApi({ client, kernel, session }) {
   /** 每次调用都取当前身份（撞码重生成后 session 会换） */
-  const who = () => ({ identity: session.identity, code: session.code })
+  const who = () => ({ privateKey: session.privateKey, publicKey: session.publicKey, code: session.code })
 
   async function signed(purpose, buildFields, extraHeaders = {}) {
     const me = who()
     const { headers } = await authHeaders({
       client,
       kernel,
-      identity: me.identity,
+      privateKey: me.privateKey,
       code: me.code,
       purpose,
       fieldBytes: buildFields(me),
@@ -34,7 +34,7 @@ export function createApi({ client, kernel, session }) {
     // ------------------------------------------------------------ 码
     register: async ({ nickname }) => {
       const me = who()
-      const publicKey = kernel.identityPublic(me.identity)
+      const publicKey = me.publicKey
       const headers = await signed(
         'REGISTER',
         (s) => fields.REGISTER({ code: s.code, publicKey }),

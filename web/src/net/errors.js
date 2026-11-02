@@ -35,6 +35,8 @@ const HTTP = {
   AUTH_SIGNATURE_INVALID: { title: '签名不被接受', hint: '挑战可能已作废，重新发起一次。', retry: true },
   AUTH_CHALLENGE_INVALID: { title: '挑战过期或已用', hint: '重新申请挑战后再试一次。', retry: true },
   NETWORK_ERROR: { title: '网络不可达', hint: '检查网络后重试。', retry: true },
+  FILE_TOO_LARGE: { title: '文件太大', hint: '端侧内核当前是整包接口，请等流式接口（已排期）或先拆分文件。' },
+  RESUME_UNAVAILABLE: { title: '无法续传', hint: '本机没有保留密文包（超过 8 MiB 或已清理），请重新发送。' },
 }
 
 export function describeError(err) {

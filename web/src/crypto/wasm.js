@@ -1,13 +1,22 @@
 /**
- * WASM 加载器与内存桥（WebAssembly.instantiate + 线性内存 alloc/free + 输入输出拷贝）。
+ * WASM 桥：`WebAssembly.instantiate(bytes, {})`（零 import）+ 线性内存 alloc/free + 收发拷贝。
  *
- * 只在主线程/Worker 里被 `crypto/index.js` 调一次；UI 不直接碰这里。
- * 内存纪律：每次调用都 `ys_alloc` → 拷贝 → 调 → 拷贝出 → `ys_free`，长度必须一致；
- * 任何一次 `memory.grow` 都会让旧 `ArrayBuffer` 失效，所以视图一律现取（见 `#mem()`）。
+ * 只绑定 `crypto/include/yanshu_sm.h` 里的导出（见 `abi.js` 的清单），不自己发明函数。
+ * 与业务之间的薄封装也在这里：公钥 64↔65、签名 r‖s→DER、整包进出的 pack/unpack。
+ * 内核返工（包头 112、公钥入包、`ys_unpack` 去掉 sender_public）时，只改本文件。
  */
-import { ABI_VERSION, REQUIRED_EXPORTS, PACK_INFO_LEN, ERROR_CODE_MAP, ERROR_NAME_MAP } from './abi.js'
+import {
+  ABI_VERSION,
+  REQUIRED_EXPORTS,
+  OPTIONAL_EXPORTS,
+  KERNEL_PUBKEY_LEN,
+  WIRE_PUBKEY_LEN,
+  ERROR_CODES,
+  ERROR_NAME_TO_CODE,
+} from './abi.js'
 import { CryptoError } from './errors.js'
-import { utf8 } from '../lib/bytes.js'
+import { segmenterFor, splitPack, joinPack } from './layout.js'
+import { normalizeSignature, decodeSignature } from '../lib/der.js'
 
 export async function loadKernelWasm(url) {
   let buffer
@@ -16,11 +25,26 @@ export async function loadKernelWasm(url) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     buffer = await res.arrayBuffer()
   } catch (err) {
-    throw new CryptoError('CRYPTO_NOT_READY', `未找到端侧内核产物（${url}）：${err.message}`)
+    throw new CryptoError('CRYPTO_NOT_READY', `没有加载到端侧内核（${url}）：${err.message}`)
+  }
+  return instantiateKernel(buffer)
+}
+
+/** 直接吃字节（Node 测试 / 内联注入用）。 */
+export async function instantiateKernel(bytes) {
+  let module
+  try {
+    module = new WebAssembly.Module(bytes)
+  } catch (err) {
+    throw new CryptoError('CRYPTO_NOT_READY', `wasm 编译失败：${err.message}`)
+  }
+  const imports = WebAssembly.Module.imports(module)
+  if (imports.length !== 0) {
+    throw new CryptoError('CRYPTO_ABI_MISMATCH', `内核应当 0 import，实际 ${imports.length} 个`)
   }
   let instance
   try {
-    ;({ instance } = await WebAssembly.instantiate(buffer, {}))
+    instance = new WebAssembly.Instance(module, {})
   } catch (err) {
     throw new CryptoError('CRYPTO_NOT_READY', `wasm 实例化失败：${err.message}`)
   }
@@ -28,30 +52,36 @@ export async function loadKernelWasm(url) {
 }
 
 export class WasmKernel {
-  /** @param {WebAssembly.Exports} exports */
   constructor(exports) {
     this.mode = 'wasm'
     this.isRealCrypto = true
     this.exports = exports
+    this.segmenter = null
+    this.notes = []
 
     const missing = REQUIRED_EXPORTS.filter((name) => typeof exports[name] !== 'function')
-    if (missing.length) {
-      throw new CryptoError('CRYPTO_ABI_MISMATCH', `缺少导出：${missing.join(', ')}`)
-    }
+    if (missing.length) throw new CryptoError('CRYPTO_ABI_MISMATCH', `缺少导出：${missing.join(', ')}`)
     if (!(exports.memory instanceof WebAssembly.Memory)) {
       throw new CryptoError('CRYPTO_ABI_MISMATCH', '缺少 memory 导出')
     }
-    const version = exports.ys_abi_version()
+
+    const version = exports.ys_version()
     if (version !== ABI_VERSION) {
-      throw new CryptoError(
-        'CRYPTO_ABI_MISMATCH',
-        `ABI 版本 0x${version.toString(16)} ≠ 0x${ABI_VERSION.toString(16)}`,
-      )
+      throw new CryptoError('CRYPTO_ABI_MISMATCH', `内核版本 0x${version.toString(16)} ≠ 0x${ABI_VERSION.toString(16)}`)
     }
-    this.version = typeof exports.ys_version === 'function' ? exports.ys_version() : version
+    this.version = version
+    this.headerLen = typeof exports.ys_header_len === 'function' ? exports.ys_header_len() : 112
+    this.blockSize =
+      typeof exports.ys_default_block_size === 'function' ? exports.ys_default_block_size() : 1048576
+    this.segmenter = segmenterFor(this.headerLen)
+    if (this.headerLen !== 112) {
+      this.notes.push(`内核包头 ${this.headerLen} 字节（契约是 112），切分用临时策略 ${this.segmenter.name}`)
+    }
+    const missingOptional = OPTIONAL_EXPORTS.filter((n) => typeof exports[n] !== 'function')
+    if (missingOptional.length) this.notes.push(`缺少可选导出：${missingOptional.join(', ')}`)
   }
 
-  // ---------------------------------------------------------------- 内存桥
+  // ---------------------------------------------------------------- 内存
 
   #mem() {
     return new Uint8Array(this.exports.memory.buffer)
@@ -62,8 +92,9 @@ export class WasmKernel {
   }
 
   alloc(len) {
+    if (len === 0) return 0
     const ptr = this.exports.ys_alloc(len)
-    if (!ptr) throw new CryptoError('CRYPTO_BUFFER_TOO_SMALL', `alloc(${len}) 失败`)
+    if (!ptr) throw new CryptoError('CRYPTO_BUFFER_TOO_SMALL', `ys_alloc(${len}) 失败`)
     return ptr
   }
 
@@ -71,9 +102,13 @@ export class WasmKernel {
     if (ptr) this.exports.ys_free(ptr, len)
   }
 
-  /** 把 JS 字节写进线性内存，返回 {ptr, len, release()}。 */
-  #write(bytes) {
-    const src = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+  #write(value) {
+    const src =
+      typeof value === 'string'
+        ? new TextEncoder().encode(value)
+        : value instanceof Uint8Array
+          ? value
+          : new Uint8Array(value)
     if (src.length === 0) return { ptr: 0, len: 0, release: () => {} }
     const ptr = this.alloc(src.length)
     this.#mem().set(src, ptr)
@@ -84,15 +119,6 @@ export class WasmKernel {
     return this.#mem().slice(ptr, ptr + len)
   }
 
-  /** 统一错误码转换：负数 → CRYPTO_*；能拿到内核名字就用名字。 */
-  #check(rc, what) {
-    if (rc === 0) return
-    if (rc > 0) return // ys_verify 之类：1 = 通过
-    const name = this.#errorName(rc)
-    const code = (name && ERROR_NAME_MAP[name]) || ERROR_CODE_MAP[-rc] || 'CRYPTO_INTERNAL'
-    throw new CryptoError(code, `${what || '调用'} 返回 ${rc}${name ? `/${name}` : ''}`)
-  }
-
   #errorName(rc) {
     if (typeof this.exports.ys_error_name !== 'function') return null
     const cap = 64
@@ -101,8 +127,7 @@ export class WasmKernel {
     try {
       const r = this.exports.ys_error_name(rc, out, cap, outLen)
       if (r !== 0) return null
-      const len = this.#u32(outLen)
-      return new TextDecoder().decode(this.#read(out, len))
+      return new TextDecoder().decode(this.#read(out, this.#u32(outLen)))
     } catch {
       return null
     } finally {
@@ -111,16 +136,24 @@ export class WasmKernel {
     }
   }
 
-  /** 通用"输出缓冲区"调用：cap 不够（-2）时按内核回报的所需长度重试一次。 */
+  /** 负数 → CRYPTO_*；名字优先走 `ys_error_name`，取不到再按码表。 */
+  #check(rc, what) {
+    if (rc === 0) return
+    const name = this.#errorName(rc) || ERROR_CODES[rc] || `RC_${rc}`
+    const code = ERROR_NAME_TO_CODE[name] || 'CRYPTO_INTERNAL'
+    throw new CryptoError(code, `${what} → ${name}(${rc})`)
+  }
+
+  /** 通用"输出缓冲区"调用：-2 时按内核回报的所需长度重试一次。 */
   #outCall(what, call, initialCap = 4096) {
     let cap = initialCap
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       const out = this.alloc(cap)
       const outLenPtr = this.alloc(4)
       try {
         const rc = call(out, cap, outLenPtr)
         const need = this.#u32(outLenPtr)
-        if (rc === -2 && attempt === 0 && need > cap) {
+        if (rc === -2 && need > cap) {
           cap = need
           continue
         }
@@ -140,101 +173,76 @@ export class WasmKernel {
     return seed
   }
 
-  // ---------------------------------------------------------------- 身份 / 码
+  // ---------------------------------------------------------------- 公钥（64 ↔ 65）
+
+  /** 内核 64 字节 X‖Y → wire 65 字节未压缩点。 */
+  static toWire(publicKey64) {
+    if (publicKey64.length === WIRE_PUBKEY_LEN) return publicKey64
+    if (publicKey64.length !== KERNEL_PUBKEY_LEN) {
+      throw new CryptoError('CRYPTO_BAD_ARGUMENT', `公钥长度 ${publicKey64.length}`)
+    }
+    const out = new Uint8Array(WIRE_PUBKEY_LEN)
+    out[0] = 0x04
+    out.set(publicKey64, 1)
+    return out
+  }
+
+  /** wire 65 字节 → 内核 64 字节；也接受已经是 64 字节的输入（服务端存的就是 wire 形态）。 */
+  static toKernel(publicKey) {
+    if (publicKey.length === KERNEL_PUBKEY_LEN) return publicKey
+    if (publicKey.length !== WIRE_PUBKEY_LEN || publicKey[0] !== 0x04) {
+      throw new CryptoError('CRYPTO_BAD_ARGUMENT', `wire 公钥必须是 65 字节且 0x04 开头`)
+    }
+    return publicKey.subarray(1)
+  }
+
+  // ---------------------------------------------------------------- 身份 / 码 / 签名
 
   generateIdentity() {
-    return this.#outCall('ys_identity_generate', (out, cap, outLen) => {
-      const seed = this.#write(this.#seed())
-      try {
-        return this.exports.ys_identity_generate(seed.ptr, seed.len, out, cap, outLen)
-      } finally {
-        seed.release()
-      }
-    })
-  }
-
-  identityPublic(blob) {
-    return this.#outCall('ys_identity_public', (out, cap, outLen) => {
-      const b = this.#write(blob)
-      try {
-        return this.exports.ys_identity_public(b.ptr, b.len, out, cap, outLen)
-      } finally {
-        b.release()
-      }
-    }, 128)
-  }
-
-  identityCode(blob) {
-    const out = this.alloc(5)
-    const b = this.#write(blob)
+    const seed = this.#seed()
+    const priv = this.alloc(32)
+    const pub = this.alloc(KERNEL_PUBKEY_LEN)
+    const s = this.#write(seed)
     try {
-      this.#check(this.exports.ys_identity_code(b.ptr, b.len, out), 'ys_identity_code')
-      const raw = new TextDecoder().decode(this.#read(out, 5))
-      return { code: raw.slice(0, 4), check: raw.slice(4, 5) }
-    } finally {
-      b.release()
-      this.free(out, 5)
-    }
-  }
-
-  sign(blob, message) {
-    return this.#outCall('ys_sign', (out, cap, outLen) => {
-      const b = this.#write(blob)
-      const m = this.#write(message)
-      const seed = this.#write(this.#seed())
-      try {
-        return this.exports.ys_sign(b.ptr, b.len, seed.ptr, seed.len, m.ptr, m.len, out, cap, outLen)
-      } finally {
-        b.release()
-        m.release()
-        seed.release()
+      this.#check(this.exports.ys_sm2_keygen(s.ptr, s.len, priv, pub), 'ys_sm2_keygen')
+      return {
+        privateKey: this.#read(priv, 32),
+        publicKey: WasmKernel.toWire(this.#read(pub, KERNEL_PUBKEY_LEN)),
       }
-    }, 128)
-  }
-
-  verify(publicKey, message, signature) {
-    const p = this.#write(publicKey)
-    const m = this.#write(message)
-    const s = this.#write(signature)
-    try {
-      const rc = this.exports.ys_verify(p.ptr, m.ptr, m.len, s.ptr, s.len)
-      if (rc < 0) this.#check(rc, 'ys_verify')
-      return rc === 1
     } finally {
-      p.release()
-      m.release()
       s.release()
+      this.free(priv, 32)
+      this.free(pub, KERNEL_PUBKEY_LEN)
     }
   }
 
-  sm3(data) {
-    const out = this.alloc(32)
-    const d = this.#write(data)
+  publicKeyFromPrivate(privateKey) {
+    const priv = this.#write(privateKey)
+    const pub = this.alloc(KERNEL_PUBKEY_LEN)
     try {
-      this.#check(this.exports.ys_sm3(d.ptr, d.len, out), 'ys_sm3')
-      return this.#read(out, 32)
+      this.#check(this.exports.ys_sm2_pubkey(priv.ptr, pub), 'ys_sm2_pubkey')
+      return WasmKernel.toWire(this.#read(pub, KERNEL_PUBKEY_LEN))
     } finally {
-      d.release()
-      this.free(out, 32)
+      priv.release()
+      this.free(pub, KERNEL_PUBKEY_LEN)
     }
   }
 
-  codeOfPublic(publicKey) {
-    const out = this.alloc(5)
-    const p = this.#write(publicKey)
+  codeOf(publicKey) {
+    const key = this.#write(WasmKernel.toKernel(publicKey))
+    const out = this.alloc(4)
     try {
-      this.#check(this.exports.ys_code_of_public(p.ptr, out), 'ys_code_of_public')
-      const raw = new TextDecoder().decode(this.#read(out, 5))
-      return { code: raw.slice(0, 4), check: raw.slice(4, 5) }
+      this.#check(this.exports.ys_user_code(key.ptr, out), 'ys_user_code')
+      return new TextDecoder().decode(this.#read(out, 4))
     } finally {
-      p.release()
-      this.free(out, 5)
+      key.release()
+      this.free(out, 4)
     }
   }
 
   normalizeCode(text) {
+    const input = this.#write(String(text || ''))
     const out = this.alloc(4)
-    const input = this.#write(utf8.encode(text))
     try {
       const rc = this.exports.ys_normalize_code(input.ptr, input.len, out)
       if (rc !== 0) return null
@@ -245,162 +253,147 @@ export class WasmKernel {
     }
   }
 
-  // ---------------------------------------------------------------- 打包（发送方）
-
-  packOpen({ identity, recipientPublic, name, mime, plaintextSize, chunkSize, createdAt }) {
-    const sender = this.#write(identity)
-    const recipient = this.#write(recipientPublic)
-    const nameBytes = this.#write(utf8.encode(name))
-    const mimeBytes = this.#write(utf8.encode(mime))
+  sign(privateKey, message) {
+    const priv = this.#write(privateKey)
+    const msg = this.#write(message)
     const seed = this.#write(this.#seed())
-    const handlePtr = this.alloc(4)
+    const sig = this.alloc(64)
     try {
-      const rc = this.exports.ys_pack_open(
-        sender.ptr,
-        sender.len,
-        recipient.ptr,
-        nameBytes.ptr,
-        nameBytes.len,
-        mimeBytes.ptr,
-        mimeBytes.len,
-        Math.floor(plaintextSize / 0x100000000),
-        plaintextSize >>> 0,
-        chunkSize,
-        Math.floor(createdAt / 0x100000000),
-        createdAt >>> 0,
-        seed.ptr,
-        seed.len,
-        handlePtr,
-      )
-      this.#check(rc, 'ys_pack_open')
-      return this.#u32(handlePtr)
+      this.#check(this.exports.ys_sm2_sign(priv.ptr, seed.ptr, seed.len, msg.ptr, msg.len, sig), 'ys_sm2_sign')
+      // 内核给 r‖s；wire 上要 DER（契约 §10.4）
+      return normalizeSignature(this.#read(sig, 64))
     } finally {
-      sender.release()
+      priv.release()
+      msg.release()
+      seed.release()
+      this.free(sig, 64)
+    }
+  }
+
+  verify(publicKey, message, signature) {
+    const pub = this.#write(WasmKernel.toKernel(publicKey))
+    const msg = this.#write(message)
+    const raw = decodeSignature(signature) // DER → r‖s
+    const sig = this.#write(raw)
+    try {
+      const rc = this.exports.ys_sm2_verify(pub.ptr, msg.ptr, msg.len, sig.ptr)
+      if (rc < 0) this.#check(rc, 'ys_sm2_verify')
+      return rc === 1
+    } finally {
+      pub.release()
+      msg.release()
+      sig.release()
+    }
+  }
+
+  sm3(data) {
+    const input = this.#write(data)
+    const out = this.alloc(32)
+    try {
+      this.#check(this.exports.ys_sm3(input.ptr, input.len, out), 'ys_sm3')
+      return this.#read(out, 32)
+    } finally {
+      input.release()
+      this.free(out, 32)
+    }
+  }
+
+  // ---------------------------------------------------------------- 包（整包进出）
+
+  /**
+   * @param {object} p
+   * @param {Uint8Array} p.data 明文
+   * @param {string} p.name 文件名（只 basename）
+   * @param {string} p.mime
+   * @param {Uint8Array} p.recipientPublic 65 字节 wire 公钥
+   * @param {Uint8Array} p.senderPrivate 32 字节
+   * @param {number} [p.blockSize] 0 = 内核默认
+   */
+  pack({ data, name, mime, recipientPublic, senderPrivate, blockSize = 0 }) {
+    const recipient = this.#write(WasmKernel.toKernel(recipientPublic))
+    const sender = this.#write(senderPrivate)
+    const nameBytes = this.#write(name || 'file')
+    const mimeBytes = this.#write(mime || 'application/octet-stream')
+    const seed = this.#write(this.#seed())
+    const payload = this.#write(data)
+    try {
+      return this.#outCall(
+        'ys_pack',
+        (out, cap, outLen) =>
+          this.exports.ys_pack(
+            recipient.ptr,
+            sender.ptr,
+            nameBytes.ptr,
+            nameBytes.len,
+            mimeBytes.ptr,
+            mimeBytes.len,
+            blockSize,
+            seed.ptr,
+            seed.len,
+            payload.ptr,
+            payload.len,
+            out,
+            cap,
+            outLen,
+          ),
+        data.length + 64 * 1024 + 4096,
+      )
+    } finally {
       recipient.release()
+      sender.release()
       nameBytes.release()
       mimeBytes.release()
       seed.release()
-      this.free(handlePtr, 4)
+      payload.release()
     }
   }
 
-  packDigest(handle, index, plain) {
-    const d = this.#write(plain)
+  unpackMeta({ pack, recipientPrivate, senderPublic }) {
+    const p = this.#write(pack)
+    const priv = this.#write(recipientPrivate)
+    const pub = this.#write(WasmKernel.toKernel(senderPublic))
     try {
-      this.#check(this.exports.ys_pack_digest(handle, index, d.ptr, d.len), 'ys_pack_digest')
-    } finally {
-      d.release()
-    }
-  }
-
-  packSeal(handle) {
-    return this.#outCall('ys_pack_seal', (out, cap, outLen) => {
-      return this.exports.ys_pack_seal(handle, out, cap, outLen)
-    }, 1024)
-  }
-
-  packChunk(handle, index, plain) {
-    return this.#outCall(
-      'ys_pack_chunk',
-      (out, cap, outLen) => {
-        const d = this.#write(plain)
-        try {
-          return this.exports.ys_pack_chunk(handle, index, d.ptr, d.len, out, cap, outLen)
-        } finally {
-          d.release()
-        }
-      },
-      plain.length + 64,
-    )
-  }
-
-  packInfo(handle) {
-    const out = this.alloc(PACK_INFO_LEN)
-    try {
-      this.#check(this.exports.ys_pack_info(handle, out), 'ys_pack_info')
-      const view = new DataView(this.exports.memory.buffer)
-      return {
-        chunkSize: view.getUint32(out, false),
-        chunkCount: view.getUint32(out + 4, false),
-        plaintextSize: Number(view.getBigUint64(out + 8, false)),
-        preludeLen: view.getUint32(out + 16, false),
-        state: view.getUint32(out + 20, false),
-      }
-    } finally {
-      this.free(out, PACK_INFO_LEN)
-    }
-  }
-
-  packExport(handle) {
-    return this.#outCall('ys_pack_export', (out, cap, outLen) => {
-      return this.exports.ys_pack_export(handle, out, cap, outLen)
-    }, 1024)
-  }
-
-  packImport(blob) {
-    const b = this.#write(blob)
-    const handlePtr = this.alloc(4)
-    try {
-      this.#check(this.exports.ys_pack_import(b.ptr, b.len, handlePtr), 'ys_pack_import')
-      return this.#u32(handlePtr)
-    } finally {
-      b.release()
-      this.free(handlePtr, 4)
-    }
-  }
-
-  packClose(handle) {
-    this.exports.ys_pack_close(handle)
-  }
-
-  // ---------------------------------------------------------------- 解包（接收方）
-
-  unpackOpen({ prelude, identity }) {
-    const p = this.#write(prelude)
-    const id = this.#write(identity)
-    const handlePtr = this.alloc(4)
-    try {
-      const metaBytes = this.#outCall(
-        'ys_unpack_open',
-        (out, cap, outLen) => {
-          return this.exports.ys_unpack_open(p.ptr, p.len, id.ptr, id.len, out, cap, outLen, handlePtr)
-        },
-        512,
+      const json = this.#outCall(
+        'ys_unpack_meta',
+        (out, cap, outLen) => this.exports.ys_unpack_meta(p.ptr, p.len, priv.ptr, pub.ptr, out, cap, outLen),
+        1024,
       )
-      let meta
       try {
-        meta = JSON.parse(new TextDecoder().decode(metaBytes))
+        return JSON.parse(new TextDecoder().decode(json))
       } catch {
-        throw new CryptoError('CRYPTO_MANIFEST_INVALID', '清单元信息不是合法 JSON')
+        throw new CryptoError('CRYPTO_MANIFEST_INVALID', '清单 JSON 解析失败')
       }
-      return { handle: this.#u32(handlePtr), meta }
     } finally {
       p.release()
-      id.release()
-      this.free(handlePtr, 4)
+      priv.release()
+      pub.release()
     }
   }
 
-  unpackChunk(handle, index, ciphertext) {
-    return this.#outCall(
-      'ys_unpack_chunk',
-      (out, cap, outLen) => {
-        const c = this.#write(ciphertext)
-        try {
-          return this.exports.ys_unpack_chunk(handle, index, c.ptr, c.len, out, cap, outLen)
-        } finally {
-          c.release()
-        }
-      },
-      ciphertext.length + 64,
-    )
+  unpack({ pack, recipientPrivate, senderPublic }) {
+    const p = this.#write(pack)
+    const priv = this.#write(recipientPrivate)
+    const pub = this.#write(WasmKernel.toKernel(senderPublic))
+    try {
+      return this.#outCall(
+        'ys_unpack',
+        (out, cap, outLen) => this.exports.ys_unpack(p.ptr, p.len, priv.ptr, pub.ptr, out, cap, outLen),
+        pack.length + 4096,
+      )
+    } finally {
+      p.release()
+      priv.release()
+      pub.release()
+    }
   }
 
-  unpackFinish(handle) {
-    this.#check(this.exports.ys_unpack_finish(handle), 'ys_unpack_finish')
+  // ---------------------------------------------------------------- 传输切分（纯算术）
+
+  splitPack(args) {
+    return splitPack({ ...args, segmenter: this.segmenter })
   }
 
-  unpackClose(handle) {
-    this.exports.ys_unpack_close(handle)
+  joinPack(args) {
+    return joinPack({ ...args, segmenter: this.segmenter })
   }
 }

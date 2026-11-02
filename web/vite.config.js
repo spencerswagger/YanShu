@@ -17,7 +17,9 @@ function strictCsp() {
   }
   const csp = [
     "default-src 'self'",
-    "script-src 'self'",
+    // 'wasm-unsafe-eval' 是 Chrome/Firefox 允许「编译 WebAssembly」的最小权限；
+    // 不加这条，生产 CSP 会直接把端侧内核拦死（页面永远"内核未就绪"）。
+    "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     `connect-src ${connect}`,
     "img-src 'self' data:",

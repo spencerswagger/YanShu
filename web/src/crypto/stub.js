@@ -1,21 +1,23 @@
 /**
- * 端侧内核的**替身实现**。两种，语义严格区分：
+ * 端侧内核的**替身**。两种，语义严格区分：
  *
- * 1) `UnavailableKernel`（默认、也是唯一允许进生产的替身）
- *    所有方法一律抛 `CRYPTO_NOT_READY`。WASM 产物没到位时，UI 只能说"加密内核未就绪"，
- *    **绝不允许**在这里假装"加密成功"——那会让"没加密"的密文流到中转，等于骗过验收。
+ * 1) `UnavailableKernel`（进生产的唯一替身）
+ *    所有方法抛 `CRYPTO_NOT_READY`。WASM 没到位时 UI 只能说"内核未就绪"，
+ *    **绝不**假装"加密成功"——否则没加密的字节会流进中转，等于骗过验收。
  *
- * 2) `DevStubKernel`（仅开发调试，`VITE_YS_CRYPTO=stub-fake` 且非生产构建）
- *    用可逆异或 + 假校验和把 UI/传输流程打通，**不是加密、不提供任何保密性**：
- *    - 产出的"prelude"以 ASCII `YSSTUB01` 开头，**不是** `YSPK`，肉眼/工具都能一眼看出不是真包；
- *    - UI 常驻红条提示"开发桩：数据未加密，勿传真实文件"；
+ * 2) `DevStubKernel`（仅开发调试：`VITE_YS_CRYPTO=stub-fake` 且非生产构建）
+ *    可逆异或 + 假校验和，只用来打通 UI 与传输编排；**不是加密、零保密性**：
+ *    - 产物以 ASCII `YSSTUB01` 开头（不是 `YSPK`），一眼可辨；
+ *    - prelude 明文里带 `STUB-NOT-ENCRYPTED` 和"密钥"，界面常驻红条；
  *    - 生产构建里 `crypto/index.js` 直接拒绝启用。
  *
- * 两者的方法集合与 `WasmKernel` 完全一致（同一套接口，便于替换）。
+ * 两个替身都实现与 `WasmKernel` 相同的门面方法（含 splitPack/joinPack），
+ * 且段布局用契约那套（16 字节块头），这样传输编排在两种内核下走同一条代码路径。
  */
 import { CryptoError } from './errors.js'
-import { ALPHABET, CHECK_ALPHABET } from '../lib/crockford.js'
-import { utf8 } from '../lib/bytes.js'
+import { segmenterFor, splitPack, joinPack, chunkCountOf, plainTextLen } from './layout.js'
+import { encodeSignature } from '../lib/der.js'
+import { bytes, u32be } from '../lib/bytes.js'
 
 export class UnavailableKernel {
   constructor(reason) {
@@ -23,80 +25,34 @@ export class UnavailableKernel {
     this.isRealCrypto = false
     this.reason = reason || '端侧加密内核（WASM）未就绪'
     this.version = 0
+    this.headerLen = 0
+    this.blockSize = 1048576
+    this.notes = []
+    this.segmenter = null
   }
 
   #fail() {
     throw new CryptoError('CRYPTO_NOT_READY', this.reason)
   }
 
-  generateIdentity() {
-    return this.#fail()
-  }
-  identityPublic() {
-    return this.#fail()
-  }
-  identityCode() {
-    return this.#fail()
-  }
-  sign() {
-    return this.#fail()
-  }
-  verify() {
-    return this.#fail()
-  }
-  sm3() {
-    return this.#fail()
-  }
-  codeOfPublic() {
-    return this.#fail()
-  }
-  normalizeCode() {
-    return this.#fail()
-  }
-  packOpen() {
-    return this.#fail()
-  }
-  packDigest() {
-    return this.#fail()
-  }
-  packSeal() {
-    return this.#fail()
-  }
-  packChunk() {
-    return this.#fail()
-  }
-  packInfo() {
-    return this.#fail()
-  }
-  packExport() {
-    return this.#fail()
-  }
-  packImport() {
-    return this.#fail()
-  }
-  packClose() {
-    this.#fail()
-  }
-  unpackOpen() {
-    return this.#fail()
-  }
-  unpackChunk() {
-    return this.#fail()
-  }
-  unpackFinish() {
-    this.#fail()
-  }
-  unpackClose() {
-    this.#fail()
-  }
+  generateIdentity() { return this.#fail() }
+  publicKeyFromPrivate() { return this.#fail() }
+  codeOf() { return this.#fail() }
+  normalizeCode() { return this.#fail() }
+  sign() { return this.#fail() }
+  verify() { return this.#fail() }
+  sm3() { return this.#fail() }
+  pack() { return this.#fail() }
+  unpackMeta() { return this.#fail() }
+  unpack() { return this.#fail() }
+  splitPack() { return this.#fail() }
+  joinPack() { return this.#fail() }
 }
 
 // ---------------------------------------------------------------- 开发桩
 
 const STUB_MAGIC = 'YSSTUB01'
-// 与契约 §6.2 的 tag 长度（16 字节）保持一致，这样传输层的长度校验（PT_LEN+16）仍然成立；
-// 但这 16 字节只是假校验和，不提供任何认证性。
-const STUB_TAG = 16
+const TAG_LEN = 16
 
 function fnv1a(data, seed = 0x811c9dc5) {
   let h = seed >>> 0
@@ -110,23 +66,24 @@ function fnv1a(data, seed = 0x811c9dc5) {
 function fakeDigest(data) {
   const out = new Uint8Array(32)
   const h = fnv1a(data)
-  for (let i = 0; i < 32; i++) out[i] = (h >>> ((i % 4) * 8)) & 0xff
+  const h2 = fnv1a(data, 0x9e3779b9)
+  for (let i = 0; i < 32; i++) out[i] = i < 16 ? (h >>> ((i % 4) * 8)) & 0xff : (h2 >>> ((i % 4) * 8)) & 0xff
   return out
 }
 
-function codeFromPub(pub) {
-  const h = fnv1a(pub)
-  const v = h & 0xfffff // 20 bit
+const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+function codeFromBytes(data) {
+  const h = fnv1a(data)
+  const v = h & 0xfffff
   let code = ''
   for (let i = 3; i >= 0; i--) code += ALPHABET[(v >> (i * 5)) & 31]
-  return { code, check: CHECK_ALPHABET[v % 37] }
+  return code
 }
 
 function xorStream(data, key, index) {
   const out = new Uint8Array(data.length)
-  for (let i = 0; i < data.length; i++) {
-    out[i] = data[i] ^ key[i % key.length] ^ ((index + i) & 0xff)
-  }
+  for (let i = 0; i < data.length; i++) out[i] = data[i] ^ key[i % key.length] ^ ((index + i) & 0xff)
   return out
 }
 
@@ -134,9 +91,11 @@ export class DevStubKernel {
   constructor() {
     this.mode = 'stub-fake'
     this.isRealCrypto = false
-    this.version = 0
-    this.sessions = new Map()
-    this.nextHandle = 1
+    this.version = 0x00010000
+    this.headerLen = 112
+    this.blockSize = 1048576
+    this.segmenter = segmenterFor(112)
+    this.notes = ['开发桩：可逆异或，不是加密']
   }
 
   #random(n) {
@@ -145,53 +104,22 @@ export class DevStubKernel {
     return out
   }
 
-  /** 身份 = 假密钥对（JSON 包子）；真实实现对 Web 是不透明字节，这里也保持不透明。 */
   generateIdentity() {
-    const sk = this.#random(32)
-    const pub = this.#random(65)
+    const privateKey = this.#random(32)
+    return { privateKey, publicKey: this.publicKeyFromPrivate(privateKey) }
+  }
+
+  publicKeyFromPrivate(privateKey) {
+    const pub = new Uint8Array(65)
     pub[0] = 0x04
-    return new TextEncoder().encode(JSON.stringify({ v: 'stub', sk: [...sk], pub: [...pub] }))
+    const d = fakeDigest(privateKey)
+    pub.set(d, 1)
+    pub.set(fakeDigest(d), 33)
+    return pub
   }
 
-  #parseIdentity(blob) {
-    try {
-      const obj = JSON.parse(new TextDecoder().decode(blob))
-      if (obj.v !== 'stub' || !Array.isArray(obj.pub)) throw new Error('bad')
-      return { sk: new Uint8Array(obj.sk), pub: new Uint8Array(obj.pub) }
-    } catch {
-      throw new CryptoError('CRYPTO_BAD_ARGUMENT', '身份 blob 无法解析（桩）')
-    }
-  }
-
-  identityPublic(blob) {
-    return this.#parseIdentity(blob).pub
-  }
-
-  identityCode(blob) {
-    return codeFromPub(this.#parseIdentity(blob).pub)
-  }
-
-  sign(blob, message) {
-    const { pub } = this.#parseIdentity(blob)
-    // 假签名：64 字节 r‖s 形态（长度与真 SM2 一致，便于上层按 §10.4 转 DER）。
-    // 内容只是摘要拼接，**没有**任何签名语义。
-    const out = new Uint8Array(64)
-    out.set(fakeDigest(message), 0)
-    out.set(fakeDigest(pub), 32)
-    return out
-  }
-
-  verify(publicKey, message, signature) {
-    // 桩不做真实验签：只要求长度落在契约允许的 DER 区间（70..72）。
-    return Boolean(signature) && signature.length >= 70 && signature.length <= 72
-  }
-
-  sm3(data) {
-    return fakeDigest(data)
-  }
-
-  codeOfPublic(publicKey) {
-    return codeFromPub(publicKey)
+  codeOf(publicKey) {
+    return codeFromBytes(publicKey)
   }
 
   normalizeCode(text) {
@@ -204,199 +132,125 @@ export class DevStubKernel {
     return s
   }
 
-  packOpen(params) {
-    const { identity, recipientPublic, name, mime, plaintextSize, chunkSize, createdAt } = params
-    const sender = this.#parseIdentity(identity)
-    const handle = this.nextHandle++
-    this.sessions.set(handle, {
-      kind: 'pack',
-      senderPub: sender.pub,
-      recipientPub: new Uint8Array(recipientPublic),
-      name,
-      mime,
-      plaintextSize,
-      chunkSize,
-      createdAt,
-      digests: new Map(),
-      sealed: false,
-      key: this.#random(32),
-      seen: new Set(),
-    })
-    return handle
+  sign(privateKey, message) {
+    const raw = new Uint8Array(64)
+    raw.set(fakeDigest(message), 0)
+    raw.set(fakeDigest(privateKey), 32)
+    return encodeSignature(raw)
   }
 
-  #session(handle, kind) {
-    const s = this.sessions.get(handle)
-    if (!s || s.kind !== kind) throw new CryptoError('CRYPTO_BAD_ARGUMENT', `会话 ${handle} 不存在`)
-    return s
+  verify(publicKey, message, signature) {
+    return Boolean(signature) && signature.length >= 70 && signature.length <= 72
   }
 
-  packDigest(handle, index, plain) {
-    const s = this.#session(handle, 'pack')
-    s.digests.set(index, fakeDigest(plain))
+  sm3(data) {
+    return fakeDigest(data)
   }
 
-  packSeal(handle) {
-    const s = this.#session(handle, 'pack')
-    if (s.prelude) return s.prelude
-    const chunkCount = Math.max(1, Math.ceil(s.plaintextSize / s.chunkSize))
+  pack({ data, name, mime, recipientPublic, senderPrivate, blockSize = this.blockSize }) {
+    const chunkSize = blockSize || this.blockSize
+    const chunkCount = chunkCountOf(data.length, chunkSize)
+    const key = this.#random(32)
     const digests = []
     for (let i = 0; i < chunkCount; i++) {
-      digests.push([...(s.digests.get(i) || fakeDigest(new Uint8Array(0)))])
+      const ptLen = plainTextLen(i, data.length, chunkSize, chunkCount)
+      const start = i * chunkSize
+      digests.push([...fakeDigest(data.subarray(start, start + ptLen))])
     }
-    s.sealed = true
     const header = {
       v: 'YSSTUB/1',
-      // 桩的"密钥"就明文躺在 prelude 里 —— 这不是加密，连遮蔽都算不上，只用来验证可逆流程。
-      key: [...s.key],
-      name: s.name,
-      mime: s.mime,
-      size: s.plaintextSize,
-      chunk_size: s.chunkSize,
-      chunk_count: chunkCount,
-      created_at: s.createdAt,
-      sender_pub: [...s.senderPub],
-      recipient_pub: [...s.recipientPub],
-      digests,
       note: 'STUB-NOT-ENCRYPTED',
+      // 桩的"密钥"明文放在 prelude 里：零保密性，只保证可逆
+      key: [...key],
+      name,
+      mime,
+      size: data.length,
+      chunk_size: chunkSize,
+      chunk_count: chunkCount,
+      sender_pub: [...this.publicKeyFromPrivate(senderPrivate)],
+      recipient_pub: [...recipientPublic],
+      digests,
     }
     const json = new TextEncoder().encode(JSON.stringify(header))
-    const out = new Uint8Array(STUB_MAGIC.length + 4 + json.length)
-    out.set(utf8.encode(STUB_MAGIC), 0)
-    new DataView(out.buffer).setUint32(STUB_MAGIC.length, json.length, false)
-    out.set(json, STUB_MAGIC.length + 4)
-    s.prelude = out
+    const prelude = bytes(new TextEncoder().encode(STUB_MAGIC), u32be(json.length), json)
+
+    const parts = [prelude]
+    for (let i = 0; i < chunkCount; i++) {
+      const ptLen = plainTextLen(i, data.length, chunkSize, chunkCount)
+      const start = i * chunkSize
+      const ct = xorStream(data.subarray(start, start + ptLen), key, i)
+      parts.push(this.segmenter.buildRecordHeader(i, ptLen, chunkCount))
+      parts.push(ct)
+      parts.push(fakeDigest(ct).subarray(0, TAG_LEN))
+    }
+    const total = parts.reduce((n, p) => n + p.length, 0)
+    const out = new Uint8Array(total)
+    let off = 0
+    for (const part of parts) {
+      out.set(part, off)
+      off += part.length
+    }
     return out
   }
 
-  packChunk(handle, index, plain) {
-    const s = this.#session(handle, 'pack')
-    if (!s.sealed) throw new CryptoError('CRYPTO_BAD_ARGUMENT', '还没 seal 就加密块')
-    const ct = xorStream(plain, s.key, index)
-    const tag = fakeDigest(ct).subarray(0, STUB_TAG)
-    const out = new Uint8Array(ct.length + STUB_TAG)
-    out.set(ct, 0)
-    out.set(tag, ct.length)
-    return out
-  }
-
-  packInfo(handle) {
-    const s = this.#session(handle, 'pack')
-    const chunkCount = Math.max(1, Math.ceil(s.plaintextSize / s.chunkSize))
-    const prelude = this.packSeal(handle)
-    return {
-      chunkSize: s.chunkSize,
-      chunkCount,
-      plaintextSize: s.plaintextSize,
-      preludeLen: prelude.length,
-      state: 1,
-    }
-  }
-
-  packExport(handle) {
-    const s = this.#session(handle, 'pack')
-    const snap = {
-      kind: 'pack',
-      senderPub: [...s.senderPub],
-      recipientPub: [...s.recipientPub],
-      name: s.name,
-      mime: s.mime,
-      plaintextSize: s.plaintextSize,
-      chunkSize: s.chunkSize,
-      createdAt: s.createdAt,
-      digests: [...s.digests.entries()].map(([i, d]) => [i, [...d]]),
-      sealed: s.sealed,
-      key: [...s.key],
-      prelude: s.prelude ? [...s.prelude] : null,
-    }
-    return new TextEncoder().encode(JSON.stringify(snap))
-  }
-
-  packImport(blob) {
-    const snap = JSON.parse(new TextDecoder().decode(blob))
-    if (snap.kind !== 'pack') throw new CryptoError('CRYPTO_BAD_ARGUMENT', '快照类型不对')
-    const handle = this.nextHandle++
-    this.sessions.set(handle, {
-      kind: 'pack',
-      senderPub: new Uint8Array(snap.senderPub),
-      recipientPub: new Uint8Array(snap.recipientPub),
-      name: snap.name,
-      mime: snap.mime,
-      plaintextSize: snap.plaintextSize,
-      chunkSize: snap.chunkSize,
-      createdAt: snap.createdAt,
-      digests: new Map(snap.digests.map(([i, d]) => [i, new Uint8Array(d)])),
-      sealed: snap.sealed,
-      key: new Uint8Array(snap.key),
-      prelude: snap.prelude ? new Uint8Array(snap.prelude) : null,
-      seen: new Set(),
-    })
-    return handle
-  }
-
-  packClose(handle) {
-    this.sessions.delete(handle)
-  }
-
-  unpackOpen({ prelude, identity }) {
-    const magic = new TextDecoder().decode(prelude.subarray(0, STUB_MAGIC.length))
+  #parsePrelude(pack) {
+    const magic = new TextDecoder().decode(pack.subarray(0, STUB_MAGIC.length))
     if (magic !== STUB_MAGIC) {
       throw new CryptoError('CRYPTO_MAGIC_MISMATCH', '不是开发桩产出的数据（缺 YSSTUB01）')
     }
-    const len = new DataView(prelude.buffer, prelude.byteOffset).getUint32(STUB_MAGIC.length, false)
-    const json = JSON.parse(
-      new TextDecoder().decode(prelude.subarray(STUB_MAGIC.length + 4, STUB_MAGIC.length + 4 + len)),
-    )
-    const me = this.#parseIdentity(identity)
-    // 桩的"收件人校验"：公钥必须对得上，否则解密失败（模拟 CRYPTO_KEY_UNWRAP_FAILED）
-    const mine = [...me.pub].join(',')
-    if (mine !== (json.recipient_pub || []).join(',')) {
+    const len = new DataView(pack.buffer, pack.byteOffset).getUint32(STUB_MAGIC.length, false)
+    return JSON.parse(new TextDecoder().decode(pack.subarray(STUB_MAGIC.length + 4, STUB_MAGIC.length + 4 + len)))
+  }
+
+  #preludeLen(header) {
+    const jsonLen = new TextEncoder().encode(JSON.stringify(header)).length
+    return STUB_MAGIC.length + 4 + jsonLen
+  }
+
+  unpackMeta({ pack }) {
+    const header = this.#parsePrelude(pack)
+    return {
+      name: header.name,
+      mime: header.mime,
+      size: header.size,
+      block_size: header.chunk_size,
+      block_count: header.chunk_count,
+    }
+  }
+
+  unpack({ pack, recipientPrivate, senderPublic }) {
+    const header = this.#parsePrelude(pack)
+    const me = this.publicKeyFromPrivate(recipientPrivate)
+    if (me.join(',') !== header.recipient_pub.join(',')) {
       throw new CryptoError('CRYPTO_KEY_UNWRAP_FAILED', '这份不是发给你的（桩）')
     }
-    const handle = this.nextHandle++
-    this.sessions.set(handle, {
-      kind: 'unpack',
-      json,
-      key: new Uint8Array(json.key ? json.key : []),
-      seen: new Set(),
-    })
-    const code = codeFromPub(new Uint8Array(json.sender_pub))
-    return {
-      handle,
-      meta: {
-        name: json.name,
-        mime: json.mime,
-        size: json.size,
-        chunk_size: json.chunk_size,
-        chunk_count: json.chunk_count,
-        sender_code: code.code,
-        version: 'YSSTUB/1',
-        signature: 'stub',
-      },
+    const chunkCount = header.chunk_count
+    const chunkSize = header.chunk_size
+    const preludeLen = this.#preludeLen(header)
+    const key = new Uint8Array(header.key)
+    const out = new Uint8Array(header.size)
+    let offset = preludeLen
+    for (let i = 0; i < chunkCount; i++) {
+      const ptLen = plainTextLen(i, header.size, chunkSize, chunkCount)
+      offset += this.segmenter.recordHeaderLen
+      const ct = pack.subarray(offset, offset + ptLen)
+      const tag = pack.subarray(offset + ptLen, offset + ptLen + TAG_LEN)
+      const expected = fakeDigest(ct).subarray(0, TAG_LEN)
+      for (let k = 0; k < TAG_LEN; k++) {
+        if (tag[k] !== expected[k]) throw new CryptoError('CRYPTO_CHUNK_AUTH_FAILED', `第 ${i} 块 tag 不符`)
+      }
+      out.set(xorStream(ct, key, i), i * chunkSize)
+      offset += ptLen + TAG_LEN
     }
+    if (offset !== pack.length) throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '桩包尾部有多余字节')
+    return out
   }
 
-  unpackChunk(handle, index, ciphertext) {
-    const s = this.#session(handle, 'unpack')
-    if (ciphertext.length < STUB_TAG) throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '切片太短')
-    const ct = ciphertext.subarray(0, ciphertext.length - STUB_TAG)
-    const tag = ciphertext.subarray(ciphertext.length - STUB_TAG)
-    const expected = fakeDigest(ct).subarray(0, STUB_TAG)
-    for (let i = 0; i < STUB_TAG; i++) {
-      if (tag[i] !== expected[i]) throw new CryptoError('CRYPTO_CHUNK_AUTH_FAILED', `块 ${index}`)
-    }
-    s.seen.add(index)
-    return xorStream(ct, s.key, index)
+  splitPack(args) {
+    return splitPack({ ...args, segmenter: this.segmenter })
   }
 
-  unpackFinish(handle) {
-    const s = this.#session(handle, 'unpack')
-    if (s.seen.size !== s.json.chunk_count) {
-      throw new CryptoError('CRYPTO_CHUNK_MISSING', `已收 ${s.seen.size}/${s.json.chunk_count}`)
-    }
-  }
-
-  unpackClose(handle) {
-    this.sessions.delete(handle)
+  joinPack(args) {
+    return joinPack({ ...args, segmenter: this.segmenter })
   }
 }

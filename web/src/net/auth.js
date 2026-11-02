@@ -63,12 +63,12 @@ export const fields = {
  * @param {object} p
  * @param {object} p.client   HTTP 客户端
  * @param {object} p.kernel   端侧内核
- * @param {Uint8Array} p.identity 本机身份 blob（私钥，只在本机内存/IndexedDB）
+ * @param {Uint8Array} p.privateKey 本机私钥（只在本机内存/IndexedDB，不上传）
  * @param {string} p.code     自己的 4 位码
  * @param {string} p.purpose  见 PURPOSES
  * @param {Uint8Array} p.fieldBytes 字段串
  */
-export async function authHeaders({ client, kernel, identity, code, purpose, fieldBytes }) {
+export async function authHeaders({ client, kernel, privateKey, code, purpose, fieldBytes }) {
   const res = await client.post('/challenges', {
     json: { purpose },
     retry: true,
@@ -79,7 +79,7 @@ export async function authHeaders({ client, kernel, identity, code, purpose, fie
   }
   const nonce = b64uDecode(challenge.nonce)
   const input = buildSigInput(purpose, nonce, fieldBytes)
-  const raw = kernel.sign(identity, input)
+  const raw = kernel.sign(privateKey, input)
   const signature = normalizeSignature(raw)
   return {
     challenge,

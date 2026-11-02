@@ -1,11 +1,8 @@
 /**
- * SM2 签名的 DER 编码（CRYPTO-PACK §3.5 / §10.4：`SEQUENCE { r INTEGER, s INTEGER }`，严格 DER）。
+ * SM2 签名的 DER 编码/解码（CRYPTO-PACK §3.5 / §10.4：`SEQUENCE { r INTEGER, s INTEGER }`，严格 DER）。
  *
- * 为什么放在 Web 侧：契约要求 wire 上的签名是 DER（70..72 字节），而内核若只给 64 字节
- * `r‖s`，转换必须在边界上做一次。这是**签名编码**，不是加密包内部字段，不违反"包内字段只由
- * WASM 读写"的边界。
- *
- * 规则：INTEGER 用最短补码，最高位为 1 时补一个 `0x00`；长度用最短编码。
+ * 内核当前输出 `r‖s`（64 字节），wire 上要 DER（70..72）。这一层是纯编码转换，
+ * 不涉及包内字段；内核返工成直接给 DER 后，`normalizeSignature` 会原样返回。
  */
 
 function encodeInteger(raw) {
@@ -33,12 +30,44 @@ export function encodeSignature(raw) {
   return encodeSequence(Uint8Array.of(...encodeInteger(raw.slice(0, 32)), ...encodeInteger(raw.slice(32))))
 }
 
-/**
- * 内核可能已经给 DER（70..72 字节）。这里只判断"看起来是 DER 且长度合规"，
- * 不做完整 ASN.1 解析（解析属于内核职责，Web 不猜语义）。
- */
+/** 内核可能已经给 DER（70..72 字节）。只做长度/形状判断，不解析语义。 */
 export function normalizeSignature(sig) {
   if (sig.length === 64) return encodeSignature(sig)
   if (sig.length >= 70 && sig.length <= 72 && sig[0] === 0x30) return sig
   throw new Error(`unexpected signature length: ${sig.length}`)
+}
+
+/**
+ * DER → 64 字节 `r‖s`（给内核验签用）。严格解析：SEQUENCE、两个 INTEGER、最短编码、
+ * 不允许尾部多余字节（契约 §10.4：不给签名延展性留空间）。
+ */
+export function decodeSignature(der) {
+  if (!der || der.length < 68 || der[0] !== 0x30) throw new Error('not a DER signature')
+  let offset = 2
+  if (der[1] & 0x80) {
+    const n = der[1] & 0x7f
+    offset = 2 + n
+  }
+  const readInt = () => {
+    if (der[offset] !== 0x02) throw new Error('expected INTEGER')
+    const len = der[offset + 1]
+    let start = offset + 2
+    let end = start + len
+    if (end > der.length) throw new Error('INTEGER overruns')
+    let body = der.subarray(start, end)
+    // 去掉可能的 0x00 前缀（补码为正数时 DER 会补 1 字节）
+    while (body.length > 32 && body[0] === 0x00) body = body.subarray(1)
+    if (body.length > 32) throw new Error('INTEGER too long')
+    offset = end
+    const out = new Uint8Array(32)
+    out.set(body, 32 - body.length)
+    return out
+  }
+  const r = readInt()
+  const s = readInt()
+  if (offset !== der.length) throw new Error('trailing bytes in signature')
+  const out = new Uint8Array(64)
+  out.set(r, 0)
+  out.set(s, 32)
+  return out
 }

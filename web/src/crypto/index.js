@@ -1,16 +1,16 @@
 /**
  * 端侧内核门面：决定用真 WASM、还是"未就绪"替身，并把桩挡在生产之外。
  *
- * 规则（重要，别为了跑通而放松）：
- * 1. `auto`（默认）：能加载 WASM 就用真内核；加载失败 → `UnavailableKernel`，
- *    所有加密操作报 `CRYPTO_NOT_READY`，UI 只能显示"加密内核未就绪"，**不允许**降级成假加密。
- * 2. `wasm`：强制真内核，失败即失败（用于联调）。
- * 3. `stub-fake`：只在非生产构建里允许；生产构建里直接抛错（防止"假加密"被发布）。
+ * 规则（别为了跑通而放松）：
+ * 1. `auto`（默认）：能加载 wasm 就用真内核；加载失败 → `UnavailableKernel`，
+ *    所有加密操作报 `CRYPTO_NOT_READY`，UI 只能显示"内核未就绪"，**不允许**降级成假加密。
+ * 2. `wasm`：强制真内核，失败即失败（联调用）。
+ * 3. `stub-fake`：只在非生产构建允许；生产构建直接抛错。
  *
- * 无论哪种模式，`kernel.isRealCrypto` 都能让 UI/日志如实标注当前是否真加密。
+ * `kernel.isRealCrypto` 让 UI/日志如实标注当前是否真加密。
  */
 import { config } from '../config.js'
-import { loadKernelWasm } from './wasm.js'
+import { loadKernelWasm, instantiateKernel } from './wasm.js'
 import { UnavailableKernel, DevStubKernel } from './stub.js'
 import { CryptoError } from './errors.js'
 
@@ -30,19 +30,17 @@ export function resetKernel() {
   pending = null
 }
 
-async function boot({ mode = config.cryptoMode, wasmUrl = config.wasmUrl, isProd = config.isProd } = {}) {
+async function boot({ mode = config.cryptoMode, wasmUrl = config.wasmUrl, isProd = config.isProd, wasmBytes } = {}) {
   if (mode === 'stub-fake') {
     if (isProd) {
-      throw new CryptoError(
-        'CRYPTO_ABI_MISMATCH',
-        '生产构建禁止使用开发桩（stub-fake）：桩不提供任何加密',
-      )
+      throw new CryptoError('CRYPTO_ABI_MISMATCH', '生产构建禁止开发桩（stub-fake）：桩不提供任何加密')
     }
     return new DevStubKernel()
   }
 
   if (mode === 'wasm' || mode === 'auto') {
     try {
+      if (wasmBytes) return await instantiateKernel(wasmBytes)
       return await loadKernelWasm(wasmUrl)
     } catch (err) {
       if (mode === 'wasm') throw err

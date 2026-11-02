@@ -1,10 +1,10 @@
 /**
  * 双端闭环集成测试（A 端 → 中转 → B 端 → 落盘）。
  *
- * 用真 HTTP + 真前端编排代码（net/upload.js / net/download.js / store/identity.js），
- * 只把**端侧内核**换成开发桩（Rune 的 wasm 还没到）。所以这份测试证明的是：
- *   传输编排、签名挑战、分块、续传、状态机、错误映射、落盘链路是对的；
- * 它**不**证明密码学正确——那要等真 WASM + Core，验收里不要拿它当加密证据。
+ * 用真 HTTP + 真编排代码（net/upload.js / net/download.js / store/identity.js），
+ * 端侧内核换开发桩（可逆异或），所以这份测试证明的是：
+ *   传输编排、签名挑战、prelude/块切分、续传、状态机、错误映射、落盘链路；
+ * 它**不**证明密码学正确——那由 `wasm-real.test.js` 用真内核跑，验收里不要拿这份当加密证据。
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -17,30 +17,45 @@ import { memoryBackend } from '../src/store/db.js'
 import { DevStubKernel } from '../src/crypto/stub.js'
 import { sendFile, resumeSend } from '../src/net/upload.js'
 import { receiveTransfer } from '../src/net/download.js'
-import { config } from '../src/config.js'
-import { encode as b64uEncode } from '../src/lib/base64url.js'
+import { decode as b64uDecode, encode as b64uEncode } from '../src/lib/base64url.js'
 
 let relay
 let client
-let baseUrl
 
 async function boot() {
-  relay = createRelay({ verifyDigests: false })
+  relay = createRelay({ verifyDigests: false }) // 桩的 SM3 是假的
   await new Promise((resolve) => relay.server.listen(0, '127.0.0.1', resolve))
   const port = relay.server.address().port
-  baseUrl = `http://127.0.0.1:${port}/v1`
-  client = createClient({ baseUrl })
-  // 测试里把块调小，才能用几十字节的文件覆盖多块路径
-  config.chunkSize = 32
+  client = createClient({ baseUrl: `http://127.0.0.1:${port}/v1` })
 }
 
-async function makePeer(customClient = client) {
+async function makePeer(customClient = client, blockSize = 32) {
   const kernel = new DevStubKernel()
+  kernel.blockSize = blockSize // 测试里把块调小，几十字节的文件也能覆盖多块路径
   const identity = createIdentityManager({ kernel, backend: memoryBackend() })
   await identity.loadOrCreate()
   const api = createApi({ client: customClient, kernel, session: identity.session })
   await identity.register({ api, nickname: `雁${identity.session.code}` })
-  return { kernel, identity, api, session: identity.session }
+  const senderPublic = async (code) => {
+    const json = await api.getCode(code)
+    return b64uDecode(json.public_key)
+  }
+  return { kernel, identity, api, session: identity.session, senderPublic }
+}
+
+async function send(from, to, file) {
+  return sendFile({
+    api: from.api,
+    kernel: from.kernel,
+    session: from.session,
+    file,
+    recipient: {
+      code: to.session.code,
+      nickname: to.session.nickname,
+      publicKey: to.session.publicKey,
+    },
+    pendingStore: memoryBackend(),
+  })
 }
 
 function makeFile(size, name = 'sample.bin') {
@@ -57,21 +72,10 @@ test('A 加密上传 → B 用码取回 → 解密落盘，字节一致；ack �
   const bob = await makePeer()
   const { file, data } = makeFile(300)
 
-  const pending = memoryBackend()
-  const sent = await sendFile({
-    api: alice.api,
-    kernel: alice.kernel,
-    session: alice.session,
-    file,
-    recipient: {
-      code: bob.session.code,
-      nickname: bob.session.nickname,
-      publicKey: bob.kernel.identityPublic(bob.session.identity),
-    },
-    pendingStore: pending,
-  })
+  const sent = await send(alice, bob, file)
   assert.equal(sent.state, 'READY')
   assert.equal(sent.chunkCount, 10)
+  assert.ok(sent.preludeLen > 0)
 
   const inbox = await bob.api.inbox({ state: 'ready' })
   assert.equal(inbox.items.length, 1)
@@ -84,40 +88,27 @@ test('A 加密上传 → B 用码取回 → 解密落盘，字节一致；ack �
     kernel: bob.kernel,
     session: bob.session,
     transferId: sent.transferId,
+    senderPublic: bob.senderPublic,
     save: (blob, name) => {
       saved = { blob, name }
     },
   })
   assert.equal(saved.name, 'sample.bin')
   assert.equal(received.size, 300)
-  const got = new Uint8Array(await saved.blob.arrayBuffer())
-  assert.deepEqual([...got], [...data], '解密后字节必须与原文件一致')
+  assert.deepEqual([...new Uint8Array(await saved.blob.arrayBuffer())], [...data])
 
-  // ack 之后：密文物理删除 + 状态终结
   const after = relay.state.transfers.get(sent.transferId)
   assert.equal(after.state, 'CONSUMED')
   assert.equal(after.chunks.size, 0, '密文块必须被删')
   assert.equal(after.prelude, null, 'prelude 必须被删')
 })
 
-test('撤回后另一端的取件被 410 拒绝，且错误码是 TRANSFER_REVOKED', async () => {
+test('撤回后另一端取件被 410 拒绝，错误码是 TRANSFER_REVOKED', async () => {
   const alice = await makePeer()
   const bob = await makePeer()
   const { file } = makeFile(64)
 
-  const sent = await sendFile({
-    api: alice.api,
-    kernel: alice.kernel,
-    session: alice.session,
-    file,
-    recipient: {
-      code: bob.session.code,
-      nickname: bob.session.nickname,
-      publicKey: bob.kernel.identityPublic(bob.session.identity),
-    },
-    pendingStore: memoryBackend(),
-  })
-
+  const sent = await send(alice, bob, file)
   await alice.api.revoke({ transferId: sent.transferId })
 
   await assert.rejects(
@@ -126,6 +117,7 @@ test('撤回后另一端的取件被 410 拒绝，且错误码是 TRANSFER_REVOK
       kernel: bob.kernel,
       session: bob.session,
       transferId: sent.transferId,
+      senderPublic: bob.senderPublic,
       save: () => {},
     }),
     (err) => err.code === 'TRANSFER_REVOKED',
@@ -142,10 +134,7 @@ test('上传中断后用 GET /status 续传，只补缺失块', async () => {
   let puts = 0
   alice.api.putChunk = async (args) => {
     puts += 1
-    if (puts > 4) {
-      const err = new ApiError({ code: 'NETWORK_ERROR', status: 0, message: '模拟断网' })
-      throw err
-    }
+    if (puts > 4) throw new ApiError({ code: 'NETWORK_ERROR', status: 0, message: '模拟断网' })
     return realPut(args)
   }
 
@@ -155,11 +144,7 @@ test('上传中断后用 GET /status 续传，只补缺失块', async () => {
       kernel: alice.kernel,
       session: alice.session,
       file,
-      recipient: {
-        code: bob.session.code,
-        nickname: bob.session.nickname,
-        publicKey: bob.kernel.identityPublic(bob.session.identity),
-      },
+      recipient: { code: bob.session.code, nickname: bob.session.nickname, publicKey: bob.session.publicKey },
       pendingStore: pending,
     }),
   )
@@ -168,11 +153,10 @@ test('上传中断后用 GET /status 续传，只补缺失块', async () => {
   assert.equal(records.length, 1)
   const record = records[0]
   assert.equal(record.state, 'UPLOADING')
-  assert.ok(record.packSnapshot, '续传快照必须落本地')
+  assert.ok(record.pack instanceof Uint8Array, '续传要靠本机留着的密文包')
 
   const before = await alice.api.uploadStatus({ transferId: record.transferId, uploadToken: record.uploadToken })
-  const receivedBefore = before.received_chunks
-  assert.ok(receivedBefore >= 1 && receivedBefore < record.chunkCount, '应当只传了一部分')
+  assert.ok(before.received_chunks >= 1 && before.received_chunks < record.chunkCount)
 
   alice.api.putChunk = realPut
   const resumed = await resumeSend({
@@ -180,7 +164,6 @@ test('上传中断后用 GET /status 续传，只补缺失块', async () => {
     kernel: alice.kernel,
     session: alice.session,
     record,
-    file,
     pendingStore: pending,
   })
   assert.equal(resumed.state, 'READY')
@@ -194,6 +177,7 @@ test('上传中断后用 GET /status 续传，只补缺失块', async () => {
     kernel: bob.kernel,
     session: bob.session,
     transferId: record.transferId,
+    senderPublic: bob.senderPublic,
     save: (blob, name) => {
       saved = { blob, name }
     },
@@ -209,27 +193,27 @@ test('块 PUT 触发 429 时带 Retry-After（客户端不得在窗口内重试�
 
   const alice = await makePeer(limitedClient)
   const bob = await makePeer(limitedClient)
-  const { file } = makeFile(64) // chunkSize=32 → 2 块，正好把"块 PUT 额度"用完
+  const { file } = makeFile(64)
+
   const api = createApi({ client: limitedClient, kernel: alice.kernel, session: alice.session })
   const sent = await sendFile({
     api,
     kernel: alice.kernel,
     session: alice.session,
     file,
-    recipient: {
-      code: bob.session.code,
-      nickname: bob.session.nickname,
-      publicKey: bob.kernel.identityPublic(bob.session.identity),
-    },
+    recipient: { code: bob.session.code, nickname: bob.session.nickname, publicKey: bob.session.publicKey },
     pendingStore: memoryBackend(),
   })
 
-  // 重复 PUT 同一块：前两次在额度内（幂等 204），第三次超额 → 429
-  const slice = new Uint8Array(48) // 32 明文 + 16 tag
   let rateLimited = null
   for (let i = 0; i < 3; i++) {
     try {
-      await api.putChunk({ transferId: sent.transferId, uploadToken: sent.uploadToken, index: 0, bytes: slice })
+      await api.putChunk({
+        transferId: sent.transferId,
+        uploadToken: sent.uploadToken,
+        index: 0,
+        bytes: new Uint8Array(48),
+      })
     } catch (err) {
       rateLimited = err
       break
@@ -261,11 +245,7 @@ test('同一块重复上传是幂等的（204），改了内容则 409 CHUNK_CON
     ttl_seconds: 3600,
     max_downloads: 1,
   })
-  await alice.api.putPrelude({
-    transferId: created.transfer_id,
-    uploadToken: created.upload_token,
-    prelude,
-  })
+  await alice.api.putPrelude({ transferId: created.transfer_id, uploadToken: created.upload_token, prelude })
 
   const slice = new Uint8Array(48)
   const first = await alice.api.putChunk({

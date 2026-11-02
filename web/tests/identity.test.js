@@ -15,18 +15,25 @@ test('首次进入生成密钥对并派生 4 位码；私钥只落本机 backend
   const { manager, backend } = setup()
   await manager.loadOrCreate()
   assert.match(manager.session.code, /^[0-9A-HJKMNP-TV-Z]{4}$/)
-  assert.equal(manager.session.publicKey.length, 65)
+  assert.equal(manager.session.publicKey.length, 65, 'wire 公钥是 65 字节未压缩点')
+  assert.equal(manager.session.privateKey.length, 32)
   const stored = await backend.get('self')
-  assert.ok(stored.identity, '本地存了身份 blob（私钥只在本机）')
+  assert.ok(stored.privateKey, '本地存了私钥（只在本机）')
   assert.equal(stored.registered, false)
 })
 
-test('私钥不进 session.publicKey，也不出现在持久化记录的明文字段里', async () => {
+test('持久化字段白名单：只有私钥/公钥/码/昵称/注册态/时间', async () => {
   const { manager, backend } = setup()
   await manager.loadOrCreate()
   const stored = await backend.get('self')
-  const keys = Object.keys(stored)
-  assert.deepEqual(keys.sort(), ['check', 'code', 'createdAt', 'identity', 'nickname', 'publicKey', 'registered'])
+  assert.deepEqual(Object.keys(stored).sort(), [
+    'code',
+    'createdAt',
+    'nickname',
+    'privateKey',
+    'publicKey',
+    'registered',
+  ])
   assert.equal(stored.publicKey.length, 87) // 65 字节 base64url 无填充
 })
 

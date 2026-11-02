@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { encodeSignature, normalizeSignature } from '../src/lib/der.js'
+import { encodeSignature, normalizeSignature, decodeSignature } from '../src/lib/der.js'
 import { withRetry, isRetryable } from '../src/lib/retry.js'
 import { ApiError } from '../src/net/client.js'
 
@@ -20,6 +20,20 @@ test('DER 签名编码：SEQ + 两个 INTEGER，长度 70..72，高位补 00', (
 
   assert.equal(normalizeSignature(der).length, der.length, '已是 DER 就原样返回')
   assert.throws(() => normalizeSignature(new Uint8Array(63)))
+})
+
+test('DER 解码：编码后再解回 64 字节 r‖s', () => {
+  const raw = new Uint8Array(64).map((_, i) => (i * 13 + 7) & 0xff)
+  raw[0] = 0x00
+  raw[32] = 0x91
+  const der = encodeSignature(raw)
+  const back = decodeSignature(der)
+  assert.equal(back.length, 64)
+  assert.deepEqual([...back], [...raw])
+  // 高位补的 0x00 被去掉后应还原
+  assert.equal(back[0], 0x00)
+  assert.equal(back[32], 0x91)
+  assert.throws(() => decodeSignature(new Uint8Array([0x30, 0x00])))
 })
 
 test('退避：429 以 Retry-After 为准（取较大值）', async () => {

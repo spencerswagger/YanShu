@@ -4,11 +4,12 @@
  * 红线（REQUIREMENTS §2 / API.md §0.3）：
  * - **私钥只在本机**：只写 IndexedDB，不上传、不备份、不导出、不进日志；
  * - 上 wire 的只有 `public_key`（65 字节未压缩点，base64url）；
- * - 清缓存 = 换人：这是产品定位（一次性传输）决定的可接受后果。
+ * - 清缓存 = 换人：产品定位（一次性传输）决定的可接受后果。
+ *
+ * 码与归一化口径由内核给（`ys_user_code` / `ys_normalize_code`），前端不自己实现 Crockford。
  *
  * 撞码（API.md §4.3）：服务端回 `409 CODE_TAKEN` 时**丢弃当前密钥对、重新生成**，
- * 自动重试一次（任务口径），之后由用户手动点"再试一次"；总次数受 §4.3 的 8 次上限保护。
- * 绝不自动加长码、绝不复用别人的码。
+ * 自动重试一次（任务口径），之后由用户手动点；总次数受 §4.3 的 8 次上限保护。
  */
 import { config } from '../config.js'
 import { encode as b64uEncode, decode as b64uDecode } from '../lib/base64url.js'
@@ -23,20 +24,18 @@ function defaultNickname(code) {
 export function createIdentityManager({ kernel, backend, onCreate }) {
   /** 会话对象是**活的**：撞码重生成时原地替换，api/UI 都持同一引用。 */
   const session = {
-    identity: null,
+    privateKey: null,
     publicKey: null,
     code: null,
-    check: null,
     nickname: '',
     registered: false,
     createdAt: null,
   }
 
   function adopt(record) {
-    session.identity = b64uDecode(record.identity)
+    session.privateKey = b64uDecode(record.privateKey)
     session.publicKey = b64uDecode(record.publicKey)
     session.code = record.code
-    session.check = record.check
     session.nickname = record.nickname || defaultNickname(record.code)
     session.registered = Boolean(record.registered)
     session.createdAt = record.createdAt || Date.now()
@@ -44,10 +43,9 @@ export function createIdentityManager({ kernel, backend, onCreate }) {
 
   async function persist() {
     await backend.put(KEY, {
-      identity: b64uEncode(session.identity), // 私钥，仅本机
+      privateKey: b64uEncode(session.privateKey), // 私钥，仅本机
       publicKey: b64uEncode(session.publicKey),
       code: session.code,
-      check: session.check,
       nickname: session.nickname,
       registered: session.registered,
       createdAt: session.createdAt,
@@ -55,19 +53,17 @@ export function createIdentityManager({ kernel, backend, onCreate }) {
   }
 
   async function generate() {
-    const blob = kernel.generateIdentity()
-    const publicKey = kernel.identityPublic(blob)
-    const { code, check } = kernel.identityCode(blob)
-    session.identity = blob
+    const { privateKey, publicKey } = kernel.generateIdentity()
+    const code = kernel.codeOf(publicKey)
+    session.privateKey = privateKey
     session.publicKey = publicKey
     session.code = code
-    session.check = check
     session.nickname = session.nickname || defaultNickname(code)
     session.registered = false
     session.createdAt = Date.now()
     await persist()
     info('已生成密钥对与本机码', { code })
-    onCreate?.({ ...session })
+    onCreate?.({ code, registered: false })
   }
 
   /** 首次进入或本地无身份时调用。 */
@@ -75,7 +71,13 @@ export function createIdentityManager({ kernel, backend, onCreate }) {
     const record = await backend.get(KEY)
     if (record) {
       adopt(record)
-      info('载入本机身份', { code: session.code })
+      // 老记录没有私钥（更早的桩格式）时重新生成，避免半残身份
+      if (!session.privateKey || !session.publicKey) {
+        warn('本地身份不完整，重新生成', { code: session.code })
+        await generate()
+      } else {
+        info('载入本机身份', { code: session.code })
+      }
       return session
     }
     await generate()

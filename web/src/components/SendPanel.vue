@@ -1,6 +1,5 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { verifyInput, checkChar } from '../lib/crockford.js'
 import { decode as b64uDecode } from '../lib/base64url.js'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent, clock } from '../lib/format.js'
@@ -20,36 +19,32 @@ const file = ref(null)
 const codeInput = ref('')
 const recipient = ref(null)
 const lookupError = ref('')
-const phase = ref('idle') // idle | hashing | uploading | done | error
+const phase = ref('idle') // idle | packing | uploading | done | error
 const progress = ref({ done: 0, total: 0, message: '' })
 const errorText = ref('')
 const lastTransfer = ref(null)
 const busy = ref(false)
 const abort = ref(null)
 const pending = ref([])
-const resumeFile = ref(null)
 
-const codeCheck = computed(() => {
+/** 码的归一化口径由内核给（`ys_normalize_code`），前端不自己实现 Crockford。 */
+const normalized = computed(() => {
   const raw = codeInput.value.trim()
-  if (!raw) return { ok: false, empty: true }
-  return verifyInput(raw)
+  if (!raw || !props.kernel) return null
+  return props.kernel.normalizeCode(raw)
 })
 
 const codeHint = computed(() => {
-  const r = codeCheck.value
-  if (r.empty) return ''
-  if (r.ok) return `校验位正确（${checkChar(r.code)}）`
-  return r.reason === 'check' ? '校验位不对，可能抄错了' : '码格式不对（4 位 Crockford Base32）'
+  if (!codeInput.value.trim()) return ''
+  return normalized.value ? `将使用 ${normalized.value}` : '码格式不对（4 位 Crockford Base32，易混字符会自动纠正）'
 })
 
 async function lookup() {
   lookupError.value = ''
   recipient.value = null
-  const r = codeCheck.value
-  if (!r.ok) return
-  if (!props.api) return
+  if (!normalized.value || !props.api) return
   try {
-    const json = await props.api.getCode(r.code)
+    const json = await props.api.getCode(normalized.value)
     recipient.value = {
       code: json.code,
       nickname: json.nickname,
@@ -62,8 +57,7 @@ async function lookup() {
 }
 
 function pickFile(event) {
-  const f = event.target.files?.[0] || null
-  file.value = f
+  file.value = event.target.files?.[0] || null
   lastTransfer.value = null
   errorText.value = ''
   phase.value = 'idle'
@@ -75,7 +69,7 @@ async function send() {
   busy.value = true
   errorText.value = ''
   lastTransfer.value = null
-  phase.value = 'hashing'
+  phase.value = 'packing'
   abort.value = new AbortController()
   try {
     const result = await props.sendFile({
@@ -121,17 +115,11 @@ async function loadPending() {
   pending.value = all.filter((r) => r?.kind === 'send' && r.state === 'UPLOADING')
 }
 
-function pickResumeFile(event) {
-  resumeFile.value = event.target.files?.[0] || null
-}
-
 async function resume(record) {
-  if (!resumeFile.value) return
   busy.value = true
   errorText.value = ''
   try {
-    await props.resumeSend({ record, file: resumeFile.value })
-    resumeFile.value = null
+    await props.resumeSend({ record })
     await loadPending()
   } catch (err) {
     const d = describeError(err)
@@ -165,12 +153,12 @@ loadPending()
             inputmode="text"
             autocapitalize="characters"
             autocomplete="off"
-            placeholder="如 AWQW-X"
+            placeholder="如 AWQW"
             style="flex: 1"
             :disabled="busy"
             @blur="lookup"
           />
-          <button type="button" :disabled="!codeCheck.ok || busy" @click="lookup">查昵称</button>
+          <button type="button" :disabled="!normalized || busy" @click="lookup">查昵称</button>
         </div>
         <p v-if="codeHint" class="hint">{{ codeHint }}</p>
         <p v-if="recipient" class="meta">
@@ -180,12 +168,7 @@ loadPending()
       </div>
 
       <div class="row">
-        <button
-          type="button"
-          class="primary"
-          :disabled="!file || !recipient || busy"
-          @click="send"
-        >
+        <button type="button" class="primary" :disabled="!file || !recipient || busy" @click="send">
           加密并发送
         </button>
         <button v-if="busy" type="button" @click="cancel">取消</button>
@@ -211,8 +194,10 @@ loadPending()
 
       <div v-if="pending.length" class="stack">
         <hr />
-        <h2 style="margin: 0">未完成的上传（刷新后可续传）</h2>
-        <p class="hint">续传需要重新选同一个文件：浏览器拿不到上次的文件句柄，包会话已存在本机。</p>
+        <h2 style="margin: 0">未完成的上传</h2>
+        <p class="hint">
+          刷新后能续传的前提是本机还留着密文包（≤8 MiB）；超过这个大小只能在当前页面里续。
+        </p>
         <ul class="list">
           <li v-for="record in pending" :key="record.transferId">
             <div class="meta">
@@ -221,8 +206,9 @@ loadPending()
               <span class="tag">{{ clock(new Date(record.createdAt).toISOString()) }}</span>
             </div>
             <div class="row" style="margin-top: 8px">
-              <input type="file" style="flex: 1" @change="pickResumeFile" />
-              <button type="button" :disabled="busy" @click="resume(record)">继续上传</button>
+              <button type="button" :disabled="busy || !record.pack" @click="resume(record)">
+                {{ record.pack ? '继续上传' : '本机无密文包，请重发' }}
+              </button>
             </div>
           </li>
         </ul>
@@ -233,9 +219,7 @@ loadPending()
         <label style="margin: 0">直传（WebRTC）</label>
         <span class="tag">待第二晚</span>
       </div>
-      <p class="hint">
-        本轮只做中转：打洞开关与提示留位，不做真实直连，也不会自动切换路径。
-      </p>
+      <p class="hint">本轮只做中转：打洞开关与提示留位，不做真实直连，也不会自动切换路径。</p>
     </div>
   </section>
 </template>

@@ -1,29 +1,21 @@
 /**
- * 发送编排：本地文件 → 端侧加密（WASM）→ prelude + 分块上传 → complete。
+ * 发送编排：本地文件 → 端侧内核打包（整包）→ 切成 prelude + 块切片 → 上传 → complete。
  *
  * 与契约的对应关系：
- * - 包结构/清单/签名全部由内核产出，这里只拿 "prelude 整段" 与 "第 i 块切片"（CRYPTO-PACK §4.3 / §12）；
- * - 上传顺序：`POST /transfers` → `PUT prelude` → `PUT chunks/{i}` → `POST complete`（API.md §6）；
- * - 刷新后续传：`GET /transfers/{id}/status` 的 `bitmap` / `missing` 决定只补哪些块（§6.5 / §8.3）。
+ * - 包结构/清单/签名全由内核产出，Web 只按 §4.2 的算术把整包切成 `prelude` 与
+ *   `CHUNK_CT‖TAG` 切片（`crypto/layout.js`），不解析任何包内字段；
+ * - 上传顺序照 API.md §6：`POST /transfers` → `PUT prelude` → `PUT chunks/{i}` → `POST complete`；
+ * - 续传照 §6.5 / §8.3：`GET /status` 的 `bitmap/missing` 决定只补哪些块。
  *
- * 隐私：日志里只有块序号/字节数/状态，不含文件名、明文、密钥。
+ * 已知边界（内核当前是整包接口 `ys_pack`）：整份文件要进内存，所以有 `maxPackSize` 上限；
+ * 超过上限提示等流式接口（Ark 已把"流式分块 API"列入 v1 不做的排期）。
  */
 import { config } from '../config.js'
 import { CryptoError } from '../crypto/errors.js'
-import { encode as b64uEncode, decode as b64uDecode } from '../lib/base64url.js'
+import { encode as b64uEncode } from '../lib/base64url.js'
 import { decodeBitmap, missingIndexes } from '../lib/bitmap.js'
 import { runPool } from '../lib/pool.js'
 import { info } from '../lib/log.js'
-
-export function chunkCountOf(size, chunkSize) {
-  return Math.max(1, Math.ceil(size / chunkSize))
-}
-
-export async function readFileChunk(file, index, chunkSize) {
-  const start = index * chunkSize
-  const end = Math.min(start + chunkSize, file.size)
-  return new Uint8Array(await file.slice(start, end).arrayBuffer())
-}
 
 function idempotencyKey() {
   const bytes = new Uint8Array(16)
@@ -31,195 +23,162 @@ function idempotencyKey() {
   return b64uEncode(bytes)
 }
 
-function report(onProgress, patch) {
-  onProgress?.(patch)
-}
+const report = (onProgress, patch) => onProgress?.(patch)
 
 /**
  * @param {object} p
- * @param {object} p.api            createApi 的返回值
- * @param {object} p.kernel         端侧内核
- * @param {object} p.session        含 identity / code
- * @param {File|Blob} p.file        待发文件（只需要 name/size/type/slice）
+ * @param {object} p.api
+ * @param {object} p.kernel
+ * @param {object} p.session        含 privateKey / publicKey / code
+ * @param {File|Blob} p.file        要发的文件
  * @param {{code:string, nickname:string, publicKey:Uint8Array}} p.recipient
- * @param {(p:object)=>void} [p.onProgress]
- * @param {AbortSignal} [p.signal]
- * @param {object} [p.pendingStore]  保存续传记录（IndexedDB 视图）
  */
 export async function sendFile({ api, kernel, session, file, recipient, onProgress, signal, pendingStore, ttlSeconds, maxDownloads }) {
-  const chunkSize = config.chunkSize
-  const chunkCount = chunkCountOf(file.size, chunkSize)
   const name = file.name || 'file'
   const mime = file.type || 'application/octet-stream'
 
-  report(onProgress, { phase: 'hashing', done: 0, total: file.size, message: '读取并计算块摘要' })
+  if (file.size > config.maxPackSize) {
+    const err = new Error(`文件 ${file.size} 字节超过当前内核上限 ${config.maxPackSize} 字节（整包接口）`)
+    err.code = 'FILE_TOO_LARGE'
+    throw err
+  }
 
-  const handle = kernel.packOpen({
-    identity: session.identity,
-    recipientPublic: recipient.publicKey,
+  report(onProgress, { phase: 'packing', done: 0, total: file.size, message: '读取文件' })
+  if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+  const data = new Uint8Array(await file.arrayBuffer())
+
+  report(onProgress, { phase: 'packing', done: 0, total: file.size, message: '端侧打包（加密+签名）' })
+  const pack = kernel.pack({
+    data,
     name,
     mime,
-    plaintextSize: file.size,
-    chunkSize,
-    createdAt: Date.now(),
+    recipientPublic: recipient.publicKey,
+    senderPrivate: session.privateKey,
+    blockSize: kernel.blockSize || config.chunkSize,
   })
 
-  try {
-    // 第一遍：逐块摘要（清单要进 prelude，所以必须先读完；内存只驻留一个块）
-    for (let i = 0; i < chunkCount; i++) {
-      if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-      const plain = await readFileChunk(file, i, chunkSize)
-      kernel.packDigest(handle, i, plain)
-      report(onProgress, {
-        phase: 'hashing',
-        done: Math.min((i + 1) * chunkSize, file.size),
-        total: file.size,
-        message: `摘要 ${i + 1}/${chunkCount}`,
-      })
-    }
+  const chunkSize = kernel.blockSize || config.chunkSize
+  const { prelude, slices, preludeLen, chunkCount } = kernel.splitPack({
+    pack,
+    plaintextSize: data.length,
+    chunkSize,
+  })
+  const preludeSm3 = kernel.sm3(prelude)
 
-    const prelude = kernel.packSeal(handle)
-    const infoPack = kernel.packInfo(handle)
-    if (infoPack.chunkCount !== chunkCount || infoPack.plaintextSize !== file.size) {
-      throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '内核回报的块数/大小与文件不一致')
-    }
-    const preludeSm3 = kernel.sm3(prelude)
+  report(onProgress, { phase: 'creating', done: 0, total: data.length, message: '创建传输' })
+  const created = await api.createTransfer({
+    recipient_code: recipient.code,
+    plaintext_size: data.length,
+    chunk_size: chunkSize,
+    chunk_count: chunkCount,
+    prelude_len: preludeLen,
+    prelude_sm3: b64uEncode(preludeSm3),
+    ttl_seconds: ttlSeconds ?? config.defaultTtlSeconds,
+    max_downloads: maxDownloads ?? config.defaultMaxDownloads,
+    idempotency_key: idempotencyKey(),
+  })
 
-    report(onProgress, { phase: 'creating', done: 0, total: file.size, message: '创建传输' })
+  const transferId = created.transfer_id
+  const uploadToken = created.upload_token
 
-    const created = await api.createTransfer({
-      recipient_code: recipient.code,
-      plaintext_size: file.size,
-      chunk_size: infoPack.chunkSize,
-      chunk_count: infoPack.chunkCount,
-      prelude_len: prelude.length,
-      prelude_sm3: b64uEncode(preludeSm3),
-      ttl_seconds: ttlSeconds ?? config.defaultTtlSeconds,
-      max_downloads: maxDownloads ?? config.defaultMaxDownloads,
-      idempotency_key: idempotencyKey(),
-    })
+  await pendingStore?.put(transferId, {
+    kind: 'send',
+    transferId,
+    uploadToken,
+    recipientCode: recipient.code,
+    recipientNickname: recipient.nickname,
+    fileName: name,
+    fileSize: data.length,
+    chunkSize,
+    chunkCount,
+    preludeLen,
+    preludeSm3: b64uEncode(preludeSm3),
+    // 整包接口无法在刷新后重建会话：把密文包留在本机（≤ maxPersistPack 字节）才能续传
+    pack: pack.length <= config.maxPersistPack ? pack : null,
+    packSize: pack.length,
+    createdAt: Date.now(),
+    state: 'UPLOADING',
+  })
 
-    const transferId = created.transfer_id
-    const uploadToken = created.upload_token
+  report(onProgress, { phase: 'uploading', done: 0, total: data.length, message: '上传 prelude' })
+  await api.putPrelude({ transferId, uploadToken, prelude })
 
-    // 立刻落一份续传记录：之后任何一步失败/刷新，都能用同一个包会话续上
-    const snapshot = b64uEncode(kernel.packExport(handle))
-    await pendingStore?.put(transferId, {
-      kind: 'send',
-      transferId,
-      uploadToken,
-      recipientCode: recipient.code,
-      recipientNickname: recipient.nickname,
-      fileName: name,
-      fileSize: file.size,
-      chunkSize: infoPack.chunkSize,
-      chunkCount: infoPack.chunkCount,
-      preludeSm3: b64uEncode(preludeSm3),
-      preludeLen: prelude.length,
-      packSnapshot: snapshot,
-      createdAt: Date.now(),
-      state: 'UPLOADING',
-    })
+  const missing = await fetchMissing(api, transferId, uploadToken, chunkCount)
+  await uploadSlices({ api, transferId, uploadToken, slices, chunkCount, missing, onProgress, signal })
 
-    report(onProgress, { phase: 'uploading', done: 0, total: file.size, message: '上传 prelude' })
-    await api.putPrelude({ transferId, uploadToken, prelude })
-
-    const missing = await fetchMissing(api, transferId, uploadToken, infoPack.chunkCount)
-    await uploadChunks({ api, kernel, handle, file, chunkSize, transferId, uploadToken, indexes: missing, chunkCount, onProgress, signal })
-
-    report(onProgress, { phase: 'completing', done: file.size, total: file.size, message: '标记完成' })
-    const done = await api.complete({ transferId, uploadToken })
-    await pendingStore?.put(transferId, {
-      kind: 'send',
-      transferId,
-      uploadToken,
-      recipientCode: recipient.code,
-      recipientNickname: recipient.nickname,
-      fileName: name,
-      fileSize: file.size,
-      chunkSize: infoPack.chunkSize,
-      chunkCount: infoPack.chunkCount,
-      preludeLen: prelude.length,
-      preludeSm3: b64uEncode(preludeSm3),
-      createdAt: Date.now(),
-      state: done?.json?.state || 'READY',
-      doneAt: Date.now(),
-    })
-    info('发送完成', { bytes: file.size, chunks: infoPack.chunkCount })
-    report(onProgress, { phase: 'done', done: file.size, total: file.size, message: '已发送' })
-    return {
-      transferId,
-      uploadToken,
-      recipientCode: recipient.code,
-      fileName: name,
-      fileSize: file.size,
-      chunkCount,
-      state: done?.json?.state,
-    }
-  } finally {
-    try {
-      kernel.packClose(handle)
-    } catch {
-      /* 关闭失败不影响结果 */
-    }
+  report(onProgress, { phase: 'completing', done: data.length, total: data.length, message: '标记完成' })
+  const done = await api.complete({ transferId, uploadToken })
+  await pendingStore?.put(transferId, {
+    kind: 'send',
+    transferId,
+    uploadToken,
+    recipientCode: recipient.code,
+    recipientNickname: recipient.nickname,
+    fileName: name,
+    fileSize: data.length,
+    chunkSize,
+    chunkCount,
+    preludeLen,
+    preludeSm3: b64uEncode(preludeSm3),
+    createdAt: Date.now(),
+    state: done?.json?.state || 'READY',
+    doneAt: Date.now(),
+  })
+  info('发送完成', { bytes: data.length, chunks: chunkCount })
+  report(onProgress, { phase: 'done', done: data.length, total: data.length, message: '已发送' })
+  return {
+    transferId,
+    uploadToken,
+    recipientCode: recipient.code,
+    fileName: name,
+    fileSize: data.length,
+    chunkCount,
+    preludeLen,
+    state: done?.json?.state,
   }
 }
 
 /**
- * 续传：从本地快照恢复同一个包会话，只补 `missing` 的块。
- * 需要用户重新选同一个文件（浏览器拿不到上次的文件句柄）。
+ * 续传：本机存着密文包时，直接从 `/status` 的缺失块补齐。
+ * 没有包（文件太大或清理过）就只能重发——整包接口没法重建会话。
  */
-export async function resumeSend({ api, kernel, session, record, file, onProgress, signal, pendingStore }) {
-  if (!record?.packSnapshot) throw new CryptoError('CRYPTO_BAD_ARGUMENT', '缺少续传快照')
-  if (file.size !== record.fileSize) throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '所选文件与待续传文件大小不一致')
-
-  const handle = kernel.packImport(b64uDecode(record.packSnapshot))
-  try {
-    const prelude = kernel.packSeal(handle)
-    const infoPack = kernel.packInfo(handle)
-    if (infoPack.chunkCount !== record.chunkCount) {
-      throw new CryptoError('CRYPTO_LENGTH_INCONSISTENT', '快照块数与原记录不一致')
-    }
-
-    const json = (await api.uploadStatus({ transferId: record.transferId, uploadToken: record.uploadToken })) || {}
-    if (json.state && json.state !== 'UPLOADING') {
-      // 已经在 READY/其它态：不再重复传块
-      await pendingStore?.put(record.transferId, { ...record, state: json.state })
-      return { transferId: record.transferId, state: json.state, resumed: false }
-    }
-
-    const missing = json.bitmap
-      ? missingIndexes(decodeBitmap(json.bitmap, infoPack.chunkCount))
-      : await fetchMissing(api, record.transferId, record.uploadToken, infoPack.chunkCount)
-
-    if (!json.prelude_received) {
-      await api.putPrelude({ transferId: record.transferId, uploadToken: record.uploadToken, prelude })
-    }
-
-    await uploadChunks({
-      api,
-      kernel,
-      handle,
-      file,
-      chunkSize: record.chunkSize,
-      transferId: record.transferId,
-      uploadToken: record.uploadToken,
-      indexes: missing,
-      chunkCount: infoPack.chunkCount,
-      onProgress,
-      signal,
-    })
-
-    const done = await api.complete({ transferId: record.transferId, uploadToken: record.uploadToken })
-    await pendingStore?.put(record.transferId, { ...record, state: done?.json?.state || 'READY', doneAt: Date.now() })
-    return { transferId: record.transferId, state: done?.json?.state, resumed: true, missing: missing.length }
-  } finally {
-    try {
-      kernel.packClose(handle)
-    } catch {
-      /* ignore */
-    }
+export async function resumeSend({ api, kernel, session, record, onProgress, signal, pendingStore }) {
+  if (!record?.pack) {
+    const err = new Error('本机没有保留密文包，无法续传；请重新发送')
+    err.code = 'RESUME_UNAVAILABLE'
+    throw err
   }
+  const pack = record.pack instanceof Uint8Array ? record.pack : new Uint8Array(record.pack)
+  const { prelude, slices, chunkCount } = kernel.splitPack({
+    pack,
+    plaintextSize: record.fileSize,
+    chunkSize: record.chunkSize,
+  })
+  const status = await api.uploadStatus({ transferId: record.transferId, uploadToken: record.uploadToken })
+  if (status?.state && status.state !== 'UPLOADING') {
+    await pendingStore?.put(record.transferId, { ...record, state: status.state })
+    return { transferId: record.transferId, state: status.state, resumed: false }
+  }
+  if (!status?.prelude_received) {
+    await api.putPrelude({ transferId: record.transferId, uploadToken: record.uploadToken, prelude })
+  }
+  const missing = status?.bitmap
+    ? missingIndexes(decodeBitmap(status.bitmap, chunkCount))
+    : await fetchMissing(api, record.transferId, record.uploadToken, chunkCount)
+
+  await uploadSlices({
+    api,
+    transferId: record.transferId,
+    uploadToken: record.uploadToken,
+    slices,
+    chunkCount,
+    missing,
+    onProgress,
+    signal,
+  })
+  const done = await api.complete({ transferId: record.transferId, uploadToken: record.uploadToken })
+  await pendingStore?.put(record.transferId, { ...record, state: done?.json?.state || 'READY', doneAt: Date.now() })
+  return { transferId: record.transferId, state: done?.json?.state, resumed: true, missing: missing.length }
 }
 
 async function fetchMissing(api, transferId, uploadToken, chunkCount) {
@@ -227,35 +186,27 @@ async function fetchMissing(api, transferId, uploadToken, chunkCount) {
   if (json.bitmap) return missingIndexes(decodeBitmap(json.bitmap, chunkCount))
   if (Array.isArray(json.missing)) {
     const out = []
-    for (const range of json.missing) {
-      for (let i = range.start; i < range.start + range.count; i++) out.push(i)
-    }
+    for (const range of json.missing) for (let i = range.start; i < range.start + range.count; i++) out.push(i)
     return out
   }
   return [...Array(chunkCount).keys()]
 }
 
-async function uploadChunks({ api, kernel, handle, file, chunkSize, transferId, uploadToken, indexes, chunkCount, onProgress, signal }) {
-  if (indexes.length === 0) return
-  const sentBytes = indexes.reduce((n, i) => {
-    const start = i * chunkSize
-    const end = Math.min(start + chunkSize, file.size)
-    return n + (end - start)
-  }, 0)
-  let doneBytes = 0
-
+async function uploadSlices({ api, transferId, uploadToken, slices, chunkCount, missing, onProgress, signal }) {
+  if (!missing.length) return
+  const totalBytes = missing.reduce((n, i) => n + slices[i].length, 0)
+  let sent = 0
   await runPool(
-    indexes,
+    missing,
     async (index) => {
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-      const plain = await readFileChunk(file, index, chunkSize)
-      const slice = kernel.packChunk(handle, index, plain)
-      await api.putChunk({ transferId, uploadToken, index, bytes: slice })
-      doneBytes += plain.length
+      if (!slices[index]) throw new CryptoError('CRYPTO_CHUNK_MISSING', `切片 ${index} 不存在`)
+      await api.putChunk({ transferId, uploadToken, index, bytes: slices[index] })
+      sent += slices[index].length
       report(onProgress, {
         phase: 'uploading',
-        done: doneBytes,
-        total: sentBytes,
+        done: sent,
+        total: totalBytes,
         message: `上传块 ${index + 1}/${chunkCount}`,
       })
     },

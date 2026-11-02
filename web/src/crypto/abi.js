@@ -1,144 +1,117 @@
 /**
- * 端侧内核（Rust → wasm32，raw C ABI）**接口契约表**——本文件是唯一需要对齐的地方。
+ * 端侧内核（Rust → wasm32，raw C ABI，**0 import**）的绑定表。
  *
- * 为什么单独一张表：Rune 的导出函数清单还没冻结，Web 侧所有调用都经这里，
- * 对齐时只改这个文件（+ 必要时改同名包装），业务代码不受影响。
+ * 唯一权威：`crypto/include/yanshu_sm.h`（Rune 的 crate 导出）。本文件只做两件事：
+ *   1. 列出我们依赖的导出与错误名 → 端侧错误码的映射；
+ *   2. 记住"内核与契约之间还差什么"，返工时只改这里和 `wasm.js`。
  *
- * 设计原则（与 CRYPTO-PACK §16 的分工一致）：
- * - 加密包对 Web 是**不透明字节**：包的组装/拆解、HEADER/AAD/nonce/清单全在 WASM 里，
- *   Web 只按 §4.3 / §12 拿 "prelude" 与 "第 i 块切片"，不做任何字段拼接或解析。
- * - 所有指针都是 wasm 线性内存偏移，长度都是字节数；返回值 0 = 成功，负数 = 错误码。
- * - 输出缓冲区由调用方 `ys_alloc` 申请、用完 `ys_free`；长度不够时内核写"所需长度"并返回 -2。
- * - u64 参数一律拆成两个 u32（hi, lo），避免 JS/WASM 之间的 BigInt 边界问题。
+ * 约定（与头文件一致）：
+ * - 指针 = wasm 线性内存偏移；长度 = 字节数（size_t → JS number）。
+ * - `ys_alloc(n)` 申请、`ys_free(p, n)` 释放，长度必须一致。
+ * - 返回 0 = 成功，负数为错误码；缓冲区不足返回 -2 并写所需长度。
+ * - 需要随机的接口传 `seed`（>=16 字节，每次现取，不复用）。
  *
- * ⚠️ 对齐现状（2026-11-02 夜）：Rune 的 crate 在 `crypto/sm/src/ffi.rs` 里目前只导出了
- * `ys_alloc/ys_free/ys_version` 与基础算子（`ys_sm3`、`ys_sm2_*`、`ys_user_code`、`ys_normalize_code`、
- * `ys_pack`、`ys_unpack*`）。其中 `ys_pack/ys_unpack` 是**整包进出**的形态，而传输契约要求
- * "prelude 一次 + 块切片逐块"（§4.3 / §12），因此**必须**补一组会话式（streaming）导出；
- * 本表定义的就是这组。整包接口无法支撑 1 MiB 分块上传，也不允许 Web 自己去切包（那等于解析包内字段）。
- * 另：契约 §9.1 的公钥是 65 字节未压缩点（`0x04‖X‖Y`），§3.4 的码由这 65 字节派生；
- * 当前 crate 里是 64 字节（X‖Y）。两者不一致会让"码"和"发送方校验"对不上，需以契约为准。
+ * 当前内核（PR #4，`feat/endcrypto-wasm`）与已冻结契约的差异（**等 Rune 返工，前端不改业务**）：
+ * - 公钥：内核 64 字节（X‖Y）；契约 §9.1 / §3.4 是 65 字节未压缩点（`0x04‖X‖Y`）。
+ *   适配层在边界上补/去 `0x04`（`WIRE_PUBKEY_LEN` / `KERNEL_PUBKEY_LEN`）。
+ * - 签名：内核输出 `r‖s`（64 字节）；契约 §10.4 要 DER（70..72）。`lib/der.js` 在边界转换。
+ * - 包头：内核 `ys_header_len()` = 40；契约是 112（含 `SENDER_PUB` 段）。段的切分算术按
+ *   `ys_header_len()` 选（见 `layout.js`），返工后自动落到契约那一套。
+ * - `ys_unpack*` 仍要调用方传 `sender_public`；契约 §10.3 要求公钥在包内、可离线解包。
+ *   返工后这两个入参会消失——调用点只在 `wasm.js`。
  */
 
-/** ABI 版本：0x00010000 = 1.0（与内核 `ys_abi_version()` 比对） */
+/** ABI 版本：0x00010000（与 `ys_version()` 比对） */
 export const ABI_VERSION = 0x00010000
 
-/** 我们依赖的全部导出函数（缺任何一个都视为 ABI 不匹配，直接报错，不做降级猜测）。 */
+/** 必须存在的导出（缺失即 ABI 不匹配，不做降级猜测）。 */
 export const REQUIRED_EXPORTS = [
-  'ys_abi_version',
   'ys_alloc',
   'ys_free',
-  'ys_identity_generate',
-  'ys_identity_public',
-  'ys_identity_code',
-  'ys_sign',
-  'ys_verify',
+  'ys_version',
+  'ys_error_name',
   'ys_sm3',
-  'ys_code_of_public',
+  'ys_hmac_sm3',
+  'ys_hkdf_sm3',
+  'ys_sm4_encrypt_block',
+  'ys_sm4_decrypt_block',
+  'ys_sm4_gcm_encrypt',
+  'ys_sm4_gcm_decrypt',
+  'ys_sm2_keygen',
+  'ys_sm2_pubkey',
+  'ys_sm2_encrypt',
+  'ys_sm2_decrypt',
+  'ys_sm2_sign',
+  'ys_sm2_verify',
+  'ys_user_code',
   'ys_normalize_code',
-  'ys_pack_open',
-  'ys_pack_digest',
-  'ys_pack_seal',
-  'ys_pack_chunk',
-  'ys_pack_info',
-  'ys_pack_export',
-  'ys_pack_import',
-  'ys_pack_close',
-  'ys_unpack_open',
-  'ys_unpack_chunk',
-  'ys_unpack_finish',
-  'ys_unpack_close',
+  'ys_pack',
+  'ys_unpack_meta',
+  'ys_unpack',
 ]
 
-/** 可选导出（有则用，无则走本地等价实现）。 */
-export const OPTIONAL_EXPORTS = ['ys_version', 'ys_error_name']
+/** 可选导出（有则用）。 */
+export const OPTIONAL_EXPORTS = ['ys_default_block_size', 'ys_header_len']
 
-/**
- * 函数签名说明（给人看的，也是被 Rune 对齐时的对照表）。
- *
- * 身份（SM2 密钥对；私钥 blob 只在浏览器本地，不上传、不备份）
- *   ys_identity_generate(seed:ptr, seedLen:u32, out:ptr, cap:u32, outLen:ptr) -> i32
- *       生成密钥对，输出**不透明身份 blob**（WASM 自己定义格式；Web 不解析）。
- *   ys_identity_public(blob:ptr, blobLen:u32, out:ptr, cap:u32, outLen:ptr) -> i32
- *       输出 65 字节未压缩公钥（0x04‖X32‖Y32），用于注册与分发。
- *   ys_identity_code(blob:ptr, blobLen:u32, out:ptr) -> i32
- *       输出 5 字节：4 位码 + 1 位校验字符（§3.4）。
- *   ys_sign(blob:ptr, blobLen:u32, seed:ptr, seedLen:u32, msg:ptr, msgLen:u32,
- *           out:ptr, cap:u32, outLen:ptr) -> i32
- *       输出 DER 签名（70..72 字节，§10.4）。若内核只能给 64 字节 r‖s，Web 侧按 §10.4 转 DER。
- *   ys_verify(pub:ptr, msg:ptr, msgLen:u32, sig:ptr, sigLen:u32) -> i32   // 1 通过 / 0 不通过
- *   ys_sm3(input:ptr, len:u32, out32:ptr) -> i32                        // 只用于 prelude_sm3
- *   ys_code_of_public(pub:ptr, out5:ptr) -> i32
- *   ys_normalize_code(input:ptr, len:u32, out4:ptr) -> i32              // 归一化后 4 字节
- *
- * 打包（发送方；分两遍读文件：先摘要、再加密，内存只驻留一个块）
- *   ys_pack_open(sender:ptr, senderLen:u32, recipientPub:ptr, name:ptr, nameLen:u32,
- *                mime:ptr, mimeLen:u32, sizeHi:u32, sizeLo:u32, chunkSize:u32,
- *                createdHi:u32, createdLo:u32, seed:ptr, seedLen:u32, outHandle:ptr) -> i32
- *   ys_pack_digest(handle:u32, index:u32, data:ptr, dataLen:u32) -> i32
- *   ys_pack_seal(handle:u32, out:ptr, cap:u32, outLen:ptr) -> i32       // 输出 prelude
- *   ys_pack_chunk(handle:u32, index:u32, data:ptr, dataLen:u32, out:ptr, cap:u32, outLen:ptr) -> i32
- *   ys_pack_info(handle:u32, out:ptr) -> i32                            // 24 字节，见 PACK_INFO_LAYOUT
- *   ys_pack_export(handle:u32, out:ptr, cap:u32, outLen:ptr) -> i32     // 会话快照，供刷新后续传
- *   ys_pack_import(blob:ptr, blobLen:u32, outHandle:ptr) -> i32
- *   ys_pack_close(handle:u32) -> i32
- *
- * 解包（接收方）
- *   ys_unpack_open(prelude:ptr, preludeLen:u32, identity:ptr, identityLen:u32,
- *                  outMeta:ptr, cap:u32, outLen:ptr, outHandle:ptr) -> i32
- *       校验 §13 里 prelude 能校验的部分（1..18），输出元信息 **JSON 文本**：
- *       {"name","mime","size","chunk_size","chunk_count","sender_code","version","signature":"ok"}
- *   ys_unpack_chunk(handle:u32, index:u32, ct:ptr, ctLen:u32, out:ptr, cap:u32, outLen:ptr) -> i32
- *       输入 = CHUNK_CT‖TAG（不含 16 字节块头，块头由内核按 §6.3 重建），输出明文块。
- *   ys_unpack_finish(handle:u32) -> i32                                 // §13 #22：末块唯一且齐备
- *   ys_unpack_close(handle:u32) -> i32
- */
+/** 内核公钥 / 契约 wire 公钥长度。 */
+export const KERNEL_PUBKEY_LEN = 64
+export const WIRE_PUBKEY_LEN = 65
 
-/** `ys_pack_info` 输出布局（24 字节，大端）：chunkSize u32 | chunkCount u32 | size u64 | preludeLen u32 | state u32 */
-export const PACK_INFO_LEN = 24
-
-/** 内核错误码 → 端侧错误码。负数取绝对值索引；未列出的归到 CRYPTO_INTERNAL。 */
-export const ERROR_CODE_MAP = {
-  1: 'CRYPTO_BAD_ARGUMENT',
-  2: 'CRYPTO_BUFFER_TOO_SMALL',
-  3: 'CRYPTO_RNG',
-  4: 'CRYPTO_MAGIC_MISMATCH',
-  5: 'CRYPTO_VERSION_UNSUPPORTED',
-  6: 'CRYPTO_HEADER_INVALID',
-  7: 'CRYPTO_ALG_UNSUPPORTED',
-  8: 'CRYPTO_FLAGS_UNKNOWN',
-  9: 'CRYPTO_UNSIGNED',
-  10: 'CRYPTO_LENGTH_INCONSISTENT',
-  11: 'CRYPTO_KEY_UNWRAP_FAILED',
-  12: 'CRYPTO_MANIFEST_AUTH_FAILED',
-  13: 'CRYPTO_MANIFEST_INVALID',
-  14: 'CRYPTO_SIGNATURE_INVALID',
-  15: 'CRYPTO_SENDER_MISMATCH',
-  16: 'CRYPTO_CHUNK_ORDER',
-  17: 'CRYPTO_CHUNK_MISSING',
-  18: 'CRYPTO_CHUNK_AUTH_FAILED',
-  19: 'CRYPTO_DIGEST_MISMATCH',
+/** 内核错误码（头文件末尾的稳定契约）→ 错误名；`ys_error_name` 不可用时用它兜底。 */
+export const ERROR_CODES = {
+  [-1]: 'BAD_ARGUMENT',
+  [-2]: 'BUFFER_TOO_SMALL',
+  [-3]: 'RNG',
+  [-4]: 'BAD_MAGIC',
+  [-5]: 'UNSUPPORTED_VERSION',
+  [-6]: 'BAD_FLAGS',
+  [-7]: 'TRUNCATED',
+  [-8]: 'BAD_KEY_RECORD',
+  [-9]: 'BAD_SIGNATURE_RECORD',
+  [-10]: 'BAD_MANIFEST_RECORD',
+  [-11]: 'BLOCK_SEQUENCE',
+  [-12]: 'DUPLICATE_BLOCK',
+  [-13]: 'MISSING_BLOCK',
+  [-14]: 'LAST_FLAG_MISMATCH',
+  [-15]: 'TAG_MISMATCH',
+  [-16]: 'MANIFEST_MISMATCH',
+  [-17]: 'SIGNATURE_MISMATCH',
+  [-18]: 'TRAILING_BYTES',
+  [-19]: 'BAD_POINT',
+  [-20]: 'BAD_KDF',
+  [-21]: 'BAD_CODE',
+  [-22]: 'CODE_EXHAUSTED',
+  [-23]: 'BAD_CIPHERTEXT',
+  [-99]: 'INTERNAL',
 }
 
-/** `ys_error_name` 返回的名字（若内核提供）→ 端侧错误码；用于内核扩充错误码时不失配。 */
-export const ERROR_NAME_MAP = {
-  BadArgument: 'CRYPTO_BAD_ARGUMENT',
-  BufferTooSmall: 'CRYPTO_BUFFER_TOO_SMALL',
-  Rng: 'CRYPTO_RNG',
-  MagicMismatch: 'CRYPTO_MAGIC_MISMATCH',
-  VersionUnsupported: 'CRYPTO_VERSION_UNSUPPORTED',
-  HeaderInvalid: 'CRYPTO_HEADER_INVALID',
-  AlgUnsupported: 'CRYPTO_ALG_UNSUPPORTED',
-  FlagsUnknown: 'CRYPTO_FLAGS_UNKNOWN',
-  Unsigned: 'CRYPTO_UNSIGNED',
-  LengthInconsistent: 'CRYPTO_LENGTH_INCONSISTENT',
-  KeyUnwrapFailed: 'CRYPTO_KEY_UNWRAP_FAILED',
-  ManifestAuthFailed: 'CRYPTO_MANIFEST_AUTH_FAILED',
-  ManifestInvalid: 'CRYPTO_MANIFEST_INVALID',
-  SignatureInvalid: 'CRYPTO_SIGNATURE_INVALID',
-  SenderMismatch: 'CRYPTO_SENDER_MISMATCH',
-  ChunkOrder: 'CRYPTO_CHUNK_ORDER',
-  ChunkMissing: 'CRYPTO_CHUNK_MISSING',
-  ChunkAuthFailed: 'CRYPTO_CHUNK_AUTH_FAILED',
-  DigestMismatch: 'CRYPTO_DIGEST_MISMATCH',
+/**
+ * 错误名 → 端侧错误码（`crypto/errors.js` 里的 `CRYPTO_*`）。
+ * 语义按"用户能做什么"归类：同一类的不同名字可以合并，但不许把"校验失败"说成"未就绪"。
+ */
+export const ERROR_NAME_TO_CODE = {
+  BAD_ARGUMENT: 'CRYPTO_BAD_ARGUMENT',
+  BUFFER_TOO_SMALL: 'CRYPTO_BUFFER_TOO_SMALL',
+  RNG: 'CRYPTO_RNG',
+  BAD_MAGIC: 'CRYPTO_MAGIC_MISMATCH',
+  UNSUPPORTED_VERSION: 'CRYPTO_VERSION_UNSUPPORTED',
+  BAD_FLAGS: 'CRYPTO_FLAGS_UNKNOWN',
+  TRUNCATED: 'CRYPTO_LENGTH_INCONSISTENT',
+  BAD_KEY_RECORD: 'CRYPTO_KEY_UNWRAP_FAILED',
+  BAD_SIGNATURE_RECORD: 'CRYPTO_SIGNATURE_INVALID',
+  BAD_MANIFEST_RECORD: 'CRYPTO_MANIFEST_INVALID',
+  BLOCK_SEQUENCE: 'CRYPTO_CHUNK_ORDER',
+  DUPLICATE_BLOCK: 'CRYPTO_CHUNK_ORDER',
+  MISSING_BLOCK: 'CRYPTO_CHUNK_MISSING',
+  LAST_FLAG_MISMATCH: 'CRYPTO_CHUNK_ORDER',
+  TAG_MISMATCH: 'CRYPTO_CHUNK_AUTH_FAILED',
+  MANIFEST_MISMATCH: 'CRYPTO_MANIFEST_AUTH_FAILED',
+  SIGNATURE_MISMATCH: 'CRYPTO_SIGNATURE_INVALID',
+  TRAILING_BYTES: 'CRYPTO_LENGTH_INCONSISTENT',
+  BAD_POINT: 'CRYPTO_KEY_UNWRAP_FAILED',
+  BAD_KDF: 'CRYPTO_KEY_UNWRAP_FAILED',
+  BAD_CODE: 'CRYPTO_BAD_ARGUMENT',
+  CODE_EXHAUSTED: 'CRYPTO_RNG',
+  BAD_CIPHERTEXT: 'CRYPTO_KEY_UNWRAP_FAILED',
+  INTERNAL: 'CRYPTO_INTERNAL',
 }

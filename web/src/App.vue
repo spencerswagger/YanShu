@@ -10,6 +10,7 @@ import { sendFile, resumeSend } from './net/upload.js'
 import { receiveTransfer } from './net/download.js'
 import { describeError } from './net/errors.js'
 import { saveBlob } from './lib/save.js'
+import { decode as b64uDecode } from './lib/base64url.js'
 import { info } from './lib/log.js'
 import MyCodeCard from './components/MyCodeCard.vue'
 import SendPanel from './components/SendPanel.vue'
@@ -33,10 +34,9 @@ const inboxRef = ref(null)
 
 /** 模板用的会话镜像（身份对象在 identityManager 里是活的，撞码重生成时会换） */
 const session = reactive({
-  identity: null,
+  privateKey: null,
   publicKey: null,
   code: '',
-  check: '',
   nickname: '',
   registered: false,
 })
@@ -52,10 +52,9 @@ const kernelLabel = computed(() => {
 function syncSession() {
   const s = identityManager.value?.session
   if (!s) return
-  session.identity = s.identity
+  session.privateKey = s.privateKey
   session.publicKey = s.publicKey
   session.code = s.code
-  session.check = s.check
   session.nickname = s.nickname
   session.registered = s.registered
 }
@@ -150,27 +149,36 @@ async function doSend({ file, recipient, onProgress, signal }) {
   })
 }
 
-async function doResume({ record, file }) {
+async function doResume({ record }) {
   return resumeSend({
     api: api.value,
     kernel: kernel.value,
     session: identityManager.value.session,
     record,
-    file,
     pendingStore: pendingBackend.value,
   })
 }
 
+/** 内核当前把发送方公钥当入参（契约要求公钥在包内）：先从码取，再验签。 */
+const senderPublicCache = new Map()
+async function fetchSenderPublic(code) {
+  if (senderPublicCache.has(code)) return senderPublicCache.get(code)
+  const json = await api.value.getCode(code)
+  const pub = b64uDecode(json.public_key)
+  senderPublicCache.set(code, pub)
+  return pub
+}
+
 async function doReceive({ transferId, onProgress }) {
-  const result = await receiveTransfer({
+  return receiveTransfer({
     api: api.value,
     kernel: kernel.value,
     session: identityManager.value.session,
     transferId,
+    senderPublic: fetchSenderPublic,
     onProgress,
     save: saveBlob,
   })
-  return result
 }
 </script>
 
@@ -209,7 +217,6 @@ async function doReceive({ transferId, onProgress }) {
 
   <MyCodeCard
     :code="session.code"
-    :check="session.check"
     :nickname="session.nickname"
     :registered="session.registered"
     :real-crypto="realCrypto"

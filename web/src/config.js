@@ -44,6 +44,15 @@ export const config = {
   /** 单文件上限（与服务端 /v1/config 的 max_plaintext_size 对齐，取回后以服务端值覆盖） */
   maxPlaintextSize: 4294967296,
 
+  /**
+   * 端侧内核当前是**整包**接口（ys_pack 一次吃整份明文），所以要给内存留上限：
+   * 明文 + 密文包同时在内存里，取 64 MiB 作为可用上限；超过提示等流式接口（Ark 已排期）。
+   */
+  maxPackSize: 64 * 1024 * 1024,
+
+  /** 刷新后续传要用：把 ≤8 MiB 的密文包留在本机 IndexedDB（更大就只能在当前页面内续传） */
+  maxPersistPack: 8 * 1024 * 1024,
+
   /** 撞码自动重生成密钥对的次数（任务口径：自动重试一次，之后由用户手动点） */
   autoCodeRetries: 1,
 }

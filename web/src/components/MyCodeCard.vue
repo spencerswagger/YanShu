@@ -4,18 +4,17 @@ import { copyText } from '../lib/save.js'
 
 const props = defineProps({
   code: { type: String, default: '' },
-  check: { type: String, default: '' },
   nickname: { type: String, default: '' },
   registered: { type: Boolean, default: false },
   realCrypto: { type: Boolean, default: false },
   kernelMode: { type: String, default: 'loading' },
 })
 
-const display = computed(() => (props.code ? `${props.code}-${props.check}` : '——'))
+const display = computed(() => props.code || '——')
 
 async function copy() {
   if (!props.code) return
-  await copyText(`${props.code}-${props.check}`)
+  await copyText(props.code)
 }
 </script>
 
