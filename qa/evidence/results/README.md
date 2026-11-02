@@ -50,6 +50,7 @@ results/
 | 证据文件 | 服务端 | 二进制 sha256 | 认证 | 可复跑命令 | 结论 |
 |---|---|---|---|---|---|
 | `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | `08d40e7` | `275fc463…6af55` | **真 sm2** | `YS_EV1_VERIFIER=sm2 YS_EV1_LOG_MODE=dir YS_DELIVER_BIN=core-deliver qa/evidence/run_evidence1_core.sh …` | **闭合**：存储/DB/日志三处零命中，对照 1/1/1/0 |
+| `contract-v1/2026-11-02-upgrade-path-check.md` | —（服务端证据） | 老 `08d40e7` → 新 `5605907` | — | — | native-api | `python3 qa/evidence/check_upgrade_path.py --old-binary <旧> --new-binary <新> --dsn "<DSN>"` | **升级路径常规项**：老库缺列 → 迁移补列 → 历史行完好（`pre-kid`）→ 服务起 + healthz 200 → 连跑两次幂等（10/10） |
 | `contract-v1/2026-11-02-token-naming-authority-5605907.md` | —（服务端证据） | `5605907` | `3c1e4b2b…35f98f` | stub-allow | native-api | `check_token_lifecycle.py ...`（`--kid` 即 epoch） | **命名权威表**：只改 secret → 204（不吊销）；只改 epoch → 401 `AUTH_TOKEN_STALE`；两者都改 → STALE 优先；新签发 201、旧 token 不复活；epoch 调小拒启动 |
 | `contract-v1/2026-11-02-host-binary-7239888.md` | —（服务端证据） | `7239888` | `bd64d23c…d7d6d7` | stub/sm2 | native-api | `check_token_lifecycle.py --kid 1 …`；`yanshu-server -migrate-only` 验升级路径 | **三件套 + 升级路径已修**：老库（`08d40e7`）升级后补上 `upload_token_kid` 并起得来；token 四步 201 → 401 `AUTH_TOKEN_INVALID`（secret）→ 401 `AUTH_TOKEN_STALE`（kid）→ 新 201，旧 token 不复活 |
 | `contract-v1/2026-11-02-token-kid-fa479d9.md` | —（服务端证据） | `fa479d9` | 二进制前缀 `b9d4086e…` | stub-allow | native-api | `python3 qa/evidence/check_token_lifecycle.py --kid k1 --binary <bin> --dsn "<DSN>" --ys-tool <t>` | **token 已验证（kid）**：基线 201 → 只换 secret 401 `AUTH_SIGNATURE_INVALID` → 只换 kid 401 `AUTH_TOKEN_STALE` → 新签发 201、旧 token 不复活；不设 KID 启动 exit 1 |
@@ -76,8 +77,9 @@ token 轮换（kid → `AUTH_TOKEN_REVOKED`）。
 
 **仍 BLOCKED / 待跟进**：
 
-1. ~~已有 schema 升级缺 `upload_token_kid` 列~~ → **已闭合**（`7239888` 补 `0002/0003` 迁移）：
-   实测用 `08d40e7` 建老库 → 新二进制 `-migrate-only` → 列补上、服务起得来、无 `sweep failed`。
+1. ~~已有 schema 升级缺 `upload_token_kid` 列~~ → **已闭合且有常规检查**（`check_upgrade_path.py`）：
+   老 `08d40e7` → 新 `5605907` 十项断言全 PASS（列补上、历史行 `pre-kid`、服务起、连跑两次幂等）。
+   **`739293a` 存在该缺口，不可用于已有库**；`7239888` 起修复。
 2. **token 命名以实测为准（`5605907`）**：只改 secret **不吊销**（204），只改 epoch →
    **401 `AUTH_TOKEN_STALE`**，两者都改 → STALE 优先；`AUTH_TOKEN_INVALID` 与
    `AUTH_TOKEN_EXPIRED` 在本矩阵未被触发（前者原用于 secret 不匹配，现已不适用；

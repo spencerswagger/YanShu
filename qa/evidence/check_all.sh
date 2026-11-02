@@ -43,6 +43,18 @@ python3 "$here/check_code_consistency.py" --wasm "$WASM" --ys-tool "$TOOL" \
 rc_code=$?
 set -e
 
+if [ -n "${YS_OLD_BINARY:-}" ] && [ -n "${YS_NEW_BINARY:-}" ] && [ -n "${YS_BASE_DSN:-}" ]; then
+    echo "== 3b/5 升级路径（老库 → 新库）=="
+    set +e
+    python3 "$here/check_upgrade_path.py" --old-binary "$YS_OLD_BINARY" --new-binary "$YS_NEW_BINARY" \
+        --dsn "$YS_BASE_DSN" | tail -4
+    rc_upgrade=$?
+    set -e
+else
+    rc_upgrade=0
+    echo "== 3b/5 升级路径：跳过（需设 YS_OLD_BINARY / YS_NEW_BINARY / YS_BASE_DSN）=="
+fi
+
 if [ -n "${YS_SERVER_DIR:-}" ]; then
     echo "== 3a/5 服务端内嵌内核 sha256 =="
     set +e
@@ -69,5 +81,6 @@ echo "  head 产物：$BYTES 字节  sha256=$SHA  ys_version=$VER"
 echo "  用户码一致性：exit=$rc_code"
 echo "  prelude-only 元数据：exit=$rc_prelude"
 echo "  服务端内嵌内核 sha：exit=$rc_kernel${YS_SERVER_DIR:+（$YS_SERVER_DIR）}"
+echo "  升级路径：exit=$rc_upgrade"
 echo "  证据二：exit=$rc_ev2"
-[ "$rc_code" -eq 0 ] && [ "$rc_prelude" -eq 0 ] && [ "$rc_ev2" -eq 0 ] && [ "$rc_kernel" -eq 0 ]
+[ "$rc_code" -eq 0 ] && [ "$rc_prelude" -eq 0 ] && [ "$rc_ev2" -eq 0 ] && [ "$rc_kernel" -eq 0 ] && [ "$rc_upgrade" -eq 0 ]
