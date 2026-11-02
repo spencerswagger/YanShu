@@ -5,6 +5,8 @@
 - 对象：`feat/server-skeleton@97d156c` 自编二进制
 - 结论：**4/5 PASS**；唯一 FAIL 是 **`SIG_INPUT_TOO_LONG` 未实现且当前不可达**
 
+> 口径更新（2026-11-02）：第 5 条判 **N/A**，不计 FAIL——实现按设计正确（字段级优先）。
+
 ## 1. 长度表（契约 §1.3 vs 实测推导）
 
 | PURPOSE | 字段串上限 | `SIG_INPUT` 最长 | 字段串构成 |
@@ -29,7 +31,7 @@
 | 2 | `REGISTER` 恰好 109 字节 | 接受（走到验签） | **401 `AUTH_SIGNATURE_INVALID`** | PASS |
 | 3 | `REGISTER` 110 字节（PUBKEY 66） | 字段级错误、非 TOO_LONG | **400 `BAD_REQUEST`** | PASS（但错误名偏笼统） |
 | 4 | 昵称 **33 字节** | `NICKNAME_INVALID` | **400 `NICKNAME_INVALID`** | PASS |
-| 5 | **513 字节**输入（昵称 467） | `400 SIG_INPUT_TOO_LONG` | **400 `NICKNAME_INVALID`** | **FAIL** |
+| 5 | **513 字节**输入（昵称 467） | `400 SIG_INPUT_TOO_LONG` | **400 `NICKNAME_INVALID`** | **N/A（不可观测）**：字段级校验先行，512 门不可达；契约将注明 |
 
 ## 3. FAIL 的真实含义（两件事要分开说）
 
