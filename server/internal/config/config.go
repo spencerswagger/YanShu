@@ -129,6 +129,9 @@ func Load() (Config, error) {
 	if kidRaw == "" {
 		kidRaw = os.Getenv("YANSHU_TOKEN_KID") // 兼容旧变量名
 	}
+	if kidRaw == "" {
+		kidRaw = "1" // 未配置默认 epoch=1（契约 §1.7）
+	}
 	if kidRaw != "" {
 		n, err := strconv.ParseInt(kidRaw, 10, 64)
 		if err != nil || n <= 0 {

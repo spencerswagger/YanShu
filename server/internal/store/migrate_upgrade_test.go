@@ -48,3 +48,41 @@ func TestMigrateUpgradeFromOldSchema(t *testing.T) {
 		t.Fatalf("second migrate: %v", err)
 	}
 }
+
+// 已升到"删除版 0004"的库（列/表被删）→ 跑 0005 能恢复列与状态表，且幂等。
+func TestMigrateRestoresAfterDrop(t *testing.T) {
+	st := testutil.NewStore(t, "store")
+	ctx := context.Background()
+
+	if _, err := st.Pool().Exec(ctx, `DROP TABLE IF EXISTS token_kid_state`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+	if _, err := st.Pool().Exec(ctx, `ALTER TABLE transfers DROP COLUMN IF EXISTS upload_token_kid`); err != nil {
+		t.Fatalf("drop column: %v", err)
+	}
+	if _, err := st.Pool().Exec(ctx, `DELETE FROM schema_migrations WHERE version LIKE '0005%'`); err != nil {
+		t.Fatalf("forget 0005: %v", err)
+	}
+
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("migrate 0005: %v", err)
+	}
+
+	var nullable string
+	if err := st.Pool().QueryRow(ctx, `SELECT is_nullable FROM information_schema.columns
+		WHERE table_name='transfers' AND column_name='upload_token_kid'`).Scan(&nullable); err != nil {
+		t.Fatalf("column not restored: %v", err)
+	}
+	if nullable != "NO" {
+		t.Fatalf("restored column must be NOT NULL, got %s", nullable)
+	}
+	var n int
+	if err := st.Pool().QueryRow(ctx, `SELECT count(*) FROM token_kid_state`).Scan(&n); err != nil {
+		t.Fatalf("state table not restored: %v", err)
+	}
+
+	// 连跑两次幂等。
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+}
