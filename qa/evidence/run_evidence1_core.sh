@@ -105,10 +105,19 @@ SRV=$!
 trap 'kill "$SRV" 2>/dev/null || true' EXIT INT TERM
 
 i=0
+hz="000"
 while [ $i -lt 60 ]; do
-    if curl -fsS --max-time 2 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then break; fi
+    hz=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "http://127.0.0.1:$port/healthz" 2>/dev/null || echo 000)
+    [ "$hz" = "200" ] && break
+    [ "$hz" = "503" ] && break          # degraded：DB 不可用，别当"实例起来了"
     i=$((i+1)); sleep 0.2
 done
+if [ "$hz" = "503" ]; then
+    echo "[BLOCKED] /healthz 返回 503 degraded（DB 不可用），不能算实例就绪：" >&2
+    curl -s --max-time 2 "http://127.0.0.1:$port/healthz" >&2 || true
+    echo >&2
+    exit 2
+fi
 # 启动检查要看**真正的日志落点**：stdout 模式是重定向文件，dir 模式是当日滚动文件
 LOG_CHECK="${LOG_SCAN:-$work/logs/server.log}"
 if [ -d "$LOG_CHECK" ]; then
@@ -194,10 +203,12 @@ print(s)
         dsn "$dsn" json "$DJ" alice_sk "$work/alice.sk" bob_sk "$work/bob.sk")
     set +e
     # shellcheck disable=SC2086
-    DELIVER_OUT=$("$DELIVER_BIN" $dargs 2>&1)
+    DELIVER_OUT=$("$DELIVER_BIN" $dargs 2>"$work/deliver.err")
     rc_deliver=$?
     set -e
-    printf '%s\n' "$DELIVER_OUT" | sed 's/^/  /'
+    # stdout 是给机器解析的 JSON；人读摘要走 stderr，两条流不能混
+    printf '%s\n' "$DELIVER_OUT" | sed 's/^/  [json] /'
+    [ -s "$work/deliver.err" ] && sed 's/^/  [human] /' "$work/deliver.err"
     if [ "$rc_deliver" -ne 0 ]; then
         echo "[BLOCKED] 投递驱动退出码 $rc_deliver（stub-allow 未开时 Core 的 deliver 会退 4）" >&2
         exit 2

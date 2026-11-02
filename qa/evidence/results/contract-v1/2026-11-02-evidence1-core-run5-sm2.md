@@ -47,6 +47,21 @@ qa/evidence/run_evidence1_core.sh <core-src> <rune-crate> /tmp/ys-ev1
 阳性对照：存储注入 → 1、日志注入 → 1、DB 注入 → 1、复原 → 0。
 终态对比：`LEASED` 该笔 3 文件 / 2241B；`CONSUMED` 该笔目录整体消失。
 
+## 追加：在 `28d75b0` 上按新 stdout 形态复跑（stub-allow）
+
+Core 把 `deliver` 的 stdout 改成**一行 JSON（15 键）**、人读摘要改到 stderr。脚本已按此调整：
+
+* 采集时 **stdout 与 stderr 分开**（`2>"$work/deliver.err"`），只解析 stdout 的 JSON；
+* 仍然优先 `--json-out` 文件，缺文件才用 stdout；
+* 从 JSON 里取 `storage_path` 做落点断言（必须落在本次 blob 根下且非空）。
+
+`28d75b0` 上复跑（`stub-allow`）：存储 3 文件 / 2241B、日志 1 份 / 3133B、DB 8 表（7+1）/ 708 行，
+**三处零命中**，阳性对照 1/1/1/0，退出码 0。
+
+> 注：`--sender-sk/--recipient-sk` 是 `980fc44` 才加的；`28d75b0` 上跑 `sm2` 会
+> `flag provided but not defined: -sender-sk`（脚本 BLOCKED，不假装成功）。
+> 所以 **sm2 复跑要用 `980fc44` 或更新的 head**（本文件上半部分用的 `08d40e7`）。
+
 ## 一点实操记录
 
 `deliver` 在 `sm2` 下必须带真签名；`9065eb8` 那版还没有 `--sender-sk/--recipient-sk`，
