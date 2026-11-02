@@ -248,22 +248,25 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 - **校验顺序写死（四类）**：① 比 `KID`（记录里的签发 `KID` vs 当前 `KID`）——不等即 `AUTH_TOKEN_STALE`；② 比 `SM3(token)` 与库内记录——不等即 `AUTH_TOKEN_INVALID`；③ 比凭据自身有效期（上传 **6 小时** / 租约 **30 分钟**）——超期即 `AUTH_TOKEN_EXPIRED`；④ 最后才看传输状态（`409`/`410`）。
 - **不重算**：校验不比 `TOKEN_SECRET`（它只是派生盐），因此**轮换 secret 不影响既有凭据**；吊销只由 `KID` 承担。
 
-#### 1.7.3 版本吊销（`KID`，v1 必配）
+#### 1.7.3 版本吊销（`KID`，版本只能前进）
 
 **`KID` 的取值规则（写死）**
 
-- 部署**必配**凭据版本号 `KID`：**正整数**（十进制）。
+- 凭据版本号 `KID`：**正整数**（十进制）。部署配置项为 `YANSHU_TOKEN_EPOCH`；**`YANSHU_TOKEN_KID` 是它的旧别名，两者等价**（设其一即可，同时设置时以 `YANSHU_TOKEN_EPOCH` 为准）。
+- **未配置时使用默认 `KID = 1`**（仅对**全新库**成立；库里已有记录时以记录值为准，见下）。首次部署给默认值不构成风险——唯一危险的是"调回旧值让旧凭据复活"。
 - **版本只能前进**：轮换时新值 MUST **严格大于**当前值；**同一版本重启允许相等**（否则每次重启都会被自己挡住）。
 - 服务端 MUST 持久化"已生效的最大 `KID`"（记为 `current`），启动时按下表校验：
 
 | 配置值 `provided` | 启动行为 |
 |---|---|
-| `provided < current` | **拒绝启动**（`exit 1`），错误信息打印 `current=N, provided=M` |
+| 未配置且库内无记录（全新库） | 正常启动，`KID` 取默认 `1` |
+| 未配置且库内已有记录 | 正常启动，以**记录值**为准（不覆盖、不重置） |
+| `provided < current` | **拒绝启动**（`exit 1`），错误信息须同时打印两个值，例如 `YANSHU_TOKEN_EPOCH=1 is lower than the recorded epoch 3: epoch must strictly increase` |
 | `provided == current` | 正常启动（同一版本重启） |
 | `provided > current` | 正常启动，生效并把 `current` 更新为新值（新签发的凭据用新 `KID`） |
 
   理由：把 `KID` 调回旧值会让**已被吊销的旧凭据瞬间复活**——这是本机制最危险的误操作，必须在启动时挡住，不能靠人记得。
-- **未配置 `KID` 时同样 MUST 拒绝启动**（fail closed，`exit 1`，错误信息点名该配置项）。**MUST NOT** 退化为"没有版本号就放过旧凭据"。
+- **唯一会拒绝启动的情形是"调小"**（`provided < current`）；未配置不构成拒绝理由（见上表前两行）。
 
 **吊销效果（`KID` 是唯一吊销开关）**
 
@@ -301,6 +304,8 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 传输进入终态 | 410 | `TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` | 停止并清理本地 |
 
 **判定顺序写死（四类）**：`KID` 不符 → `AUTH_TOKEN_STALE`；值不对/不存在/格式错 → `AUTH_TOKEN_INVALID`；超期 → `AUTH_TOKEN_EXPIRED`；最后才是传输状态 `409`/`410`。即先凭据（401）、后状态（410）；凭据内部**先 `KID`、再值、再有效期**。
+
+**三码的触发位置（便于构造用例）**：`STALE` 在**第 ① 步**（比 `KID`）触发，需要一次版本轮换；`INVALID` 在**第 ② 步**（比 `SM3(token)`）触发，构造方式为错 token / 格式错 / 别的传输的 token；`EXPIRED` 在**第 ③ 步**（比有效期）触发，需把上传 6 h 或租约 30 min 调短、或构造过期记录。"在线路上正常流转的凭据**不会**触发 `INVALID`/`EXPIRED`，所以这两个码只能用针对性用例验证。
 
 **两类错误不得互相顶替**（写死）：
 
@@ -1129,7 +1134,7 @@ Content-Type: application/json
 13. 码的归一化在任何判定之前完成，且限速/锁定按归一化后的码计数（§1.6）。
 14. WS 不可用是 v1 的正常路径：上传/下载/续传/取件/撤回功能不受影响，只静默降级（§9.6）。
 15. 审计只记路由模板，不记实际路径参数；`upload_token` 库内只存 `SM3`。
-16. 吊销只认 `KID`（严格单调递增、调小/未配置均拒绝启动）：递增即旧凭据 `401 AUTH_TOKEN_STALE` 且无需重启；只换 `TOKEN_SECRET` 不吊销；凭据类三码 `STALE`/`INVALID`/`EXPIRED`，传输级终结走 410（§1.7）。
+16. 吊销只认 `KID`（严格单调递增；**只有调小会拒绝启动**，未配置取默认 `1`/沿用记录值）：递增即旧凭据 `401 AUTH_TOKEN_STALE` 且无需重启；只换 `TOKEN_SECRET` 不吊销；凭据类三码 `STALE`/`INVALID`/`EXPIRED`，传输级终结走 410（§1.7）。
 
 ---
 
