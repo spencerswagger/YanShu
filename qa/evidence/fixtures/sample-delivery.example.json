@@ -1,0 +1,15 @@
+{
+  "sample_id": "gate-skeleton-001",
+  "file_name": "验收样本-首夜.txt",
+  "mime": "text/plain",
+  "fragments": [
+    {
+      "id": "hi-entropy",
+      "value": "aGVsbG8tZ2F0ZS1oaWdoLWVudHJvcHktdG9rZW4tMDEyMzQ1Njc4OQ"
+    },
+    {
+      "id": "zh-sentence",
+      "value": "鸿雁传书，一声便至，过而不留。"
+    }
+  ]
+}
