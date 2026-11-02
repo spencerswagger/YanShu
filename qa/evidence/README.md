@@ -99,6 +99,7 @@ python3 qa/evidence/scan_plaintext.py \
 | 2 | `YANSHU_DATABASE_URL` | schema 由 DSN 的 `search_path` 决定，未指定即 `public`；本仓库脚本用 `--pg-schema` 传（psql 的 URI 不认 `search_path` 参数） | 退出码 4，报"拿不到 transfers / transfer_chunks" |
 | 3 | migrations | 服务端**启动时自动跑**（`internal/store` 里带 `schema_migrations` 记账）；手工跑法见 `server/README.md` | 退出码 4，报"缺表：codes、auth_challenges…" |
 | 4 | 日志位置 | `--log-path` / `--log-cmd`；两种落地都支持：① 部署重定向 stdout（`YS_EV1_LOG_MODE=stdout`，默认）② 服务端内建按日滚动 `YANSHU_LOG_DIR`（`YS_EV1_LOG_MODE=dir`，`2bc7dae` 起可用，会按投递日期选当日文件） | 退出码 4，报"日志路径未知" |
+| 6 | 真认证（可选） | `YS_EV1_VERIFIER=sm2`：服务端以真 SM2 验签启动，`deliver` 自动补 `--sender-sk/--recipient-sk` 真签名；需要 Core `08d40e7` 及以上 | 用 stub-allow 也能跑，但只覆盖"不落明文"，不覆盖鉴权 |
 | 5 | 触发一次完整投递 | `--deliver-cmd '<命令>'`，命令 stdout 需给出 `code` / `package_id` / `blob_dir` / `db_url` / `log_path` 五个键 | 缺键 → 退出码 4 并点名；命令本身失败 → 2；命令成功但语料为空 → 3 |
 
 五项齐了才算"参数就绪"；任何一项缺，`--profile core-skeleton` 都会点名并以退出码 4 结束。

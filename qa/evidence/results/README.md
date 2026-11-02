@@ -57,6 +57,7 @@ results/
 | `contract-v1/2026-11-02-evidence1-core-run2-logdir.md` | 服务端 @ `2bc7dae`（**run #2**：内建按日滚动日志） | 三处零命中，3 组对照全部触发；认证仍是桩 |
 | `contract-v1/2026-11-02-evidence1-core-run3-core-deliver.md` | 服务端 @ `2bc7dae` + **Core 官方 `deliver`**（**run #3**） | 三处零命中，3 组对照全部触发；认证仍是桩 |
 | `contract-v1/2026-11-02-evidence1-core-run4-logfile.md` | 服务端 @ `28d75b0`（**run #4**：`YANSHU_LOG_FILE` + LEASED/CONSUMED 残留对比） | 三处零命中；ack 后该笔密文目录整体删除 |
+| `contract-v1/2026-11-02-evidence1-core-run5-sm2.md` | 服务端 @ `08d40e7`（**run #5：真 `sm2` 验签 + 轮转日志 + 真签名投递**） | 三处零命中，3 组对照成立；同时覆盖鉴权面 |
 | `contract-v1/2026-11-02-evidence2-contract-v1.md` | 端侧 @ `de6d6e1`（契约布局，Rust 原生 API 入口） | 5/5、10/10、18/18；入口属测试入口 |
 | `contract-v1/2026-11-02-evidence2-contract-v1-wasm.md` | 端侧 @ `e9f8254`（**wasm-production**，`ys_version()`=0.1.0） | 5/5、10/10、18/18；可作为 v1 验收（待 Web 集成后补 C 份） |
 | `rune-v1-noncontract/2026-11-02-evidence2-rune-v1.md` | 端侧 `crypto/sm` @ `12b3d94`（旧布局） | 记录与对照 |

@@ -45,6 +45,7 @@ port="${YS_EV1_PORT:-$(free_port)}"
 dsn="$base_dsn&search_path=$schema"
 
 # 只允许跑在约定的库上（默认 yanshu_test）：不扫别人的库、不互相污染
+verifier="${YS_EV1_VERIFIER:-stub-allow}"      # 切真验签：YS_EV1_VERIFIER=sm2（deliver 需真签名）
 dbname=$(python3 -c 'import sys,urllib.parse as u; p=u.urlparse(sys.argv[1]); print(p.path.lstrip("/"))' "$base_dsn")
 expect_db="${YS_EXPECT_DB:-yanshu_test}"
 if [ "$dbname" != "$expect_db" ]; then
@@ -52,7 +53,7 @@ if [ "$dbname" != "$expect_db" ]; then
          "不扫别人的库（口令与 DSN 原文不落任何文件）" >&2
     exit 2
 fi
-echo "db: $dbname / schema: $schema（DSN 从环境取，不落文件）"
+echo "db: $dbname / schema: $schema / verifier: $verifier（DSN 从环境取，不落文件）"
 
 rm -rf "$work"
 mkdir -p "$work/bin" "$work/blobs" "$work/logs" "$work/sample"
@@ -82,20 +83,20 @@ if [ "$log_mode" = "file" ]; then
     LOG_FILE="$work/logs/server-file.log"
     YANSHU_LOG_FILE="$LOG_FILE" \
     YANSHU_DATABASE_URL="$dsn" YANSHU_BLOB_DIR="$work/blobs" YANSHU_ADDR="127.0.0.1:$port" \
-    YANSHU_VERIFIER=stub-allow \
+    YANSHU_VERIFIER="$verifier" \
     YANSHU_TOKEN_SECRET="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
     "$work/bin/yanshu-server" >"$work/stdout.log" 2>&1 &
     LOG_SCAN="$LOG_FILE"
 elif [ "$log_mode" = "dir" ]; then
     YANSHU_LOG_DIR="$work/logs" \
     YANSHU_DATABASE_URL="$dsn" YANSHU_BLOB_DIR="$work/blobs" YANSHU_ADDR="127.0.0.1:$port" \
-    YANSHU_VERIFIER=stub-allow \
+    YANSHU_VERIFIER="$verifier" \
     YANSHU_TOKEN_SECRET="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
     "$work/bin/yanshu-server" >"$work/stdout.log" 2>&1 &
     LOG_SCAN="$work/logs"          # 扫整个目录：跨天滚动会有两个文件，按时间戳选单个会漏
 else
     YANSHU_DATABASE_URL="$dsn" YANSHU_BLOB_DIR="$work/blobs" YANSHU_ADDR="127.0.0.1:$port" \
-    YANSHU_VERIFIER=stub-allow \
+    YANSHU_VERIFIER="$verifier" \
     YANSHU_TOKEN_SECRET="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
     "$work/bin/yanshu-server" >"$work/logs/server.log" 2>&1 &
     LOG_SCAN="$work/logs"
@@ -171,6 +172,10 @@ if [ -n "${YS_DELIVER_BIN:-}" ]; then
         DELIVER_BIN="$work/bin/deliver"
         if [ -z "${YS_DELIVER_ARGS:-}" ]; then
             YS_DELIVER_ARGS='--base-url http://127.0.0.1:{port} --yspk {pack} --no-ack --blob-dir {blob} --dsn {dsn} --json-out {json}'
+            if [ "$verifier" = "sm2" ]; then
+                # 真验签下 deliver 必须真签名：发送方私钥 = 打这个包的 alice，收件方私钥 = bob
+                YS_DELIVER_ARGS="$YS_DELIVER_ARGS --sender-sk {alice_sk} --recipient-sk {bob_sk}"
+            fi
         fi
     else
         DELIVER_BIN="$YS_DELIVER_BIN"
@@ -186,7 +191,7 @@ for i in range(0, len(pairs), 2):
     s = s.replace("{" + pairs[i] + "}", pairs[i + 1])
 print(s)
 ' "${YS_DELIVER_ARGS:-}" pack "$work/sample.yspk" port "$port" blob "$work/blobs" \
-        dsn "$dsn" json "$DJ")
+        dsn "$dsn" json "$DJ" alice_sk "$work/alice.sk" bob_sk "$work/bob.sk")
     set +e
     # shellcheck disable=SC2086
     DELIVER_OUT=$("$DELIVER_BIN" $dargs 2>&1)
