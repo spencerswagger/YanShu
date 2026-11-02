@@ -134,6 +134,7 @@ PROFILE_CORE = "core-skeleton"
 CORE_BLOB_DIR_ENV = "YANSHU_BLOB_DIR"
 CORE_BLOB_DIR_DEFAULT = "./data/blobs"
 CORE_DSN_ENV = "YANSHU_DATABASE_URL"
+CORE_LOG_DIR_ENV = "YANSHU_LOG_DIR"
 
 CORE_SCHEMA = {
     "codes": {"code", "pubkey", "nickname", "created_at", "updated_at",
@@ -194,10 +195,13 @@ class Stats:
     db_tables: int = 0
     db_rows: int = 0
     db_cells: int = 0
+    log_files: int = 0
+    log_bytes: int = 0
 
     @property
     def empty(self) -> bool:
-        return self.bytes_scanned == 0 and self.db_rows == 0 and self.db_cells == 0
+        return (self.bytes_scanned == 0 and self.log_bytes == 0
+                and self.db_rows == 0 and self.db_cells == 0)
 
 
 @dataclass
@@ -408,8 +412,10 @@ def find_hits(chunks: Iterable[bytes], patterns: Sequence[Pattern],
 # --------------------------------------------------------------------------- #
 
 def scan_storage(root: str, patterns: Sequence[Pattern], stats: Stats,
-                 max_hits_per_form: int = 5) -> list[Hit]:
+                 max_hits_per_form: int = 5, target: str = "storage") -> list[Hit]:
+    """扫一个目录树。target=logs 时计数进日志桶，便于报告里分开看。"""
     hits: list[Hit] = []
+    is_log = target == "logs"
     root = os.path.abspath(root)
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
@@ -417,17 +423,35 @@ def scan_storage(root: str, patterns: Sequence[Pattern], stats: Stats,
             path = os.path.join(dirpath, fn)
             if not os.path.isfile(path):
                 continue
-            stats.files += 1
             try:
                 size = os.path.getsize(path)
             except OSError:
                 continue
-            stats.bytes_scanned += size
+            if is_log:
+                stats.log_files += 1
+                stats.log_bytes += size
+            else:
+                stats.files += 1
+                stats.bytes_scanned += size
             try:
                 for pat, off, before, after in find_hits(iter_file(path), patterns, max_hits_per_form):
-                    hits.append(Hit(pat.item_id, pat.form, "storage", path, off, before, after, ""))
+                    hits.append(Hit(pat.item_id, pat.form, target, path, off, before, after, ""))
             except OSError as exc:
                 print(f"[warn] 读不了 {path}: {exc}", file=sys.stderr)
+    return hits
+
+
+def scan_log_cmd(cmd: str, patterns: Sequence[Pattern], stats: Stats,
+                 max_hits_per_form: int, timeout: float) -> list[Hit]:
+    """把一条命令的输出（stdout+stderr）当日志流扫，例如 docker logs / journalctl。"""
+    proc = subprocess.run(cmd, shell=True, capture_output=True, timeout=timeout)
+    blob = (proc.stdout or b"") + b"\n" + (proc.stderr or b"")
+    stats.log_files += 1
+    stats.log_bytes += len(blob)
+    label = f"log:{cmd}"
+    hits: list[Hit] = []
+    for pat, off, before, after in find_hits([blob], patterns, max_hits_per_form):
+        hits.append(Hit(pat.item_id, pat.form, "logs", label, off, before, after, ""))
     return hits
 
 
@@ -627,7 +651,8 @@ def report(items: Sequence[SearchItem], hits: Sequence[Hit], stats: Stats,
                       f"before={hexpreview(h.before) or '-'} after={hexpreview(h.after) or '-'}")
 
     print("-" * 108)
-    print(f"扫描：文件 {stats.files:,} 个 / {stats.bytes_scanned:,} 字节；"
+    print(f"扫描：存储文件 {stats.files:,} 个 / {stats.bytes_scanned:,} 字节；"
+          f"日志 {stats.log_files:,} 份 / {stats.log_bytes:,} 字节；"
           f"数据库 {stats.db_tables} 表 / {stats.db_rows:,} 行 / {stats.db_cells:,} 单元格；"
           f"耗时 {time.time() - started:.2f}s")
     print(f"命中：强信号 {hard_hits}，弱信号 {advisory_hits}（弱信号不计入退出码，"
@@ -650,6 +675,7 @@ def dump_json(path: str, items: Sequence[SearchItem], hits: Sequence[Hit],
         "exit_code": exit_code,
         "stats": {
             "files": stats.files, "bytes_scanned": stats.bytes_scanned,
+            "log_files": stats.log_files, "log_bytes": stats.log_bytes,
             "db_tables": stats.db_tables, "db_rows": stats.db_rows, "db_cells": stats.db_cells,
         },
         "items": [{"id": it.item_id, "kind": it.kind, "strength": it.strength,
@@ -778,6 +804,31 @@ def _selftest() -> int:
         assert not hs and st.empty, "空语料应判 INCONCLUSIVE"
         return "空语料 → INCONCLUSIVE"
 
+    def c_logs():
+        """日志是第三个泄露面：干净日志不误报，泄漏日志必须抓到。"""
+        root = Path(tmp) / "logs"
+        root.mkdir()
+        log = root / "server.log"
+        log.write_text(
+            "2026-11-02T00:00:00Z INFO listening on :8080\n"
+            + "2026-11-02T00:00:01Z INFO upload package=b3f1 bytes=8192\n" * 40,
+            encoding="utf-8")
+        hard_ids = {i.item_id for i in items if i.strength == HARD}
+        st = Stats()
+        hs = scan_storage(str(root), patterns, st, target="logs")
+        assert not [h for h in hs if h.item_id in hard_ids], \
+            f"干净日志出现强信号命中：{[h.item_id for h in hs]}"
+        assert st.log_files == 1 and st.log_bytes > 0, (st.log_files, st.log_bytes)
+
+        log.write_text("2026-11-02T00:00:02Z WARN upload name=" + spec.file_name
+                       + " token=" + spec.fragments[0]["value"] + "\n", encoding="utf-8")
+        st2 = Stats()
+        hs2 = scan_storage(str(root), patterns, st2, target="logs")
+        assert any(h.item_id == "file-name" and h.target == "logs" for h in hs2), \
+            "日志里的文件名没抓到"
+        assert any(h.item_id == "fragment:hi-entropy" for h in hs2), "日志里的高熵串没抓到"
+        return f"干净日志 0 误报；泄漏日志命中 {len(hs2)} 处（target=logs）"
+
     def c_core_schema():
         """core-skeleton 白名单核对：缺表与白名单外的列都要能点出来。"""
         import unittest.mock as mock
@@ -809,6 +860,7 @@ def _selftest() -> int:
     case("SQLite（BLOB 原文 + TEXT 十六进制）", c_sqlite)
     case("空语料判 INCONCLUSIVE", c_empty)
     case("core 白名单核对", c_core_schema)
+    case("日志泄露检查", c_logs)
     case("--strict 升级口径", c_strict)
 
     print("=" * 72)
@@ -879,6 +931,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--max-hits-per-form", type=int, default=5,
                     help="每个形态最多记几条命中（默认 5，避免刷屏）")
     ap.add_argument("--psql-timeout", type=float, default=120.0)
+    ap.add_argument("--log-path", default=os.environ.get("YS_LOG_PATH"),
+                    help="服务端日志（文件或目录，递归扫）。第三个容易漏的泄露面")
+    ap.add_argument("--log-cmd", default=os.environ.get("YS_LOG_CMD"),
+                    help="用一条命令取日志流来扫，例如 'docker logs yanshu-server'")
+    ap.add_argument("--log-timeout", type=float, default=120.0)
     ap.add_argument("--json-out", help="把明细写成 JSON（便于出报告）")
     ap.add_argument("--emit-sample", metavar="DIR", help="生成投递样本后退出")
     ap.add_argument("--selftest", action="store_true", help="跑自测后退出")
@@ -946,6 +1003,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.storage_root = CORE_BLOB_DIR_DEFAULT
         if not args.dsn and not args.db_file:
             args.dsn = os.environ.get(CORE_DSN_ENV, "")
+        if not args.log_path and not args.log_cmd:
+            args.log_path = os.environ.get(CORE_LOG_DIR_ENV, "")
 
     targets: list[str] = []
     if args.storage_root:
@@ -967,6 +1026,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             print(f"[BLOCKED] SQLite 文件不存在：{args.db_file}", file=sys.stderr)
             return EXIT_BLOCKED
+    if args.log_cmd:
+        targets.append("logs")
+    elif args.log_path:
+        if os.path.exists(args.log_path):
+            targets.append("logs")
+        elif core:
+            pending.append(f"日志路径不存在：{args.log_path}（{CORE_LOG_DIR_ENV}）")
+        else:
+            print(f"[BLOCKED] 日志路径不存在：{args.log_path}", file=sys.stderr)
+            return EXIT_BLOCKED
+    if core and not args.log_path and not args.log_cmd:
+        pending.append(f"日志路径未知：给 --log-path / --log-cmd，或设 {CORE_LOG_DIR_ENV}")
     if core and not args.storage_root:
         pending.append(f"{CORE_BLOB_DIR_ENV} 未设置、{CORE_BLOB_DIR_DEFAULT} 也不存在")
     if core and not args.dsn and not args.db_file:
@@ -993,7 +1064,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(f"[target] storage={args.storage_root or '(none)'} "
           f"postgres={redact_dsn(args.dsn) if args.dsn else '(none)'} "
-          f"sqlite={args.db_file or '(none)'}")
+          f"sqlite={args.db_file or '(none)'} "
+          f"logs={(args.log_path or args.log_cmd or '(none)')}")
     print(f"[target] 检索项 {len(items)} 个 / 形态 {len(patterns)} 个 "
           f"（强 {sum(1 for i in items if i.strength == HARD)}，"
           f"弱 {sum(1 for i in items if i.strength == ADVISORY)}）")
@@ -1021,6 +1093,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return EXIT_PENDING
 
     try:
+        if "logs" in targets:
+            if args.log_cmd:
+                hits += scan_log_cmd(args.log_cmd, patterns, stats,
+                                     args.max_hits_per_form, args.log_timeout)
+            else:
+                hits += scan_storage(args.log_path, patterns, stats,
+                                     args.max_hits_per_form, target="logs")
         if "storage" in targets:
             hits += scan_storage(args.storage_root, patterns, stats, args.max_hits_per_form)
         if "postgres" in targets:

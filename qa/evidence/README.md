@@ -2,14 +2,16 @@
 
 两条证据的**可复跑脚本**：① 服务端无明文/无文件名；② 密文篡改必报错。
 
-> **当前状态（2026-11-02 首夜·二轮）**
-> * 证据二 **已能出真结果**：对象是端侧真实实现（`crypto/sm` 的 `pack::unpack`），
->   10/10 篡改全部被明确拒绝，附加 16 种变体无一漏网 —— 见
->   `results/2026-11-02-evidence2-rune.md`。
-> * 证据一仍是骨架：检索逻辑、投递钩子、数据库/存储扫描都已可用且自测通过，
->   但**服务端还没跑起来**（`feat/server-skeleton` 未合入、migrations 未跑），
->   强制 `--profile core-skeleton` 会明确打印「待 Core 合入 + 参数确认」并以退出码 4
->   结束 —— 既不伪装 PASS，也不误报 FAIL。
+> **当前状态（2026-11-02 首夜·三轮）**
+> * 默认布局 = **契约布局 `contract-v1`**（CRYPTO-PACK `YSPK/1.0`）。`rune-v1` 只能显式
+>   `--layout rune-v1` 使用，且输出会打「非契约实现、不作验收」横幅。
+> * 证据二在端侧真实实现上跑过一轮（`rune-v1`），10/10 篡改 + 16 种变体全部被拒；
+>   该结果**不是对契约实现的验收**，单独存放在
+>   `results/2026-11-02-evidence2-rune-v1-noncontract.md`。等端侧按契约重写完，
+>   用默认布局重跑，结果另存为 `*-contract-v1.md`。
+> * 证据一仍是骨架：检索逻辑、投递钩子、存储/日志/数据库三路扫描、表列白名单都已可用
+>   且自测通过，但**服务端还没跑起来**；`--profile core-skeleton` 缺参时打印
+>   「待 Core 合入 + 参数确认」并以退出码 4 结束 —— 既不伪装 PASS，也不误报 FAIL。
 
 只依赖 **python3 ≥ 3.10 标准库**（PostgreSQL 检索额外用 `psql`；SQLite 用内置 `sqlite3`）。
 不实现、不调用任何加解密；不读密钥与凭据文件；不修改被检对象。
@@ -47,8 +49,12 @@ python3 qa/evidence/scan_plaintext.py \
 | `file-ext-bare` | 扩展名裸串，如 `txt` | **恒弱**（见下） |
 | `fragment:<id>` | 每段明文（高熵随机串、中文短句…），同上形态 | ≥8B 强 / <8B 弱 |
 
-目标：**存储目录**（递归，整文件流式扫，跨 1 MiB 缓冲区边界不漏）+ **数据库**
-（PostgreSQL 经 `psql` 逐表逐行；SQLite 逐表逐行逐列）。
+三类目标，缺一不可：
+
+1. **存储目录**（递归，整文件流式扫，跨 1 MiB 缓冲区边界不漏）
+2. **日志**（`--log-path` 文件/目录，或 `--log-cmd` 取命令输出流，如 `docker logs`/`journalctl`）
+   —— 常被漏掉的第三个泄露面：很多实现会顺手把"上传成功 name=xxx"打进日志
+3. **数据库**（PostgreSQL 经 `psql` 逐表逐行；SQLite 逐表逐行逐列）
 
 ### 命中强度的口径（别当成偷工减料）
 
@@ -80,6 +86,18 @@ python3 qa/evidence/scan_plaintext.py \
   缺表或出现白名单外的表/列都会在报告里点名
 
 任一必需项拿不到 → 打印缺什么、以退出码 4 结束，不出假结论。
+
+### 出真证据需要哪些参数（可勾选清单）
+
+| # | 参数 | 从哪来 | 缺了会怎样 |
+|---|---|---|---|
+| 1 | `YANSHU_BLOB_DIR` | 服务端启动配置（默认 `./data/blobs`） | 退出码 4，报"存储根目录不存在" |
+| 2 | `YANSHU_DATABASE_URL` | 服务端启动配置 | 退出码 4，报"拿不到 packages / package_chunks" |
+| 3 | migrations 已执行 | `server/internal/store/migrations/0001_init.sql`（按序跑） | 退出码 4，报"缺表：codes、auth_challenges…" |
+| 4 | 日志位置 `YANSHU_LOG_DIR` / `--log-path` / `--log-cmd` | 服务端部署方式（stdout 重定向 / systemd / 容器） | 退出码 4，报"日志路径未知" |
+| 5 | 一次完整投递怎么触发 | `--deliver-cmd '<命令>'`（Web 端脚本或 API 调用） | 能扫但语料为空 → 退出码 3（INCONCLUSIVE） |
+
+五项齐了才算"参数就绪"；任何一项缺，`--profile core-skeleton` 都会点名并以退出码 4 结束。
 
 ### 投递钩子（等闭环一成就能接）
 
@@ -125,12 +143,13 @@ PostgreSQL 走 `row_to_json`：`TEXT` 列明文原样、`BYTEA` 列以 `\x<hex>`
 
 ### 包布局（两套，自动识别）
 
-`--layout auto`（默认）按包头判别，输出里会写明：
+`--layout` 默认 `contract-v1`（契约权威）；`auto` 按包头判别，输出里会写明：
 
-| 布局 | 来源 | 特征 |
-|---|---|---|
-| `contract-v1` | `docs/CRYPTO-PACK.md` v1 冻结稿 | HEADER 112B、块头 16B |
-| `rune-v1` | `crypto/sm/src/pack.rs::layout` 当前实现 | HEADER 40B、块头 9B |
+| 布局 | 来源 | 特征 | 用途 |
+|---|---|---|---|
+| `contract-v1`（**默认**） | `docs/CRYPTO-PACK.md` v1 冻结稿 | HEADER 112B、块头 16B | 验收 |
+| `rune-v1` | `crypto/sm/src/pack.rs::layout` 旧实现 | HEADER 40B、块头 9B | 仅"非契约实现的临时验证"，输出带横幅、不作验收 |
+| `auto` | 按头部判别 | — | 排查用；判不出即报错 |
 
 两者**目前不一致**（差异清单见 `results/2026-11-02-evidence2-rune.md`）。脚本不猜测：
 识别不出就报错退出，绝不拿一套布局去解释另一套的字节。
@@ -168,7 +187,9 @@ qa/evidence/
 │  ├─ build_probe.sh            把驱动塞进端侧 crate 的临时副本并编译
 │  └─ README.md                 为什么这样构建、怎么接
 ├─ fixtures/                    契约公开测试向量 + 样本描述示例
-└─ results/                     实测结果（按日期）
+└─ results/                     实测结果，文件名带布局，避免混淆：
+                                `*-contract-v1.md`（对契约实现，验收用）
+                                `*-rune-v1-noncontract.md`（非契约实现，仅记录）
 ```
 
 ---
@@ -235,6 +256,9 @@ core 表/列白名单核对、`--strict` 强度升级。
 
 * 2026-11-02 首夜：骨架落地。证据一（存储 + PG/SQLite 检索、投递钩子、8 项自测）；
   证据二（YSPK 解析、四类篡改 + 3 条附加、4 种后端、10 项自测）。
+* 2026-11-02 首夜·三轮：默认布局切到契约布局（`--layout` 默认 `contract-v1`），
+  非契约布局输出加"不作验收"横幅并在 JSON 里带 `contract_compliant`；
+  证据一新增**日志扫描**（`--log-path` / `--log-cmd`）与五项参数可勾选清单。
 * 2026-11-02 首夜·二轮：证据二接上端侧真实实现（`adapters/ys_pack_probe.rs` + `run_evidence2_rune.sh`），
   新增 `--layout`（contract-v1 / rune-v1 / auto）、`--expect-plaintext`（baseline 明文比对），
   实测 10/10 + 16 种补充变体全部被拒；证据一新增 `--profile core-skeleton` 与退出码 4（PENDING）。

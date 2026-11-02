@@ -1117,9 +1117,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--cargo-test-error-filter", default="tamper_rejects")
     ap.add_argument("--cargo-test-ok-filter", default=None)
     ap.add_argument("--error-regex", default=os.environ.get("YS_ERROR_REGEX", r"CRYPTO_[A-Z0-9_]+"))
-    ap.add_argument("--layout", default=os.environ.get("YS_LAYOUT", "auto"),
-                    choices=["auto", LAYOUT_CONTRACT, LAYOUT_RUNE],
-                    help="包布局；auto 按头部自动识别（contract-v1 / rune-v1）")
+    ap.add_argument("--layout", default=os.environ.get("YS_LAYOUT", LAYOUT_CONTRACT),
+                    choices=[LAYOUT_CONTRACT, LAYOUT_RUNE, "auto"],
+                    help="包布局；默认 contract-v1（契约权威）。auto 按头部自动识别，"
+                         "rune-v1 只用于非契约实现的临时验证")
     ap.add_argument("--expect-plaintext",
                     help="未篡改包应解出的明文文件；给了就逐字节比对（baseline 才算数）")
     ap.add_argument("--cases", help="逗号分隔的用例白名单（默认要求的 6 条）")
@@ -1156,6 +1157,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         env = parse_envelope(pristine, layout=args.layout)
     except EnvelopeError as exc:
         print(f"[BLOCKED] 密文包结构不合法：{exc.code} {exc.msg}", file=sys.stderr)
+        if args.layout == LAYOUT_CONTRACT:
+            print("           当前按契约布局解析。若这是旧实现产出的包，用 "
+                  "--layout auto 先看它到底是哪种布局；非契约布局的结果不作验收。",
+                  file=sys.stderr)
         return EXIT_BLOCKED
 
     donor = None
@@ -1181,6 +1186,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return EXIT_BLOCKED
         names = want
 
+    if env.layout != LAYOUT_CONTRACT:
+        print(f"[warn] 包布局 {env.layout} ≠ 契约布局 {LAYOUT_CONTRACT}："
+              f"本次只作非契约实现的临时验证")
+
     if args.dry_run:
         print("\n[dry-run] 只构造不执行：")
         for n in names:
@@ -1194,6 +1203,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[BLOCKED] {exc.msg}", file=sys.stderr)
         return EXIT_BLOCKED
 
+    if env.layout != LAYOUT_CONTRACT:
+        print(f"[warn] 当前包不是契约布局（{LAYOUT_CONTRACT}，{env.layout}）—— "
+              f"这份结果只作非契约实现的临时验证，不能作为对契约实现的验收证据")
     if not backend.production:
         print("[warn] 当前走的是测试入口而非生产导出路径 —— 这份结果不能作为最终验收证据")
 
@@ -1210,6 +1222,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "backend": backend.label,
             "production_path": backend.production,
+            "layout": env.layout,
+            "contract_compliant": env.layout == LAYOUT_CONTRACT,
             "envelope": {"source": src, "layout": env.layout, "summary": env.summary(),
                          "bytes": len(pristine)},
             "expected_plaintext": args.expect_plaintext or None,

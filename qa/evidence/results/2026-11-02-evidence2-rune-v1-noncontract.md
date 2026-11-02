@@ -1,4 +1,15 @@
-# 证据二实测结果：密文篡改必报错（端侧真实实现）
+# 证据二实测结果：密文篡改必报错（**非契约实现的临时验证**）
+
+> ⚠️ **这份结果不是对契约实现的验收。**
+> 被测对象是端侧内核按 `pack.rs::layout`（HEADER 40B / 块头 9B / raw R‖S / 密文摘要）
+> 产出的包，与已冻结的 `docs/CRYPTO-PACK.md`（HEADER 112B / 块头 16B / DER 签名 / 明文摘要）
+> **不是同一套格式**。按裁定：**契约权威，端侧按契约重写**。
+> 本文件保留，仅用于记录"旧布局下的解密入口是严格拒绝篡改的"这一事实，
+> 以及给重写提供对照。契约实现就绪后，会用默认布局（`--layout contract-v1`）
+> 重跑全量，结果另存为 `YYYY-MM-DD-evidence2-contract-v1.md`。
+>
+> 跑这份结果时需要显式 `--layout rune-v1`；工具默认已经是契约布局，并会在
+> 非契约布局时打印「不作验收」横幅。
 
 - 日期：2026-11-02
 - 对象：`crypto/sm`（分支 `feat/endcrypto-wasm`，commit `12b3d94`）
@@ -15,6 +26,7 @@
 git -C <YanShu> archive origin/feat/endcrypto-wasm | tar -x -C /tmp/rune
 
 # 一条命令跑完：构建探针 → 生成密钥 → 打包（单块 + 三块 + donor）→ 篡改检查
+# 注意：跑非契约布局必须显式指定 rune-v1（脚本里已带），否则默认按契约解析、直接报错
 qa/evidence/run_evidence2_rune.sh /tmp/rune/crypto/sm /tmp/ys-ev2
 ```
 
@@ -98,9 +110,19 @@ qa/evidence/run_evidence2_rune.sh /tmp/rune/crypto/sm /tmp/ys-ev2
 | 签名 | DER（70..72B），输入 `YSSIG1‖ver‖HDR_CORE‖SENDER_PUB‖MANIFEST_SEC` | raw `R‖S`（64B），输入 `HEADER‖MANIFEST_PLAINTEXT` |
 | AAD | `AAD_CHUNK(32)` / `AAD_MANIFEST(31)` 结构化 | 直接是 40 字节包头 |
 
-本脚本因此做成**可插拔布局**：`--layout auto` 按头部自动识别，输出里标明用的是哪套
-（本次全部为 `rune-v1`）。`contract-v1` 目前只由契约里的公开测试向量覆盖。
-两者对齐后，把 `--layout` 固定成一个即可。
+本脚本因此做成**可插拔布局**，但**默认是契约布局**：不显式给 `--layout` 时按
+`contract-v1` 解析，跑旧实现的包会直接报 `CRYPTO_VERSION_UNSUPPORTED` 并提示用
+`--layout auto` 先判别；显式 `--layout rune-v1` 时输出会打「非契约实现、不作验收」横幅，
+JSON 里也会带 `contract_compliant: false`。本文件的所有结果均属 `rune-v1`。
+`contract-v1` 目前只由契约里的公开测试向量覆盖，等端侧按契约重写后再跑全量。
+
+## 复跑时的两个坑（已修）
+
+1. **共享 `CARGO_TARGET_DIR` 会串版本**：沙盒全局 `CARGO_TARGET_DIR=/.cache/rust`，
+   多人共用时出现过"用旧源码构建、却复用别人新版本的 `libyanshu_sm`"。已改成构建产物
+   落在临时目录（`adapters/build_probe.sh` 不再继承该变量）。上表结果已在隔离构建下复跑确认。
+2. **默认布局已切到契约**：不带 `--layout` 时按 `contract-v1` 解析，拿旧包会直接
+   `CRYPTO_VERSION_UNSUPPORTED`；跑本文件的结果必须显式 `--layout rune-v1`。
 
 ## 本次没做的
 

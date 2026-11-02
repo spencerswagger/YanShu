@@ -34,6 +34,13 @@ $PROBE unpack /tmp/a.yspk /tmp/out.bin --recipient-sk /tmp/bob.sk --sender-pk /t
 
 一键跑全套（含篡改检查）：`qa/evidence/run_evidence2_rune.sh /tmp/rune/crypto/sm`。
 
+## 为什么不继承 `CARGO_TARGET_DIR`
+
+沙盒里全局设了 `CARGO_TARGET_DIR=/.cache/rust`，多人共用。实测过一次：拿 A 版本源码
+构建，cargo 却复用了别人编译出的 `libyanshu_sm`（报错里出现的字段属于新版本），
+等于**拿别人的源码产出当自己的证据**。所以 `build_probe.sh` 默认把 target 放到临时目录
+（`$work/target`），要共享必须显式 `YS_PROBE_TARGET_DIR=…`。
+
 ## 驱动的输出契约
 
 | 场景 | stdout | 退出码 |

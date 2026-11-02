@@ -29,7 +29,10 @@ mkdir -p "$work"
 mkdir -p "$work/src/bin"
 cp "$here/ys_pack_probe.rs" "$work/src/bin/ys_pack_probe.rs"
 
-target_dir="${CARGO_TARGET_DIR:-$work/target}"
+# 刻意**不继承** CARGO_TARGET_DIR：多人共用一个沙盒时，共享 target 目录会按
+# 包名+版本复用别人编译出的 libyanshu_sm，等于拿别人的源码产出当成自己的证据。
+# 要共享请显式给 YS_PROBE_TARGET_DIR。
+target_dir="${YS_PROBE_TARGET_DIR:-$work/target}"
 
 # 有些精简环境只有 gcc 没有 cc（rustc 默认调 cc）
 if ! command -v cc >/dev/null 2>&1 && command -v gcc >/dev/null 2>&1; then
