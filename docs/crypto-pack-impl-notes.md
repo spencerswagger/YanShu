@@ -128,8 +128,8 @@ info=`YANSHU/v1/{chunk,manifest}-key`。不再有第二套格式，也不会混�
 |---|---|---|
 | `ys_unpack` | `(pack, len, priv, sender_pub, out, cap, out_len)` | 同原型，第 4 参**可选**（NULL = 不传；非空则与包内比对） |
 | `ys_unpack_meta` | `(pack, len, priv, sender_pub, out, cap, out_len)` | 同原型，第 4 参可选 |
-| `ys_unpack_v2` | — | **新增** `(pack, len, priv, out, cap, out_len)` |
-| `ys_unpack_meta_v2` | — | **新增** `(pack, len, priv, out, cap, out_len)` |
+| `ys_unpack_v1` | — | **新增** `(pack, len, priv, out, cap, out_len)` |
+| `ys_unpack_meta_v1` | — | **新增** `(pack, len, priv, out, cap, out_len)` |
 
 选这个形状的原因：wasm 调函数时**多余的实参会被静默丢弃**——如果直接把 7 参改成 6 参，
 旧调用会整体错位一位（`out` 收到公钥指针、`out_len` 收到一个容量数字），是内存踩踏而不是

@@ -161,3 +161,24 @@ fn truncate_pack() {
     // 头部都不完整时也不能 panic / 误判
     assert_eq!(err(&f, &[]), Error::LengthInconsistent);
 }
+
+/// 旧 rune-v1 布局的字节必须**在版本字段处就被拒**，不能静默解出明文。
+///
+/// 旧头前 8 字节是 `YSPK | 01 | 01 | 01 | 00`（version/suite/flags/reserved），
+/// 契约头是 `YSPK | 01 | 00 | 00 70`；因此 `buf[5]=1` 会命中 `CRYPTO_VERSION_UNSUPPORTED`。
+#[test]
+fn old_rune_v1_bytes_rejected_by_version() {
+    let mut legacy = vec![0u8; 200];
+    legacy[0..4].copy_from_slice(b"YSPK");
+    legacy[4] = 1; // VERSION_MAJOR（旧版）
+    legacy[5] = 1; // 旧版这里是 suite=1；契约这里必须是 0
+    legacy[6] = 1;
+    legacy[7] = 0;
+    assert_eq!(
+        pack::read_header(&legacy).unwrap_err(),
+        Error::UnsupportedVersion
+    );
+    // 解包路径同样拒绝（不会尝试按新格式硬解）
+    let f = build(32, 16);
+    assert_eq!(err(&f, &legacy), Error::UnsupportedVersion);
+}

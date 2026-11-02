@@ -614,7 +614,7 @@ pub unsafe extern "C" fn ys_pack(
 ///
 /// `sender_public` 现在**可选**：传 `0`/NULL 表示不传；非空则与包内 `SENDER_PUB` 比对
 /// （不一致 → `CRYPTO_SENDER_MISMATCH`）。验签始终用包内公钥。
-/// 新代码建议直接用 [`ys_unpack_v2`]（6 参，无公钥入参）。
+/// 新代码建议直接用 [`ys_unpack_v1`]（6 参，无公钥入参）。
 #[no_mangle]
 pub unsafe extern "C" fn ys_unpack(
     pack: *const u8,
@@ -639,7 +639,7 @@ pub unsafe extern "C" fn ys_unpack(
 
 /// 解包（P1 新原型，6 参）：来源完全由包内 `SENDER_PUB` 自证，不给公钥。
 #[no_mangle]
-pub unsafe extern "C" fn ys_unpack_v2(
+pub unsafe extern "C" fn ys_unpack_v1(
     pack: *const u8,
     pack_len: usize,
     recipient_private: *const u8,
@@ -686,7 +686,7 @@ pub unsafe extern "C" fn ys_unpack_meta(
 
 /// 只解清单（P1 新原型，6 参）。
 #[no_mangle]
-pub unsafe extern "C" fn ys_unpack_meta_v2(
+pub unsafe extern "C" fn ys_unpack_meta_v1(
     pack: *const u8,
     pack_len: usize,
     recipient_private: *const u8,

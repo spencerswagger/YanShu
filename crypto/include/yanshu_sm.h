@@ -12,7 +12,9 @@
  * ## ABI 变更（Owl 授权的 P1）
  * 只有两个导出改了签名（来源改为包内自证）：
  * 没有破坏性变更：ys_unpack / ys_unpack_meta 的 7 参原型保留，第 4 个入参（发送方公钥）
- * 变成**可选**（NULL 表示不传）；新增 6 参的 ys_unpack_v2 / ys_unpack_meta_v2 供新代码用。
+ * 变成**可选**（NULL 表示不传）；新增 6 参的 ys_unpack_v1 / ys_unpack_meta_v1 供新代码用。
+ * `_v1` 后缀只表示契约大版本 `YSPK/1.0`（与 ys_pack_v1 同族），不是"第二套布局"。
+ * 发布构建**没有任何布局切换入口**（旧布局实现已删除，只有 YSPK/1.0）。
  * 其余 23 个导出签名未变。新增：ys_pack_v1 / ys_sm2_sign_der / ys_check_symbol /
  * ys_error_name_v1。
  *
@@ -133,9 +135,9 @@ int32_t ys_unpack_meta(const uint8_t *pack, size_t pack_len, const uint8_t *reci
                        size_t *out_len);
 
 /* P1 新原型（6 参）：来源完全由包内 SENDER_PUB 自证，不给公钥。新代码建议用这两个。 */
-int32_t ys_unpack_v2(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
+int32_t ys_unpack_v1(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
                      uint8_t *out, size_t out_cap, size_t *out_len);
-int32_t ys_unpack_meta_v2(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
+int32_t ys_unpack_meta_v1(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
                           uint8_t *out, size_t out_cap, size_t *out_len);
 
 /* 打包（完整参数）：多一个 ext 与 created_at_ms（u64） */

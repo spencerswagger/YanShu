@@ -62,16 +62,22 @@ int32_t ys_unpack_meta(const uint8_t *pack, size_t pack_len,
 
 * 元数据里的 `sender_code` 就是契约 §13 #18 要比对的码；`sender_pub` 是包内公钥原文。
 
-## 3. 新原型（6 参，新代码建议用）
+## 3. `ys_unpack_v1` / `ys_unpack_meta_v1`（6 参，新代码建议用）
+
+> `_v1` 后缀表示**契约大版本 `YSPK/1.0`**（与 `ys_pack_v1` 同族），不是"第二套布局"。
+> 发布构建里**没有** `ys_set_layout` / `ys_layout_of` 之类的切换或探测入口。
 
 ```c
-int32_t ys_unpack_v2(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
+int32_t ys_unpack_v1(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
                      uint8_t *out, size_t out_cap, size_t *out_len);
-int32_t ys_unpack_meta_v2(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
+int32_t ys_unpack_meta_v1(const uint8_t *pack, size_t pack_len, const uint8_t *recipient_private,
                           uint8_t *out, size_t out_cap, size_t *out_len);
 ```
 
-与上面 7 参版**语义完全相同**，只是去掉了发送方公钥入参（来源由包内 `SENDER_PUB` 自证）。
+与上面 7 参版**语义完全相同**（同一份实现），只是去掉了发送方公钥入参（来源由包内
+`SENDER_PUB` 自证）。7 参版是**兼容别名**：第 4 参只做"是不是同一个人"的比对，
+验签始终用包内公钥；两者都**只接受 `YSPK/1.0`**，旧 rune-v1 布局的字节会以
+`-5 CRYPTO_VERSION_UNSUPPORTED` 被拒，不会解出明文。
 
 > ⚠️ 用 `_v2` 时必须真的少传一个参数。wasm 调函数时多余实参会被**静默丢弃**并整体错位，
 > 不是编译错。
@@ -130,7 +136,7 @@ int32_t ys_unpack_meta_v2(const uint8_t *pack, size_t pack_len, const uint8_t *r
 
 **新增 6 个**：`ys_pack_v1`（清单 `ext`/`created_at_ms`）、`ys_sm2_sign_der`（DER 签名）、
 `ys_check_symbol`（第 5 位校验字符）、`ys_error_name_v1`（契约错误名）、
-`ys_unpack_v2` / `ys_unpack_meta_v2`（6 参解包）。
+`ys_unpack_v1` / `ys_unpack_meta_v1`（6 参解包）。
 
 **语义变化 3 处**（签名都没变）：
 1. `ys_unpack` / `ys_unpack_meta`：第 4 参发送方公钥变**可选**；验签改用包内公钥。
@@ -148,16 +154,27 @@ int32_t ys_unpack_meta_v2(const uint8_t *pack, size_t pack_len, const uint8_t *r
 
 ```diff
 - ys_unpack(packPtr, packLen, privPtr, senderPubPtr, outPtr, cap, lenPtr)
-+ ys_unpack_v2(packPtr, packLen, privPtr, outPtr, cap, lenPtr)
++ ys_unpack_v1(packPtr, packLen, privPtr, outPtr, cap, lenPtr)
 - ys_unpack_meta(packPtr, packLen, privPtr, senderPubPtr, outPtr, cap, lenPtr)
-+ ys_unpack_meta_v2(packPtr, packLen, privPtr, outPtr, cap, lenPtr)
++ ys_unpack_meta_v1(packPtr, packLen, privPtr, outPtr, cap, lenPtr)
 ```
 
 测试驱动同理：把 `unpack` 调用里的 `--sender-pk` / 公钥参数去掉即可（Gate 的探针已经这么做了，
 一行未改就能编译跑通）。**不要**在 `_v2` 上继续多传一个参数——wasm 会静默错位（内存踩踏），
 不是编译错。
 
-## 7. 排期（未实现）
+## 7. 布局判别（没有独立探针函数）
+
+发布构建只认 `YSPK/1.0`，所以判别就是"能不能解"：
+
+```js
+const rc = ys_unpack_meta_v1(packPtr, packLen, privPtr, outPtr, cap, lenPtr);
+// rc === 0            → 'YSPK/1.0'
+// rc === -5 / -4 / -6 → 不是契约包（旧 rune-v1 字节在这里被拒，不会静默解出明文）
+// 其它负值            → 契约包但内容有问题，用 ys_error_name_v1(rc) 取名字
+```
+
+## 8. 排期（未实现）
 
 - `MAX_BLOCK_SIZE`（产品级单文件上限）与流式分块接口：只在 `crypto/README.md` 的
   "已知限制"里登记，代码里没有任何半成品接口。
