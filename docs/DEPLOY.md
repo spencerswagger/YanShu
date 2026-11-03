@@ -2,20 +2,25 @@
 
 面向单实例部署：一个 `yanshu-server` 容器 + 一个 PostgreSQL。
 
-## 1. 一键起（docker compose）
+## 1. 一键起（零配置）
 
 ```sh
-# 必填：≥16 字节随机串（只作派生盐；轮换它不会吊销既有凭据）
-export YANSHU_TOKEN_SECRET="$(head -c 32 /dev/urandom | base64)"
-
+mkdir yanshu && cd yanshu
+curl -O https://raw.githubusercontent.com/spencerswagger/YanShu/main/docker-compose.yml
 docker compose up -d
-docker compose ps
-curl -s http://127.0.0.1:18080/healthz          # 期望 {"status":"ok"}
-curl -s http://127.0.0.1:18080/v1/config | head  # 含 token_epoch / verifier / kernel_sha256
+curl -s http://127.0.0.1:18080/healthz      # {"status":"ok","api_version":"v1","contract":"v1"}
 ```
 
-服务启动时会先跑 `-migrate-only` 再起进程（镜像入口脚本），因此**首次启动即完成建表**。
-`postgres` 自带 healthcheck，服务通过 `depends_on: condition: service_healthy` 等它就绪。
+- **不需要写 `.env`、不需要填任何密钥**。
+- 首次启动的一次性 `init` 容器会在 `./secrets/` 生成 `token_secret` 与 `pg_password`
+  （目录 0700、文件 0600），并把两个数据卷属主改成容器运行用户（10001）。
+- **`./secrets/` 是 bind mount，`docker compose down -v` 不会删它**。init 以「`pgdata` 是否为空」
+  判定是否全新部署：空则重建密钥，非空则一律复用（不会让老库失配）。
+- 因此三种行为：`up` 复用、`down && up` 复用、`down -v` 后重新生成（等同于全新部署）。
+- 密钥注入：服务端入口脚本读取 `/run/secrets/token_secret` 与 `/run/secrets/pg_password`，
+  自行拼 `YANSHU_DATABASE_URL` 并 export `YANSHU_TOKEN_SECRET`（环境变量已显式设置时优先），
+  业务代码零改动；postgres 用 `POSTGRES_PASSWORD_FILE` 读同一个文件。
+- 若 `pgdata` 非空但 `./secrets/` 丢了（被手工删除），init 会**报错退出**，避免用新密钥连上老库。
 
 ## 2. 环境变量
 

@@ -9,6 +9,29 @@ set -eu
 blob="${YANSHU_BLOB_DIR:-/app/data/blobs}"
 logs="${YANSHU_LOG_DIR:-/app/data/logs}"
 
+# 零配置：密钥来自挂载的 /run/secrets（由 init 服务生成），无需用户 export。
+# 显式设置的 YANSHU_* 环境变量优先，便于高级用法覆盖。
+token_file="${YANSHU_TOKEN_SECRET_FILE:-/run/secrets/token_secret}"
+pg_file="${YANSHU_PG_PASSWORD_FILE:-/run/secrets/pg_password}"
+
+if [ -z "${YANSHU_TOKEN_SECRET:-}" ] && [ -s "$token_file" ]; then
+    YANSHU_TOKEN_SECRET="$(cat "$token_file")"
+    export YANSHU_TOKEN_SECRET
+fi
+if [ -z "${YANSHU_DATABASE_URL:-}" ] && [ -s "$pg_file" ]; then
+    YANSHU_DATABASE_URL="postgres://yanshu:$(cat "$pg_file")@postgres:5432/yanshu?sslmode=disable"
+    export YANSHU_DATABASE_URL
+fi
+
+if [ -z "${YANSHU_TOKEN_SECRET:-}" ]; then
+    echo "entrypoint: no upload-token secret (set YANSHU_TOKEN_SECRET or mount /run/secrets/token_secret)" >&2
+    exit 1
+fi
+if [ -z "${YANSHU_DATABASE_URL:-}" ]; then
+    echo "entrypoint: no database url (set YANSHU_DATABASE_URL or mount /run/secrets/pg_password)" >&2
+    exit 1
+fi
+
 mkdir -p "$blob" "$logs"
 
 # 快速失败：chown 失败（只读挂载、SELinux 拒绝等）继续启动只会变成 permission denied 崩溃循环，
