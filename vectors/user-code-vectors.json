@@ -1,0 +1,10 @@
+{
+  "meta": {"pubkey": "65 字节 wire（0x04‖X‖Y）", "code_alphabet": "0123456789ABCDEFGHJKMNPQRSTVWXYZ", "derivation": "Crockford(SM3(pub65))[0..4]", "check_symbol": "CHECK_ALPHA[first20bit mod 37]，仅 UI 防误，不参与码"},
+  "vectors": [
+    {"name": "contract_pb_s", "pub65": "04bfd9df73290f50ec16bd184e31c043b6d70fcfd245f76d10ef26b66c9d19b116f425afea1e7e849b2f573e562abab65cf47c045c32a2ecc2f23f86519a1ec25d", "code": "AWQW", "check": "X"},
+    {"name": "yanshu-key-alice", "pub65": "049bb03101c716d29cb96951d052a26dbf5def45eae46845694faa627ce8544cec07dee9d5bb614e2e0806361912a78d31cda307c3dddd9a2e58559ee8d22f59f5", "code": "CBJ2", "check": "K"},
+    {"name": "yanshu-key-bob", "pub65": "0407a164e6cb27f81e401d3edbf2cebfcfbe1385494d008d4d24ae6a5857ad9fccbf2b8c70bec1e28c66d6cf0cc4100b0fa16cf0b784c326f9fbcdcebc9ce4be73", "code": "J6AW", "check": "R"},
+    {"name": "yanshu-key-carol", "pub65": "04e0b763ca87e6e3384c981723a12bd589272db40dd93449a0598bc7844922aa7c28dcc6408acf2c25d9da13baf9f4d903044f2d510797646bb486824747f3921d", "code": "GCVB", "check": "T"},
+    {"name": "yanshu-core-signer", "pub65": "0401ed139cfa3ce980de464b0404df213715b0f9dff61ddc2d848aac325318dbe36522f37e15feca755be1f9b49f685dfc296f18d56cb9c78ea93d1debfbb00896", "code": "STZF", "check": "C"}
+  ]
+}

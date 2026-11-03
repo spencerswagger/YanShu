@@ -1,0 +1,27 @@
+{
+  "rule": "丢弃 - 空格 TAB CR LF；其余转大写后 O→0、I→1、L→1；结果必须全在 0123456789ABCDEFGHJKMNPQRSTVWXYZ 且恰好 4 位（不足不补齐、超过不截断）；失败 CRYPTO_CODE_INVALID；幂等",
+  "alphabet": "0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+  "idempotent": true,
+  "vectors": [
+    {"in": "K7QF", "out": "K7QF", "ok": true, "idempotent": true},
+    {"in": "k7qf", "out": "K7QF", "ok": true, "idempotent": true},
+    {"in": "K7qF", "out": "K7QF", "ok": true, "idempotent": true},
+    {"in": "K7-QF", "out": "K7QF", "ok": true, "idempotent": true},
+    {"in": "k7 qf", "out": "K7QF", "ok": true, "idempotent": true},
+    {"in": " K7QF\t", "out": "K7QF", "ok": true, "idempotent": true},
+    {"in": "-K7-QF-", "out": "K7QF", "ok": true, "idempotent": true},
+    {"in": "o0il", "out": "0011", "ok": true, "idempotent": true},
+    {"in": "O0IL", "out": "0011", "ok": true, "idempotent": true},
+    {"in": "0oO0", "out": "0000", "ok": true, "idempotent": true},
+    {"in": "awqw", "out": "AWQW", "ok": true, "idempotent": true},
+    {"in": "0000", "out": "0000", "ok": true, "idempotent": true},
+    {"in": "ZZZZ", "out": "ZZZZ", "ok": true, "idempotent": true},
+    {"in": "", "out": null, "ok": false, "error": "CRYPTO_CODE_INVALID"},
+    {"in": "K7Q", "out": null, "ok": false, "error": "CRYPTO_CODE_INVALID"},
+    {"in": "K7QF0", "out": null, "ok": false, "error": "CRYPTO_CODE_INVALID"},
+    {"in": "K7QFU", "out": null, "ok": false, "error": "CRYPTO_CODE_INVALID"},
+    {"in": "U9Z1", "out": null, "ok": false, "error": "CRYPTO_CODE_INVALID"},
+    {"in": "K7QF!", "out": null, "ok": false, "error": "CRYPTO_CODE_INVALID"},
+    {"in": "K7QF码", "out": null, "ok": false, "error": "CRYPTO_CODE_INVALID"}
+  ]
+}
