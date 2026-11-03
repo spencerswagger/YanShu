@@ -23,7 +23,10 @@ services:
         mkdir -p /secrets
         [ -s /secrets/token_secret ] || head -c 32 /dev/urandom | base64 > /secrets/token_secret
         [ -s /secrets/pg_password ] || head -c 24 /dev/urandom | base64 > /secrets/pg_password
+        # 密钥由业务容器的运行用户（10001）读取；postgres 以 root 读，不受影响
+        chown 10001:10001 /secrets/token_secret /secrets/pg_password
         chmod 600 /secrets/token_secret /secrets/pg_password
+        chmod 755 /secrets
         chown -R 10001:10001 /data/blobs /data/logs
         echo "[init] ./secrets 已就绪，数据卷属主已修正"
     volumes:

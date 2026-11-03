@@ -21,7 +21,7 @@ curl -O https://raw.githubusercontent.com/spencerswagger/YanShu/main/docker-comp
 docker compose up -d
 ```
 
-- 首次启动自动生成密钥到当前目录 **`./secrets/`**（`token_secret` / `pg_password`，0600）——**别删**；
+- 首次启动自动生成密钥到当前目录 **`./secrets/`**（`token_secret` / `pg_password`，属主 10001、权限 600）——**别删**；
   重启用同一份，`docker compose down -v` + 删 `./secrets` 才算彻底重来。
 - 起来后自检：
   ```sh
