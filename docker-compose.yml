@@ -28,7 +28,7 @@ services:
     image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine
     environment:
       POSTGRES_USER: yanshu
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (e.g. openssl rand -hex 12)}
       POSTGRES_DB: yanshu
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -48,7 +48,7 @@ services:
       init:
         condition: service_completed_successfully
     environment:
-      YANSHU_DATABASE_URL: postgres://yanshu:${POSTGRES_PASSWORD:-change-me}@postgres:5432/yanshu?sslmode=disable
+      YANSHU_DATABASE_URL: postgres://yanshu:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/yanshu?sslmode=disable
       YANSHU_TOKEN_SECRET: ${YANSHU_TOKEN_SECRET:?set YANSHU_TOKEN_SECRET (>=16 bytes)}
       YANSHU_TOKEN_EPOCH: ${YANSHU_TOKEN_EPOCH:-1}
       YANSHU_VERIFIER: ${YANSHU_VERIFIER:-sm2}
