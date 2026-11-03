@@ -6,3 +6,9 @@
 - 端侧密钥与码：SM2 密钥对 + 4 位 Crockford Base32 用户码（公钥派生，撞码则重生成密钥对）
 - 文件加密：SM4-GCM 分块（1MiB，nonce 含块序 + 末块标志）
 - 传输：默认服务器中转；打洞成功可切 P2P 直传（不引入 TURN，只配 STUN）
+
+## 目录
+
+- `server/`：中转服务端（Go）。只存不透明密文块，不解析 prelude/块内容；启动与接口见 `server/README.md`。
+- `docs/`：契约文档。`API.md` 是 HTTP/WS 接口契约，`CRYPTO-PACK.md` 是加密包格式；`DRAFT-FIELDS.md` 记录服务端对齐结果、残留偏离与契约缺口。
+
