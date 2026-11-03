@@ -6,6 +6,8 @@ target/
 .env
 .DS_Store
 tmp/
+__pycache__/
+*.pyc
 outbound/
 # 构建产物不入库（内核例外见 server/.gitignore）
 *.exe
