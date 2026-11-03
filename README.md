@@ -118,24 +118,59 @@ TEST_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu_test?sslmode=disable" 
 
 镜像由 CI 构建好推到 SWR（见 6.1），部署端只做"拉取 + 起"：
 
+目标环境实测（4C/8G，全流程约 4.1 分钟）：
+
+| 步骤 | 结果 |
+|---|---|
+| `docker build -t yanshu-server:local ./server` | ✅ **26.0s**（`golang:1.27` 构建 → `alpine:3.20` 运行，冻结内核已进镜像） |
+| postgres 从 SWR 直拉 | ✅ **healthy** |
+| `docker compose config` | ✅ **71 行变量全解析** |
+| `curl -s localhost:18080/healthz` | ✅ `{"status":"ok","api_version":"v1","contract":"v1"}` |
+| 启动日志 | ✅ `sm2 verifier loaded`、`version=0x00010000`、`kernel=/app/kernel/yanshu_sm.wasm` |
+| `GET /v1/config` | ✅ `verifier=sm2`、`env=production`、`kernel_sha256=c1b87d0a…7259f`、`kernel_exports=35` |
+| `docker compose up -d`（首次，`down -v` 后） | ❌ 命名卷 `logdata`/`blobdata` 建成 `root:root`，非 root 进程写不了日志：`fatal err="logging: open /app/data/logs/yanshu-server-…log: permission denied"` → `Restarting (1)` |
+
+**卷权限修复版重跑验证进行中**（镜像入口已改为：以 root 修正两卷属主后 `su-exec` 降权运行；
+修复通过前，上述 `up -d` 一条仍是失败状态）。
+
 ```sh
 git clone --depth 1 https://github.com/spencerswagger/YanShu.git && cd YanShu
 cp .env.example .env
 sed -i "s|^YANSHU_TOKEN_SECRET=.*|YANSHU_TOKEN_SECRET=$(head -c 32 /dev/urandom | base64)|" .env
 docker compose up -d          # 自动拉镜像（不需要 build）
 
-curl -s http://127.0.0.1:18080/healthz        # {"status":"ok","api_version":"v1","contract":"v1"}
+```sh
+git clone --depth 1 https://github.com/spencerswagger/YanShu.git && cd YanShu
+cp .env.example .env
+sed -i "s|^YANSHU_TOKEN_SECRET=.*|YANSHU_TOKEN_SECRET=$(head -c 32 /dev/urandom | base64)|" .env
+docker compose config          # 校验并展开配置
+docker compose up -d           # 自动拉镜像（不需要 build）
+curl -s localhost:18080/healthz        # {"status":"ok","api_version":"v1","contract":"v1"}
 docker compose logs yanshu-server | grep -i "sm2 verifier loaded"   # version=0x00010000
+docker compose down -v         # 清理（含数据卷）
 ```
 
-也可以只拷 `docker-compose.yml` 与 `.env.example` 两个文件（不必 clone 整个仓库）。
+也可以只拷 `docker-compose.yml`、`docker-compose.dev.yml` 与 `.env.example` 三个文件（不必 clone 整个仓库）。
 
 - **首次启动会有一个一次性 `init` 容器**：把两个数据卷属主改成容器运行用户（不做这步服务写日志会被拒、崩溃循环）；它跑完即退出，属正常现象。
+  **修复版重跑验证进行中**：下面"实测记录"里的 `up -d` 失败即由该问题导致，修复以真机复跑为准。
 - `postgres` 用 `swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine`；**该镜像拉不到时**把那一行临时改成 `postgres:16-alpine`。
 - SWR 仓库若为私有：先 `docker login swr.cn-east-5.myhuaweicloud.com`；设为公开后可匿名拉取。
 - 数据卷：`pgdata` / `blobdata` / `logdata`；`docker compose down` 不删卷，`down -v` 才删。
 - 容器内监听 `0.0.0.0:8080`，宿主映射 `${YANSHU_PORT:-18080}:8080`；compose 默认 `sm2`（真验签）。
 - **要自己改代码再构建**才用 dev override：`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`。
+
+实测记录（4C/8G，全流程约 4.1 分钟，修复前的原始结果）：
+
+| 步骤 | 结果 |
+|---|---|
+| `docker build -t yanshu-server:local ./server` | ✅ **26.0s**（`golang:1.27` 构建 → `alpine:3.20` 运行，冻结内核已进镜像） |
+| postgres 从 SWR 直拉 | ✅ **healthy** |
+| `docker compose config` | ✅ **71 行变量全解析** |
+| `curl -s localhost:18080/healthz` | ✅ `{"status":"ok","api_version":"v1","contract":"v1"}` |
+| 启动日志 | ✅ `sm2 verifier loaded`、`version=0x00010000`、`kernel=/app/kernel/yanshu_sm.wasm` |
+| `GET /v1/config` | ✅ `verifier=sm2`、`env=production`、`kernel_sha256=c1b87d0a…7259f`、`kernel_exports=35` |
+| `docker compose up -d`（`down -v` 后首次） | ❌ 命名卷 `logdata`/`blobdata` 建成 `root:root`，非 root 进程写不了日志：`fatal err="logging: open /app/data/logs/yanshu-server-…log: permission denied"` → `Restarting (1)` |
 
 ### 6.3 升级与回滚
 
