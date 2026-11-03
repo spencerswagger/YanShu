@@ -21,8 +21,9 @@ services:
       - |
         set -e
         mkdir -p /secrets
-        [ -s /secrets/token_secret ] || head -c 32 /dev/urandom | base64 > /secrets/token_secret
-        [ -s /secrets/pg_password ] || head -c 24 /dev/urandom | base64 > /secrets/pg_password
+        # 一律用十六进制：base64 可能含 '/' 或 '+'，会把 DSN 解析打断（invalid port）
+        [ -s /secrets/token_secret ] || od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > /secrets/token_secret
+        [ -s /secrets/pg_password ] || od -An -tx1 -N24 /dev/urandom | tr -d ' \n' > /secrets/pg_password
         # 密钥由业务容器的运行用户（10001）读取；postgres 以 root 读，不受影响
         chown 10001:10001 /secrets/token_secret /secrets/pg_password
         chmod 600 /secrets/token_secret /secrets/pg_password
@@ -56,7 +57,7 @@ services:
     restart: unless-stopped
 
   yanshu-server:
-    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:${YANSHU_IMAGE_TAG:-v0.1.0}
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:${YANSHU_IMAGE_TAG:-v0.1.1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -89,7 +90,7 @@ services:
     restart: unless-stopped
 
   web:
-    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:${YANSHU_IMAGE_TAG:-v0.1.0}
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:${YANSHU_IMAGE_TAG:-v0.1.1}
     depends_on:
       yanshu-server:
         condition: service_healthy
