@@ -120,28 +120,41 @@ TEST_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu_test?sslmode=disable" 
 # 0) 私有仓库先登录（否则 pull 会被拒：unauthorized）
 docker login swr.cn-east-5.myhuaweicloud.com
 
-# 1) 仓库根目录；准备好必填环境变量
-export YANSHU_TOKEN_SECRET="$(head -c 32 /dev/urandom | base64)"
+# 1) 生成必填变量（写进 .env，compose 会自动读取）
+cat > .env <<'ENV'
+YANSHU_TOKEN_SECRET=0123456789abcdef0123456789abcdef
+ENV
 
-# 2) 拉镜像并启动
-docker compose pull
+# 2) 构建镜像（本地构建时用；直接用 SWR 镜像可跳过）
+docker build -f server/Dockerfile -t yanshu-server:local server
+
+# 3) 校验并展开 compose 配置
+docker compose config
+
+# 4) 创建并启动
+docker compose create
 docker compose up -d
 
-# 3) 验证
+# 5) 验证
 curl -s http://127.0.0.1:18080/healthz
 # {"status":"ok","api_version":"v1","contract":"v1"}
+docker compose logs yanshu-server | grep "verifier loaded"
+# msg="sm2 verifier loaded" kernel=/app/kernel/yanshu_sm.wasm version=0x00010000
+
+# 6) 清理（含数据卷）
+docker compose down -v
 ```
 
-> **未在目标主机实测**：上面 `docker compose pull` / `up -d` 的具体输出未在本仓库环境中跑过
-> （开发沙盒无 docker CLI）。镜像本身的构建与推送有 CI 记录（run `41568888831`），
-> 首次在目标机器执行时请先 `docker compose config -q` 校验配置。
+状态：**镜像构建、SWR 拉取、`/healthz`、`sm2 verifier loaded` 已在目标环境实测；卷权限修复版镜像的重跑验证进行中**。
+命名卷 `logdata`/`blobdata` 首次创建属主为 root，镜像入口会在启动时修正属主再降权运行，
+因此**不需要手工 chown**。
 
 - `postgres` 用 `swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine`；
   **该镜像未同步时**把 `docker-compose.yml` 里那一行临时改成 `postgres:16-alpine`，同步后切回。
-- 数据卷：`pgdata`（数据库）、`blobdata`（密文块）、`logdata`（滚动日志）；`docker compose down` 不会删卷。
+- 数据卷：`pgdata`（数据库）、`blobdata`（密文块）、`logdata`（滚动日志）；`docker compose down` 不会删卷，
+  加 `-v` 才会删除。
 - 容器内监听 `0.0.0.0:8080`，宿主映射 `${YANSHU_PORT:-18080}:8080`；`stub-allow` 的 loopback 门禁因此不适用，compose 默认 `sm2`。
 - 服务启动时会先跑 `-migrate-only` 再起进程（镜像入口脚本），首次启动即建表。
-- `docker build` / `docker compose config` 在当前开发环境**未实跑**（无 docker CLI）；其余命令均实测。
 
 ### 6.3 升级与回滚
 
