@@ -90,6 +90,8 @@
 
 **版本字符串**（用于 API、日志、UI、错误提示的唯一规范写法）：`YSPK/1.0`，即 `MAGIC` 的 ASCII + `/` + `VERSION_MAJOR` 十进制 + `.` + `VERSION_MINOR` 十进制。
 
+**只有一种布局**：`YSPK/1.0`。本文任何出现"历史布局 / 其他布局 / 可选布局"的地方，都只用于描述"必须拒绝"的行为，不构成可选项；实现里也不存在运行时选择布局的开关（见 §2.2 第 7 条）。
+
 ### 2.2 向前兼容规则（硬规则）
 
 1. **未知大版本 MUST 拒绝**。接收方读到 `VERSION_MAJOR != 0x01` 时，MUST 立即以 `CRYPTO_VERSION_UNSUPPORTED` 失败，**不得**尝试按 v1 解析、不得"尽力而为"。
@@ -98,6 +100,22 @@
 4. **算法 ID 双门控**：`AEAD_ID / KDF_ID / SM2_WRAP_ID / SIG_ID`（`HEADER[12..16)`）各自独立。未知值 MUST 拒绝（`CRYPTO_ALG_UNSUPPORTED`）。未来加算法 = 抬 `VERSION_MINOR` 并新增 ID 值，老实现按第 2 条拒绝。
 5. **保留位 MUST 为 0**：`HEADER` 的 `RESERVED` 区、`FLAGS` 的保留位、块头的 `RESERVED` 字节，写方 MUST 写 0；读方 MUST 校验为 0，否则拒绝（`CRYPTO_HEADER_INVALID` / `CRYPTO_FLAGS_UNKNOWN`）。这是为了防止"老实现静默忽略新语义"。
 6. **不做版本协商**。不存在"探测对方支持哪个版本"的握手，包自己声明版本，不匹配就失败。
+7. **可发布构建不得带"运行时切换布局"**：能产出非 `YSPK/1.0` 包字节的构建（历史临时布局等）MUST 只存在于测试/开发环境；发布构建里唯一的包布局就是 `YSPK/1.0`，且版本以包内版本字段为准，不由符号名决定。
+
+### 2.3 端侧内核"是否符合契约"的判定写法（推荐）
+
+前端与门禁要用内核自报的信息判断"这颗 wasm 是不是契约实现"，**不能只凭"它不是桩"**。推荐下面四条全中才算合规：
+
+| # | 判据 | 期望 |
+|---:|---|---|
+| 1 | `ys_version()` | `0x00010000`（高 16 位 = `VERSION_MAJOR`，低 16 位 = `VERSION_MINOR`） |
+| 2 | `ys_header_len()` | `112` |
+| 3 | 冒烟：解包 §15.2 的 V1 样例（522 字节） | 成功，且解密结果 == `hello` |
+| 4 | 冒烟：把该样例 `HEADER[4]` 改成 `0x02` 后再解包 | `CRYPTO_VERSION_UNSUPPORTED` |
+
+补充：wasm 模块 MUST 无 import（纯计算），导出集 MUST 含契约必需符号；界面上的"契约内核"标签，显示条件应是**上面四条全过**，而不是"不是桩就显示合规"。
+
+`ys_version()` 只说明"这颗内核对哪个版本实现"，**包版本判定的唯一权威仍是包内的 `VERSION_MAJOR/MINOR`**（§2.2）：运行时不得用 `ys_version()` 代替解包时的版本校验。
 
 ---
 
@@ -131,8 +149,8 @@
 
 - 字母表：`0123456789ABCDEFGHJKMNPQRSTVWXYZ`（32 个符号，剔除 `I L O U`）。
 - **码生成**：`PUB = 未压缩公钥 65 字节` → `D = SM3(PUB)`（32 字节）→ 取 `D` 的**前 20 个 bit（大端 bit 序，即 `D[0]` 的 bit7..bit0、`D[1]` 的 bit7..bit0、`D[2]` 的高 4 bit）**，按 5 bit 一组切成 4 组（MSB 在前），逐组映射字母表 → 4 字符码。等价说法：`Crockford32(D)` 的左对齐编码取前 4 个字符。
-- **校验字符（第 5 位，仅本地纠错用）**：把上述 20 bit 当无符号整数 `V`，取 `CHECK_ALPHA[V mod 37]`，其中 `CHECK_ALPHA = "0123456789ABCDEFGHJKMNPQRSTVWXYZ*~$=U"`。UI 展示为 `CODE-CHECK`（如 `AWQW-X`）。
-- **输入归一化**（客户端 MUST 做，服务端 MUST 只接受归一化后的 4 字符）：转大写 → 去所有 `-` 与空白 → `O→0`、`I→1`、`L→1` → 长度必须为 4 → 每个字符必须在字母表内（`U` 一律拒绝）。
+- **校验字符（v1 不启用）**：码**固定 4 位**——线上传的、服务端存的、别人输入的、包里与签名里参与运算的，都只有这 4 位，**码本身不含校验位**。实现可本地计算 `check_symbol()`：把上述 20 bit 当无符号整数 `V`，取 `CHECK_ALPHA[V mod 37]`（`CHECK_ALPHA = "0123456789ABCDEFGHJKMNPQRSTVWXYZ*~$=U"`）——它**只**用于输入框前置防误输提示，不上行、不参与派生、不改变码长度。将来若要升 5 位展示，属契约变更，需 ADR。
+- **输入归一化**（客户端 MUST 做；服务端 MAY 执行同一套，归一化结果必须正好 4 个合法符号，完整判定口径见 `docs/API.md` §1.6）：转大写 → 去所有 `-` 与空白 → `O→0`、`I→1`、`L→1` → 长度必须为 4 → 每个字符必须在字母表内（`U` 一律拒绝）。**禁止**猜测性纠错，**禁止**把 5 位 `CODE-CHECK` 截成 4 位。
 - 码**不是密钥、不是口令**；服务端只把它当索引键。
 
 ### 3.5 签名与封装的编码
@@ -192,6 +210,8 @@ ENVELOPE_LEN     = PRELUDE_LEN + Σ_{i<n} (32 + PT_LEN(i))
 
 传输时 **prelude 整段上传一次，块区按块切片上传**（每片 = `CHUNK_CT ‖ TAG`，**不含 16 字节块头**，块头由接收方按 §6.3 规则本地重建）。映射细节见 §12。
 
+**块序绑在 AEAD 里**（硬要求）：块记录的完整性不靠"事后比对"，而靠块级 AEAD 的 AAD 逐字节绑定 `CHUNK_INDEX`（块序号）、`CHUNK_COUNT`（总块数）、`LAST_FLAG`（末块标志）、`CHUNK_SIZE`、`PLAINTEXT_SIZE` 与 `PT_LEN`（§7.2）。因此"删中间块 / 交换两块顺序 / 把别的包的合法块搬进来"在**块层就失败**，不是只靠清单摘要兜底；两道防线的分工与预期错误码见 §7.5。
+
 ---
 
 ## 5. HEADER（112 字节）
@@ -224,7 +244,7 @@ ENVELOPE_LEN     = PRELUDE_LEN + Σ_{i<n} (32 + PT_LEN(i))
 
 | bit | 名称 | 含义 | v1 |
 |---:|---|---|---|
-| 0 | `NAME_OBFUSCATED` | 清单内文件名为客户端打码后的标签（`NAME_MODE = 0x01`），非真实文件名 | 生产恒 `0` |
+| 0 | `NAME_OBFUSCATED` | 清单内文件名为客户端打码后的标签（`NAME_MODE = 0x01`），非真实文件名。**MUST 与清单 `NAME_MODE` 相等**；不等即整包非法（`CRYPTO_MANIFEST_INVALID`，校验位置见 §13 #15） | 生产恒 `0` |
 | 1 | `SENDER_SIGNED` | 包内含有效 `SIG_SEC`。v1 **MUST 为 1**；为 0 时接收方 MUST 拒绝（`CRYPTO_UNSIGNED`） | 恒 `1` |
 | 2..31 | `RESERVED` | MUST 为 0 | 全 0 |
 
@@ -341,6 +361,22 @@ offset len 字段
                         = 32 字节
 ```
 
+逐字节拼接（全部大端、无填充、定长 32 字节，可手算复现）：
+
+```
+AAD_CHUNK = 0x01                      // 域分隔，块
+          ‖ "YSPK"                    // 4 字节
+          ‖ VERSION_MAJOR ‖ VERSION_MINOR
+          ‖ u32be(CHUNK_SIZE)
+          ‖ u32be(CHUNK_COUNT)
+          ‖ u64be(PLAINTEXT_SIZE)
+          ‖ u32be(CHUNK_INDEX)        // 块序号：第 0 块从 0 起
+          ‖ u8(LAST_FLAG)             // 末块 0x01，其余 0x00
+          ‖ u32be(PT_LEN)
+```
+
+`CHUNK_INDEX` **同时**进 nonce（§6.4）与 AAD：nonce 让"用错密钥流"解不出，AAD 让"位置被换过"认证失败——两步都在 AEAD 内部完成，不依赖任何后置校验。
+
 **这 32 字节绑定了什么**（每一条都对应一种攻击）：
 
 | 被绑定字段 | 拦住的攻击 |
@@ -351,6 +387,8 @@ offset len 字段
 | `PT_LEN` | 长度篡改（截短密文） |
 
 `AAD_LABEL` 让块 AAD 与清单 AAD 处于不同域，杜绝把清单密文当块塞回块区的混淆攻击。
+
+**跨包搬运为什么也失败**：AAD 里不含"包标识"字段，包身份由密钥承担——`KEK_CHUNK` 由每包独立的 `DK`（32 字节 CSPRNG）与 `KDF_SALT`（16 字节 CSPRNG）派生（§11），别的包的同序号块在本包密钥下必然认证失败。这也是"`DK` 与 `KDF_SALT` 每包必须重新取"是硬约束的原因。
 
 ### 7.3 清单 AAD：`AAD_MANIFEST`（31 字节）
 
@@ -375,6 +413,23 @@ offset len 字段
 - 认证失败（tag 不符）时**一律**报 `CRYPTO_CHUNK_AUTH_FAILED` / `CRYPTO_MANIFEST_AUTH_FAILED`，**不得**区分"tag 错"与"解密后内容不对"，避免给攻击者 oracle。
 - 明文校验顺序：先 GCM 认证，再比 SM3 摘要（§8.4）。GCM 已保证完整性，SM3 是给"分块续传/部分重组"留的第二把锁，也是 Gate 的交叉验证点。
 
+### 7.5 篡改检测语义（两道防线，别把 tag 当唯一防线）
+
+校验顺序固定为**先清单层、再块层**（完整次序见 §13）：
+
+| 层 | 防线 | 主要覆盖的篡改 | 典型错误码 |
+|---|---|---|---|
+| 第 1 道（清单层） | `MANIFEST_SEC` 的 GCM tag + 清单内每块明文 `SM3` 摘要表 | 头字段被改、清单被改、块数/块长/总长被谎报、块内容被替换 | `CRYPTO_MANIFEST_AUTH_FAILED` / `CRYPTO_DIGEST_MISMATCH` |
+| 第 2 道（块层） | 块头自洽（序号/末块标志/块长，§6.2）+ 块级 AEAD（`AAD_CHUNK`，§7.2）+ GCM tag | 块重排、删中间块、截断尾块、密文单字节篡改、跨包搬运 | `CRYPTO_CHUNK_ORDER` / `CRYPTO_CHUNK_MISSING` / `CRYPTO_CHUNK_AUTH_FAILED` |
+
+**为什么两道都要有**：清单层保护"整包声明"（块数、总长、摘要表本身），块层保护"每一块的位置与字节"。少了第 1 道，头里的块数/总长可被谎报；少了第 2 道，块级重排/搬运只能靠摘要表兜底，而摘要表本身也只是一个 GCM 保护的声明。
+
+**预期现象（不是缺陷，写清以免误判）**：凡是同时破坏清单或块数的用例（删块、换序、搬入别包块、改头字段），第 1 道往往先拦下，端到端因此**可能取不到块级 tag 失败**（实现内部常叫 `TAG_MISMATCH`）。本契约 §13 规定块级 GCM（第 20 条）先于摘要比对（第 21 条），所以"只翻转某块密文 1 个字节"这类用例应得 `CRYPTO_CHUNK_AUTH_FAILED`；若某实现把摘要比对提前，同一用例会得 `CRYPTO_DIGEST_MISMATCH`。
+
+**测试判定口径**：篡改用例只要被**任一**防线拒绝即算通过，**不得**要求特定错误码或特定防线；反之，任何篡改被接受（解出明文、或静默截短）即 FAIL。
+
+**不利情形**：逐块比对意味着"边收边解"时必须先拿到清单；清单在 `prelude` 里，所以 §12 的顺序（先 prelude、后块）是强制的。
+
 ---
 
 ## 8. 加密清单（MANIFEST）
@@ -391,14 +446,14 @@ offset len 字段
 |---:|---:|---|---|---|
 | 0 | 4 | `MAGIC` | bytes | `59 53 4D 31`（`YSM1`） |
 | 4 | 1 | `MANIFEST_VERSION` | u8 | `0x01` |
-| 5 | 1 | `NAME_MODE` | u8 | `0x00` = 清单内是真文件名；`0x01` = 打码标签（配合 `FLAGS.NAME_OBFUSCATED`） |
+| 5 | 1 | `NAME_MODE` | u8 | `0x00` = 清单内是真文件名；`0x01` = 打码标签。**MUST 等于 `FLAGS.NAME_OBFUSCATED`**，不等即整包非法（§13 #15） |
 | 6 | 1 | `DIGEST_ALG` | u8 | `0x01` = SM3 |
 | 7 | 1 | `DIGEST_LEN` | u8 | `0x20`（32） |
 | 8 | 8 | `FILE_SIZE` | u64be | 必须等于头里的 `PLAINTEXT_SIZE` |
 | 16 | 4 | `CHUNK_SIZE` | u32be | 必须等于头里的 `CHUNK_SIZE` |
 | 20 | 4 | `CHUNK_COUNT` | u32be | 必须等于头里的 `CHUNK_COUNT` |
 | 24 | 8 | `CREATED_AT` | u64be | Unix 毫秒（UTC），发送方本地时间 |
-| 32 | 2 | `NAME_LEN` | u16be | 0..255 |
+| 32 | 2 | `NAME_LEN` | u16be | 0..255；**`0` 合法**（空文件名，规则见 §8.5） |
 | 34 | `NAME_LEN` | `NAME` | utf8 | §3.3 规则 |
 | 34+N | 2 | `MIME_LEN`（记 `M`） | u16be | 1..127 |
 | 36+N | `M` | `MIME` | ascii | §3.3 规则 |
@@ -417,6 +472,21 @@ offset len 字段
 ### 8.4 摘要口径
 
 `DIGEST[i] = SM3( 第 i 块明文 )`，明文即切片后的原始字节（不含任何头、不含长度前缀）。接收方在 GCM 认证通过后 MUST 复算并比对，不符报 `CRYPTO_DIGEST_MISMATCH`。
+
+**易错点（写死）**：摘要取**明文块**——不是 `CHUNK_CT`、不是 `CHUNK_CT ‖ TAG`、不是整条块记录。这三种口径算出来的值完全不同，跨实现对照时以本文为准。
+
+### 8.5 空文件名（`NAME_LEN = 0`）
+
+**协议层允许空文件名**：`NAME_LEN = 0` 是合法值，`NAME` 字段占 0 字节，后续偏移照常（`MIME_LEN` 落在 offset 34）。
+
+| 角色 | 要求 |
+|---|---|
+| 写方 | `NAME_LEN == 0` 时 `NAME_MODE` MUST 为 `0x00`，且 `FLAGS.NAME_OBFUSCATED` MUST 为 0（空名没有"打码"语义，禁止用该组合制造口径分歧） |
+| 读方 | MUST 接受空名并正常解包；**不得**因文件名为空而拒绝（`CRYPTO_MANIFEST_INVALID` 只用于结构/长度/一致性非法） |
+| 客户端展示 | 空名显示"未命名"；`EXT` 仍可非空，按扩展名做降级展示（图标/类型提示） |
+| 落盘命名 | 落盘文件名完全由接收端本地决定（含去重），不来自清单、不参与寻址 |
+
+**安全说明（为什么允许空名）**：文件名只是展示信息，既不参与加密也不参与寻址，服务端也从未见过明文名（清单在 `MANIFEST_SEC` 密文内）。`MANIFEST_PT_LEN` 被清单 AAD（§7.3）覆盖，长度本身是被认证的——因此"空名"不构成混淆通道；反过来，禁止空名只会逼客户端编造假名字（如 `unnamed.bin`），把展示问题变成假数据问题。
 
 ---
 
@@ -483,7 +553,27 @@ SIG_INPUT = "YSSIG1"            (6 字节 ASCII)
 
 长度 = `6 + 1 + 1 + 72 + 65 + MANIFEST_LEN` = `145 + MANIFEST_LEN`。
 
-签名算法即标准的 `sign(SM3(ZA ‖ SIG_INPUT))`，`ZA` 用默认 `ENTL=0x0080` 与 `ID="1234567812345678"`（与 GmSSL 默认一致）。
+**签名算法（写死，两端必须完全一致）**
+
+```
+ZA = SM3( ENTL(2, u16be) ‖ ID ‖ a(32) ‖ b(32) ‖ xG(32) ‖ yG(32) ‖ xA(32) ‖ yA(32) )
+e  = SM3( ZA ‖ SIG_INPUT )
+SIG_SEC = SM2-Sign(e)，DER 编码
+```
+
+| 参数 | 值 |
+|---|---|
+| `ID`（userID） | **`1234567812345678`**，16 字节 ASCII —— 默认值，**不许自定、不许为空** |
+| `ENTL` | `0x0080`（= `ID` 的比特数 128），`u16be` |
+| `a` / `b` | SM2 曲线参数，32 字节大端 |
+| `xG` / `yG` | 基点坐标，32 字节大端 |
+| `xA` / `yA` | **签名者**公钥坐标（`SENDER_PUB` 去掉首字节 `0x04` 后的 64 字节） |
+
+三条易错点：
+
+1. **`ZA` 不是 `SIG_INPUT` 的一部分**：`ZA` 由 SM2 算法内部喂给哈希，`SIG_INPUT` 是 `ZA` 之后的**消息 M**。把 `ZA` 再拼进 `SIG_INPUT` 会得到另一套签名，两端永远验不过。
+2. **`ID` 必须是默认值**：换成别的（含空串）等价于换算法；`ENTL` 随 `ID` 比特数变化，`ID` 为空时是 `0x0000`，本契约**禁止**空 `ID`。
+3. **`xA/yA` 是签名者公钥**，不是验证者（接收方）公钥；用错一方验签必失败。
 
 **为什么这样签**：
 
@@ -574,7 +664,7 @@ KEK_MANIFEST = HKDF-SM3(DK, KDF_SALT, "YANSHU/v1/manifest-key", 16)
 
 | # | 校验 | 失败错误码 |
 |---:|---|---|
-| 1 | 总长度 ≥ `112 + 65 + 129 + 16 + 70`（最小包） | `CRYPTO_LENGTH_INCONSISTENT` |
+| 1 | 总长度 ≥ `112 + 65 + 129 + 16 + 70`（最小包） | `CRYPTO_TRUNCATED` |
 | 2 | `MAGIC == "YSPK"` | `CRYPTO_MAGIC_MISMATCH` |
 | 3 | `VERSION_MAJOR == 1 && VERSION_MINOR == 0` | `CRYPTO_VERSION_UNSUPPORTED` |
 | 4 | `HEADER_LEN == 112` | `CRYPTO_HEADER_INVALID` |
@@ -585,19 +675,79 @@ KEK_MANIFEST = HKDF-SM3(DK, KDF_SALT, "YANSHU/v1/manifest-key", 16)
 | 9 | `CHUNK_COUNT == ceil(PLAINTEXT_SIZE / CHUNK_SIZE)`，且 `1 ≤ CHUNK_COUNT ≤ 1048576` | `CRYPTO_LENGTH_INCONSISTENT` |
 | 10 | `WRAPPED_KEY_LEN == 129`、`SENDER_PUB_LEN == 65`、`MANIFEST_LEN == MANIFEST_PT_LEN + 16` | `CRYPTO_LENGTH_INCONSISTENT` |
 | 11 | `SIG_LEN ∈ [70,72]` 且与实际 DER 长度一致 | `CRYPTO_HEADER_INVALID` |
-| 12 | `ENVELOPE_LEN` 等于 §4.2 计算值（无尾随字节） | `CRYPTO_LENGTH_INCONSISTENT` |
+| 12 | `ENVELOPE_LEN` 等于 §4.2 计算值：**不足** → `CRYPTO_TRUNCATED`；**多出**（尾随字节）→ `CRYPTO_TRAILING_BYTES`；计算所用字段自相矛盾 → `CRYPTO_LENGTH_INCONSISTENT` | 见左列 |
 | 13 | SM2 解封 `WRAPPED_KEY` → 得 32 字节 `DK` | `CRYPTO_KEY_UNWRAP_FAILED` |
 | 14 | HKDF 派生 `KEK_MANIFEST`，解 `MANIFEST_SEC`（AAD 见 §7.3） | `CRYPTO_MANIFEST_AUTH_FAILED` |
-| 15 | `MANIFEST_PT` 的 `MAGIC=="YSM1"`、`MANIFEST_VERSION==1`、`DIGEST_ALG==1`、`DIGEST_LEN==32` | `CRYPTO_MANIFEST_INVALID` |
+| 15 | `MANIFEST_PT` 的 `MAGIC=="YSM1"`、`MANIFEST_VERSION==1`、`DIGEST_ALG==1`、`DIGEST_LEN==32`、`NAME_MODE ∈ {0x00,0x01}` 且**与 `FLAGS.NAME_OBFUSCATED` 相等**（`NAME_LEN==0` 时 `NAME_MODE` MUST 为 `0x00`，§8.5） | `CRYPTO_MANIFEST_INVALID` |
 | 16 | 清单内 `FILE_SIZE / CHUNK_SIZE / CHUNK_COUNT` 与头一致；`DIGEST_TABLE_LEN == CHUNK_COUNT*32`；字符串长度前缀不越界 | `CRYPTO_LENGTH_INCONSISTENT` |
 | 17 | SM2 验签 `SIG_SEC` over `SIG_INPUT`（§10.2） | `CRYPTO_SIGNATURE_INVALID` |
 | 18 | `Crockford(SM3(SENDER_PUB))[0..4)` == 元数据中的发送方码 | `CRYPTO_SENDER_MISMATCH` |
-| 19 | 逐块：块头自洽（`INDEX/PT_LEN/CT_LEN/LAST_FLAG/RESERVED`，§6.2） | `CRYPTO_CHUNK_ORDER` / `CRYPTO_LENGTH_INCONSISTENT` |
+| 19 | 逐块：块头自洽（`INDEX/PT_LEN/CT_LEN/LAST_FLAG/RESERVED`，§6.2）；同一序号出现两次 = 重复块 | `CRYPTO_CHUNK_ORDER` / `CRYPTO_CHUNK_DUPLICATE` / `CRYPTO_LENGTH_INCONSISTENT` |
 | 20 | 逐块：GCM 认证（nonce §6.4、AAD §7.2） | `CRYPTO_CHUNK_AUTH_FAILED` |
 | 21 | 逐块：`SM3(明文块) == DIGEST[i]` | `CRYPTO_DIGEST_MISMATCH` |
 | 22 | 存在且仅存在一个 `LAST_FLAG=1` 的块，且其 `INDEX == CHUNK_COUNT-1`；缺块报明确索引 | `CRYPTO_CHUNK_MISSING` / `CRYPTO_CHUNK_ORDER` |
 
-> 上述错误码是**端侧错误码**（Rune 产出、Web 展示），不经 HTTP 上行。服务端错误码见 `docs/API.md` 第 9 章，两套命名不混用。
+### 13.1 错误名 ↔ 数值对照（唯一权威）
+
+端侧 C ABI 用整数返回错误（`0` 成功、负数为错误）。**名字是唯一权威**：断言、日志、UI 文案、门禁判定一律用 `CRYPTO_*` 名字；数值只用于 ABI 传输，不进 wire、不进 HTTP。
+
+| 数值 | C ABI 常量 | 契约错误名 | 触发时机 / 备注 |
+|---:|---|---|---|
+| 0 | `YS_OK` | —（成功） | — |
+| -1 | `YS_ERR_BAD_ARGUMENT` | `CRYPTO_BAD_ARGUMENT` | 入参非法：NULL、名字/MIME/扩展名不合 §3.3、块大小越界 |
+| -2 | `YS_ERR_BUFFER_TOO_SMALL` | —（ABI 专用） | 输出缓冲不足：写入所需长度后由调用方重试，**不是**数据错误 |
+| -3 | `YS_ERR_RNG` | `CRYPTO_RNG` | 随机源失败，或同一 `seed` 被二次使用 |
+| -4 | `YS_ERR_BAD_MAGIC` | `CRYPTO_MAGIC_MISMATCH` | §13 #2 |
+| -5 | `YS_ERR_UNSUPPORTED_VERSION` | `CRYPTO_VERSION_UNSUPPORTED` | §13 #3 |
+| -6 | `YS_ERR_BAD_FLAGS` | `CRYPTO_FLAGS_UNKNOWN` | §13 #6 保留位非 0 |
+| -7 | `YS_ERR_TRUNCATED` | **`CRYPTO_TRUNCATED`** | 实际字节不足：包/段/块记录读到一半 EOF |
+| -8 | `YS_ERR_BAD_KEY_RECORD` | `CRYPTO_KEY_RECORD_INVALID` | `WRAPPED_KEY` 记录不合法（长度 ≠ 129、首字节 ≠ `0x04`） |
+| -9 | `YS_ERR_BAD_SIGNATURE_RECORD` | `CRYPTO_SIGNATURE_RECORD_INVALID` | DER 结构非法，或自述长度与 `SIG_LEN` 不符 |
+| -10 | `YS_ERR_BAD_MANIFEST_RECORD` | `CRYPTO_MANIFEST_INVALID` | 清单 `MAGIC`/版本/摘要算法/长度前缀非法 |
+| -11 | `YS_ERR_BLOCK_SEQUENCE` | `CRYPTO_CHUNK_ORDER` | **别名**（规范值 -28） |
+| -12 | `YS_ERR_DUPLICATE_BLOCK` | `CRYPTO_CHUNK_DUPLICATE` | 同一 `CHUNK_INDEX` 出现两次 |
+| -13 | `YS_ERR_MISSING_BLOCK` | `CRYPTO_CHUNK_MISSING` | **别名**（规范值 -30） |
+| -14 | `YS_ERR_LAST_FLAG_MISMATCH` | `CRYPTO_LAST_FLAG_MISMATCH` | `LAST_FLAG` 与位置不符，或出现多个末块 |
+| -15 | `YS_ERR_TAG_MISMATCH` | `CRYPTO_CHUNK_AUTH_FAILED` | **别名**（规范值 -29） |
+| -16 | `YS_ERR_MANIFEST_MISMATCH` | `CRYPTO_MANIFEST_AUTH_FAILED` | **别名**（规范值 -31） |
+| -17 | `YS_ERR_SIGNATURE_MISMATCH` | `CRYPTO_SIGNATURE_INVALID` | §13 #17 |
+| -18 | `YS_ERR_TRAILING_BYTES` | `CRYPTO_TRAILING_BYTES` | 包尾有多余字节 |
+| -19 | `YS_ERR_BAD_POINT` | `CRYPTO_KEY_UNWRAP_FAILED` | C1 点不在曲线上（**规范值**） |
+| -20 | `YS_ERR_BAD_KDF` | `CRYPTO_KEY_UNWRAP_FAILED` | **别名**（KDF 输出全零等） |
+| -21 | `YS_ERR_BAD_CODE` | `CRYPTO_BAD_CODE` | 码派生不符，或归一化后不是 4 个合法符号 |
+| -22 | `YS_ERR_CODE_EXHAUSTED` | `CRYPTO_CODE_EXHAUSTED` | 撞码重生成次数用尽 |
+| -23 | `YS_ERR_BAD_CIPHERTEXT` | `CRYPTO_KEY_UNWRAP_FAILED` | **别名**（C3 不符） |
+| -24 | `YS_ERR_HEADER_INVALID` | `CRYPTO_HEADER_INVALID` | §13 #4 / #7 / #8 / #11 |
+| -25 | `YS_ERR_ALG_UNSUPPORTED` | `CRYPTO_ALG_UNSUPPORTED` | §13 #5 |
+| -26 | `YS_ERR_UNSIGNED` | `CRYPTO_UNSIGNED` | `FLAGS.SENDER_SIGNED == 0` |
+| -27 | `YS_ERR_LENGTH_INCONSISTENT` | `CRYPTO_LENGTH_INCONSISTENT` | 长度字段互相矛盾（`MANIFEST_LEN ≠ MANIFEST_PT_LEN+16`、`CT_LEN ≠ PT_LEN`） |
+| -28 | `YS_ERR_CHUNK_ORDER` | `CRYPTO_CHUNK_ORDER` | 块序/位置错（**规范值**） |
+| -29 | `YS_ERR_CHUNK_AUTH_FAILED` | `CRYPTO_CHUNK_AUTH_FAILED` | 块级 GCM tag 不符（**规范值**） |
+| -30 | `YS_ERR_CHUNK_MISSING` | `CRYPTO_CHUNK_MISSING` | 缺块（**规范值**） |
+| -31 | `YS_ERR_MANIFEST_AUTH_FAILED` | `CRYPTO_MANIFEST_AUTH_FAILED` | 清单 GCM tag 不符（**规范值**） |
+| -32 | `YS_ERR_DIGEST_MISMATCH` | `CRYPTO_DIGEST_MISMATCH` | 明文块 SM3 与清单不符 |
+| -33 | `YS_ERR_SENDER_MISMATCH` | `CRYPTO_SENDER_MISMATCH` | §13 #18 |
+| -99 | `YS_ERR_INTERNAL` | `CRYPTO_INTERNAL` | 内部错误（panic 捕获等） |
+
+**规则（写死）**
+
+1. **数值冻结、不得复用**：已占用的数值不得改含义；新增语义取**未被占用的最小值**（当前从 `-34` 起；`-99` 已保留给 `CRYPTO_INTERNAL`）。数值不进 wire、不进 HTTP。
+2. **别名只为兼容**：`-11 / -13 / -15 / -16 / -20 / -23` 是首版遗留的重复值，语义已并入对应契约名；实现的新路径 SHOULD 返回规范值，但判定与日志一律按**名字**，返回别名不算失败。
+3. **多对一允许、一对多禁止**：一个契约名可以对应多个数值（别名），任何数值只对应一个契约名。
+4. **判定口径**：单测与门禁断言 `CRYPTO_*` 名字；只有 ABI 边界（JS ↔ wasm）用数值。
+5. **`-2` 不是数据错误**：缓冲区不足只表示"调用方给的空间不够"，按返回的所需长度重试，**不得**计入失败用例或篡改用例。
+
+**`CRYPTO_TRUNCATED` 与 `CRYPTO_LENGTH_INCONSISTENT` 的分界（写死）**
+
+| 情形 | 错误名 |
+|---|---|
+| 实际字节比结构所需少（读一半没了） | `CRYPTO_TRUNCATED`（-7） |
+| 长度字段互相矛盾（声明 vs 声明） | `CRYPTO_LENGTH_INCONSISTENT`（-27） |
+| 字节数比声明多（有尾随字节） | `CRYPTO_TRAILING_BYTES`（-18） |
+
+> 本节新增的名字（`CRYPTO_TRUNCATED`、`CRYPTO_TRAILING_BYTES`、`CRYPTO_CHUNK_DUPLICATE`、`CRYPTO_LAST_FLAG_MISMATCH`、`CRYPTO_KEY_RECORD_INVALID`、`CRYPTO_SIGNATURE_RECORD_INVALID`、`CRYPTO_BAD_ARGUMENT`、`CRYPTO_RNG`、`CRYPTO_INTERNAL` 等）此前只在实现内部存在；**一律不改变任何字段布局与样例字节**。
+
+> 上述错误码是**端侧错误码**（端侧产出、Web 展示），不经 HTTP 上行。服务端错误码见 `docs/API.md` §10，两套命名不混用。
 
 ---
 
@@ -642,7 +792,7 @@ KEK_CHUNK    = f8a4b7977b28e093f1bbc91f62089400
 KEK_MANIFEST = e05971b0c4e3a8f648d9854a064cb648
 ```
 
-由 `PB_S` 派生的用户码：`SM3(PB_S) = 572fcd0bf0efa3d2e0795a54408138ac5b4c4c0f43f8a219631b14b014428562` → **`AWQW`**，校验字符 **`X`**（展示 `AWQW-X`）。
+由 `PB_S` 派生的用户码：`SM3(PB_S) = 572fcd0bf0efa3d2e0795a54408138ac5b4c4c0f43f8a219631b14b014428562` → **`AWQW`**（4 位，即契约里唯一的码形态）。若实现自带 `check_symbol()`，这 20 bit 算出的本地提示值为 `X`，仅用于输入框防误输，**不进入码、不上行**。
 
 ### 15.2 样例 V1：最小单块包
 
@@ -693,6 +843,18 @@ KEK_MANIFEST = e05971b0c4e3a8f648d9854a064cb648
 | 72 | `SIG_LEN` | `0000000000000046`（70） |
 | 80 | `RESERVED` | 32 × `00` |
 
+**V1 全包段偏移地图**（与 §4.2 公式一致，可逐项相加核对）
+
+| 段 | offset | 长度 | 构成 |
+|---|---:|---:|---|
+| `HEADER` | 0 | 112 | 定长 |
+| `SENDER_PUB` | 112 | 65 | `04‖X32‖Y32` |
+| `WRAPPED_KEY` | 177 | 129 | `C1(65)‖C3(32)‖C2(32)` |
+| `MANIFEST_SEC` | 306 | 109 | 密文 93 + tag 16 |
+| `SIG_SEC` | 415 | 70 | DER |
+| `CHUNK_REC(0)` | 485 | 37 | 块头 16 + 密文 5 + tag 16 |
+| **合计** | — | **522** | `PRELUDE_LEN = 485` |
+
 **SENDER_PUB（65 字节，位于 offset 112）**
 
 ```
@@ -715,22 +877,26 @@ C2(32) = 44e70dd8f4bfee133f6f597fb2ff6946147d8c1092763f5d3ceaf6d74f234985
 
 **MANIFEST_PT（93 字节）**
 
-```
-59534d31                                  MAGIC "YSM1"
-01                                        MANIFEST_VERSION
-00                                        NAME_MODE
-01                                        DIGEST_ALG
-20                                        DIGEST_LEN
-0000000000000005                          FILE_SIZE
-00100000                                  CHUNK_SIZE
-00000001                                  CHUNK_COUNT
-0000019b76daa800                          CREATED_AT
-0006  68692e747874                        NAME_LEN + "hi.txt"
-000a  746578742f706c61696e                MIME_LEN + "text/plain"
-0003  747874                               EXT_LEN  + "txt"
-00000020                                  DIGEST_TABLE_LEN (32)
-becbbfaae6548b8bf0cfcad5a27183cd1be6093b1cceccc303d9c61d0a645268   DIGEST[0]
-```
+| offset | len | hex | 字段 / 取值 |
+|---:|---:|---|---|
+| 0 | 4 | `59534d31` | `MAGIC` = `YSM1` |
+| 4 | 1 | `01` | `MANIFEST_VERSION` |
+| 5 | 1 | `00` | `NAME_MODE` |
+| 6 | 1 | `01` | `DIGEST_ALG` = SM3 |
+| 7 | 1 | `20` | `DIGEST_LEN` = 32 |
+| 8 | 8 | `0000000000000005` | `FILE_SIZE` = 5 |
+| 16 | 4 | `00100000` | `CHUNK_SIZE` = 1048576 |
+| 20 | 4 | `00000001` | `CHUNK_COUNT` = 1 |
+| 24 | 8 | `0000019b76daa800` | `CREATED_AT`（Unix ms） |
+| 32 | 2 | `0006` | `NAME_LEN` |
+| 34 | 6 | `68692e747874` | `NAME` = `hi.txt` |
+| 40 | 2 | `000a` | `MIME_LEN` |
+| 42 | 10 | `746578742f706c61696e` | `MIME` = `text/plain` |
+| 52 | 2 | `0003` | `EXT_LEN` |
+| 54 | 3 | `747874` | `EXT` = `txt` |
+| 57 | 4 | `00000020` | `DIGEST_TABLE_LEN` = 32 |
+| 61 | 32 | `becbbfaae6548b8bf0cfcad5a27183cd1be6093b1cceccc303d9c61d0a645268` | `DIGEST[0]` = SM3(`hello`) |
+| 93 | — | — | （结束，正好 93 字节） |
 
 连续写：`59534d3101000120000000000000000500100000000000010000019b76daa800000668692e747874000a746578742f706c61696e000374787400000020becbbfaae6548b8bf0cfcad5a27183cd1be6093b1cceccc303d9c61d0a645268`
 
@@ -740,9 +906,19 @@ becbbfaae6548b8bf0cfcad5a27183cd1be6093b1cceccc303d9c61d0a645268   DIGEST[0]
 025953504b010000000002001000000000000100000000000000050000005d
 ```
 
-拆解：`02` ‖ `5953504b` ‖ `0100` ‖ `00000002` ‖ `00100000` ‖ `00000001` ‖ `0000000000000005` ‖ `0000005d`。
+| offset | len | hex | 字段 |
+|---:|---:|---|---|
+| 0 | 1 | `02` | `AAD_LABEL`（清单域） |
+| 1 | 4 | `5953504b` | `MAGIC` |
+| 5 | 1 | `01` | `VERSION_MAJOR` |
+| 6 | 1 | `00` | `VERSION_MINOR` |
+| 7 | 4 | `00000002` | `FLAGS` |
+| 11 | 4 | `00100000` | `CHUNK_SIZE` |
+| 15 | 4 | `00000001` | `CHUNK_COUNT` |
+| 19 | 8 | `0000000000000005` | `PLAINTEXT_SIZE` |
+| 27 | 4 | `0000005d` | `MANIFEST_PT_LEN` = 93 |
 
-**MANIFEST_SEC（109 字节 = 93 密文 + 16 tag）**，nonce = `ffffffffffffffff00000001`
+**MANIFEST_SEC（109 字节 = 93 密文 + 16 tag，位于包内 offset 306）**，nonce = `ffffffffffffffff00000001`
 
 密文（93 字节）：
 
@@ -756,21 +932,34 @@ tag（16 字节）：`578349057322670a37cac504041ce16f`
 
 连续写：`186874ecd599472da43a0d5a866014eeb5b072e634f2b72b67ec329825dafbb48343ff0ba9b0063b1fe02070b21d20c6b3e86781a5e9a5463f72040e925397a7cb97e6b8d25f6065aede90354b013789ecbe2c6662730b6faa60bdd0f1578349057322670a37cac504041ce16f`
 
-**块 0 的 AAD（32 字节）**
+**块 0 的 AAD（`AAD_CHUNK`，32 字节）**
 
 ```
 015953504b010000100000000000010000000000000005000000000100000005
 ```
 
+| offset | len | hex | 字段 |
+|---:|---:|---|---|
+| 0 | 1 | `01` | `AAD_LABEL`（块域） |
+| 1 | 4 | `5953504b` | `MAGIC` |
+| 5 | 1 | `01` | `VERSION_MAJOR` |
+| 6 | 1 | `00` | `VERSION_MINOR` |
+| 7 | 4 | `00100000` | `CHUNK_SIZE` |
+| 11 | 4 | `00000001` | `CHUNK_COUNT` |
+| 15 | 8 | `0000000000000005` | `PLAINTEXT_SIZE` |
+| 23 | 4 | `00000000` | `CHUNK_INDEX`（块序号） |
+| 27 | 1 | `01` | `LAST_FLAG`（末块） |
+| 28 | 4 | `00000005` | `PT_LEN` |
+
 **块 0 的 nonce（12 字节）**：`000000000000000000000001`（`i=0` 且为末块 → 末块位 `01`）
 
 **块记录 0（37 字节 = 16 + 5 + 16）**
 
-| 段 | 字节数 | hex |
-|---|---:|---|
-| 块头 | 16 | `00000000 00000005 00000005 01 00 0000` |
-| 密文 `CHUNK_CT` | 5 | `84bf7e96d2` |
-| tag | 16 | `590df9b1343a6dd6ea84c381578472ef` |
+| 段 | offset（块内） | offset（包内） | 字节数 | hex |
+|---|---:|---:|---:|---|
+| 块头 | 0 | 485 | 16 | `00000000 00000005 00000005 01 00 0000` |
+| 密文 `CHUNK_CT` | 16 | 501 | 5 | `84bf7e96d2` |
+| tag | 21 | 506 | 16 | `590df9b1343a6dd6ea84c381578472ef` |
 
 连续写（建议直接比对这个）：`0000000000000005000000050100000084bf7e96d2590df9b1343a6dd6ea84c381578472ef`
 
@@ -783,7 +972,7 @@ tag（16 字节）：`578349057322670a37cac504041ce16f`
 186874ecd599472da43a0d5a866014eeb5b072e634f2b72b67ec329825dafbb48343ff0ba9b0063b1fe02070b21d20c6b3e86781a5e9a5463f72040e925397a7cb97e6b8d25f6065aede90354b013789ecbe2c6662730b6faa60bdd0f1578349057322670a37cac504041ce16f
 ```
 
-**SIG_SEC（70 字节 DER）**
+**SIG_SEC（70 字节 DER，位于包内 offset 415）**
 
 ```
 3044022063287a23c4ed9288dd091ad23495200bf98ed1e89cf1ffaf6ecba6013ec5b413022035654a55f88a4a5960318fbebdf6c0585354f2d471c15a7a0b48b1df91f3c567
@@ -815,6 +1004,8 @@ tag（16 字节）：`578349057322670a37cac504041ce16f`
 ```
 
 对照：`CHUNK_SIZE=00000020`、`CHUNK_COUNT=00000003`、`PLAINTEXT_SIZE=0000000000000050`、`MANIFEST_LEN=00000000000000be`（190）、`MANIFEST_PT_LEN=000000ae`（174）、`SIG_LEN=47`（71）。
+
+段偏移：`HEADER` 0/112、`SENDER_PUB` 112/65、`WRAPPED_KEY` 177/129、`MANIFEST_SEC` 306/190、`SIG_SEC` 496/71、`CHUNK_SEC` 567，三个块记录分别在 **567 / 631 / 695**（长度 64 / 64 / 48），合计 **743**。
 
 **MANIFEST_PT（174 字节）**
 
@@ -921,3 +1112,38 @@ fa34635f1d3ac2729ac5987eb59e01928457f325b4b51ca85a177813c5c5ddf7
 - `FLAGS` 的 bit2..bit31。
 - `MANIFEST_PT` 尾部追加字段（靠 `DIGEST_TABLE_LEN` 之后的位置检查 + 版本号门控；v1 读到尾部多余字节即拒绝）。
 - `NAME_MODE = 0x01`（打码文件名）的正式交互。
+
+---
+
+## 18. 端侧内核构建与产物规则（验收硬要求）
+
+### 18.1 唯一正确的构建命令
+
+```sh
+cd crypto && cargo build --release --target wasm32-unknown-unknown -p yanshu-sm
+```
+
+- 必须在 **workspace 根的 `crypto/` 目录**执行，并用 `-p yanshu-sm` 指定成员 crate。
+- **MUST NOT** 从成员目录（如 `crypto/sm`）构建：那会绕过 workspace 的 `Cargo.lock` 与 `[profile.release]`（`opt-level=3`、`lto=true`、`codegen-units=1`），产出字节与冻结产物不同（实测 130,653 B / `8b89dd7f…` 对 127,313 B / `c1b87d0a…`）。行为可能一致，但**验收不可信**。
+
+### 18.2 冻结产物
+
+| 项 | 值 |
+|---|---|
+| `sha256` | `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f` |
+| 大小 | `127313` 字节 |
+| 目标 | `wasm32-unknown-unknown`，**0 import**，§2.3 所列必需导出齐备 |
+| 自报版本 | `ys_version() == 0x00010000`，`ys_header_len() == 112` |
+
+### 18.3 判定方式（唯一可靠）
+
+- **只比 `sha256`**：MUST NOT 用 commit 号、导出个数、`ys_version()` 或"能跑通"代替。同一 commit 跨环境/跨构建入口重建可能得到不同字节，commit 号相同**不足以**说明同源。
+- 服务端内嵌的内核 MUST 与该 `sha256` **逐字节相同**；启动日志 MUST 打印所加载内核的路径与版本（示例：`sm2 verifier loaded kernel=… version=0x00010000`），供现场复核。
+- 任何字节变化（重编、换 rustc/cargo 版本、改 profile、改构建入口）都视为**新产物**：必须重新冻结、更新本节 `sha256`，并重跑 §15 样例、GmSSL 交叉验证与端侧向量套件后，才可用于验收。
+
+### 18.4 复核清单（可复跑）
+
+1. 按 §18.1 构建，`sha256` 与 §18.2 比对；
+2. 起服务，日志出现内核加载行且 `version` 一致；
+3. 用 §15.2 的 V1 样例解包成功；把 `HEADER[4]` 改 `0x02` 后解包必须 `CRYPTO_VERSION_UNSUPPORTED`（§2.3 四条判据）；
+4. `sha256` 不符即 FAIL——**不得**以"行为一致 / 向量都过"放行。
