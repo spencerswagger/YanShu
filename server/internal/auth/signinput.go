@@ -105,6 +105,11 @@ func TransferRevokeFields(senderCode, transferID string) ([]byte, error) {
 	return codeAndTransferID(senderCode, transferID)
 }
 
+// AbuseReportFields 是举报的字段串（§1.3 0x09）：REPORTER_CODE(4) ‖ TRANSFER_ID(32)，共 36 字节。
+func AbuseReportFields(reporterCode, transferID string) ([]byte, error) {
+	return codeAndTransferID(reporterCode, transferID)
+}
+
 // TransferAckFields：RECEIVER_CODE(4) ‖ TRANSFER_ID(32 ASCII)。
 func TransferAckFields(receiverCode, transferID string) ([]byte, error) {
 	return codeAndTransferID(receiverCode, transferID)

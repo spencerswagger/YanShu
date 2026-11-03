@@ -20,6 +20,9 @@ var DefaultLimits = struct {
 	ChunkPutPerTransfer     Limit
 	TransferReadPerTransfer Limit
 	WSConnPerIP             Limit
+	// 举报（API.md §11.5）：按码 5 次/小时、按 IP 20 次/小时。
+	AbuseReportPerCode Limit
+	AbuseReportPerIP   Limit
 
 	// 失败锁定：同一 IP 对同一码连续 CODE_NOT_FOUND 5 次 → 423 CODE_LOCKED。
 	CodeLockThreshold int
@@ -41,6 +44,9 @@ var DefaultLimits = struct {
 	ChunkPutPerTransfer:     Limit{WindowSeconds: 60, Max: 600, Burst: 600},
 	TransferReadPerTransfer: Limit{WindowSeconds: 60, Max: 600, Burst: 600},
 	WSConnPerIP:             Limit{WindowSeconds: 60, Max: 10, Burst: 10},
+
+	AbuseReportPerCode: Limit{WindowSeconds: 3600, Max: 5, Burst: 5},
+	AbuseReportPerIP:   Limit{WindowSeconds: 3600, Max: 20, Burst: 20},
 
 	CodeLockThreshold:   5,
 	CodeLockBaseSeconds: 60,
