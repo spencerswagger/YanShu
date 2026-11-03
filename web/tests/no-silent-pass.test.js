@@ -37,7 +37,7 @@ const collect = (out, key) => {
   return m ? Number(m[1]) : null
 }
 
-test('缺产物 + 本地：真内核用例必须 SKIP（pass=0），不得计为通过', () => {
+test('缺产物 + 本地：真内核用例必须 SKIP（pass=0），不得计为通过', { timeout: 60000 }, () => {
   const { code, out } = runReal({ YS_WASM: MISSING, CI: '' })
   assert.equal(code, 0, `本地缺产物应当以 0 退出但全部 SKIP：\n${out.slice(0, 400)}`)
   assert.equal(collect(out, 'pass'), 0, 'pass 必须是 0（说明一条真断言都没跑）')
@@ -45,13 +45,13 @@ test('缺产物 + 本地：真内核用例必须 SKIP（pass=0），不得计为
   assert.match(out, /# SKIP|SKIP/i)
 })
 
-test('缺产物 + CI：必须非 0 退出（不许静默跳过）', () => {
+test('缺产物 + CI：必须非 0 退出（不许静默跳过）', { timeout: 60000 }, () => {
   const { code, out } = runReal({ YS_WASM: MISSING, CI: '1' })
   assert.notEqual(code, 0, `CI 缺产物必须失败：\n${out.slice(0, 400)}`)
   assert.match(out, /CI 下缺内核产物/)
 })
 
-test('有产物时真内核用例真的执行了（pass>0，skipped=0）', () => {
+test('有产物时真内核用例真的执行了（pass>0，skipped=0）', { timeout: 60000 }, () => {
   const { code, out } = runReal({ YS_WASM: '', CI: '' })
   assert.equal(code, 0)
   assert.ok((collect(out, 'pass') ?? 0) > 0, '跑通时必须有通过的真内核用例')

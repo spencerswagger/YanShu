@@ -9,6 +9,7 @@
 import { CryptoError } from '../crypto/errors.js'
 import { ApiError } from './client.js'
 import { runPool } from '../lib/pool.js'
+import { takeChunkBytes } from './p2pChunks.js'
 import { info } from '../lib/log.js'
 import { config } from '../config.js'
 
@@ -40,7 +41,19 @@ export async function receiveTransfer(params) {
   }
 }
 
-async function receiveOnce({ api, kernel, session, transferId, senderPublic, onProgress, signal, save, ack = true, attempt }) {
+async function receiveOnce({
+  api,
+  kernel,
+  session,
+  transferId,
+  senderPublic,
+  onProgress,
+  signal,
+  save,
+  ack = true,
+  attempt,
+  directBuffer,
+}) {
   void attempt
   const report = (patch) => onProgress?.(patch)
 
@@ -90,7 +103,12 @@ async function receiveOnce({ api, kernel, session, transferId, senderPublic, onP
       [...Array(chunkCount).keys()],
       async (index) => {
         if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-        const bytes = await api.getChunk({ transferId, downloadId: prelude.downloadId, index })
+        // 直连收到的块优先（`directBuffer` 由直连通道灌入）；没有就走中转，行为与原来一致
+        const { bytes } = await takeChunkBytes({
+          directBuffer,
+          index,
+          getChunk: (i) => api.getChunk({ transferId, downloadId: prelude.downloadId, index: i }),
+        })
         unpack.feed(index, bytes)
         done += bytes.length
         report({ phase: 'downloading', done, total: meta.total_ciphertext_bytes || done, message: `下载块 ${index + 1}/${chunkCount}` })

@@ -266,6 +266,7 @@ async function doReceive({ transferId, onProgress }) {
     :send-file="doSend"
     :resume-send="doResume"
     :pending-backend="pendingBackend"
+    :p2p-config="{ wsUrl: serverConfig?.ws_url || '', stunUrls: serverConfig?.stun_urls || [] }"
   />
 
   <InboxPanel v-show="tab === 'inbox'" ref="inboxRef" :api="api" :receive="doReceive" />
