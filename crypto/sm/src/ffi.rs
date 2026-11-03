@@ -128,23 +128,55 @@ fn to_pub65(pub64: &[u8; 64]) -> [u8; 65] {
 
 // ---------------------------------------------------------------- 内存 / 元信息 / 布局
 
+/// 分配头：8 字节长度 + 8 字节对齐填充。释放时不依赖调用方传的 `len`。
+const ALLOC_HDR: usize = 16;
+const ALLOC_ALIGN: usize = 16;
+
+/// 分配 `len` 字节。返回的指针已跳过 16 字节头。
+///
+/// **不依赖 `Vec` 的容量**：用精确 `Layout` 分配，`ys_free` 用同一 `Layout` 释放，
+/// 避免 `Vec::with_capacity` 的容量取整与调用方传入长度不一致导致的堆损坏。
 #[no_mangle]
 pub extern "C" fn ys_alloc(len: usize) -> *mut u8 {
     if len == 0 {
         return core::ptr::null_mut();
     }
-    let mut v: Vec<u8> = Vec::with_capacity(len);
-    let ptr = v.as_mut_ptr();
-    core::mem::forget(v);
-    ptr
+    let total = match len.checked_add(ALLOC_HDR) {
+        Some(v) => v,
+        None => return core::ptr::null_mut(),
+    };
+    let layout = match std::alloc::Layout::from_size_align(total, ALLOC_ALIGN) {
+        Ok(l) => l,
+        Err(_) => return core::ptr::null_mut(),
+    };
+    unsafe {
+        let base = std::alloc::alloc(layout);
+        if base.is_null() {
+            return core::ptr::null_mut();
+        }
+        // 头里记长度，释放时用它（调用方传错 len 也不会破坏堆）
+        core::ptr::write(base as *mut u64, len as u64);
+        base.add(ALLOC_HDR)
+    }
 }
 
+/// 释放 `ys_alloc` 的指针。`len` 仅作兼容保留——真实长度取自分配头。
 #[no_mangle]
-pub unsafe extern "C" fn ys_free(ptr: *mut u8, len: usize) {
-    if ptr.is_null() || len == 0 {
+pub unsafe extern "C" fn ys_free(ptr: *mut u8, _len: usize) {
+    if ptr.is_null() {
         return;
     }
-    drop(Vec::from_raw_parts(ptr, 0, len));
+    let base = ptr.sub(ALLOC_HDR);
+    let len = core::ptr::read(base as *const u64) as usize;
+    let total = match len.checked_add(ALLOC_HDR) {
+        Some(v) => v,
+        None => return,
+    };
+    let layout = match std::alloc::Layout::from_size_align(total, ALLOC_ALIGN) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    std::alloc::dealloc(base, layout);
 }
 
 #[no_mangle]
