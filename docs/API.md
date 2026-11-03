@@ -432,7 +432,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 16 | POST | `/v1/transfers/{id}/ack` | 签名 `TRANSFER_ACK` | 取件完成确认 → 删密文 |
 | 17 | POST | `/v1/transfers/{id}/revoke` | 签名 `TRANSFER_REVOKE` | 发送方主动撤回 |
 | 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`。**v1 定义并实现**；部署方可配置关闭（关闭返回 `501 FEATURE_DISABLED`，代价是吊销后需重建传输并重传）。细则见 §1.7.5 |
-| 19 | WS | `/v1/ws` | 首帧签名 `WS_HELLO` | 在线状态、收件通知、直传信令。**v1 未实现**：返回 `503 SERVICE_UNAVAILABLE`，客户端按 §9.6 降级（排期见 §15） |
+| 19 | WS | `/v1/ws` | 首帧签名 `WS_HELLO` | 在线状态、收件通知、直传信令。**v1 已实现**：连接后 10 秒内必须发 `HELLO`（`WS_HELLO` 签名）进入已认证态；握手、帧类型与限速见 §9 |
 
 ---
 
@@ -895,6 +895,7 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 1. `wss://<host>/v1/ws` 建立连接。
 2. 客户端 MUST 在 **10 秒**内发送首帧 `HELLO`（含 `WS_HELLO` 签名）；否则服务端关闭，close code `4408`；`HELLO` 验签失败则关闭 `4401`。
 3. 服务端回 `HELLO_OK`，连接进入已认证态；未认证前发任何其它帧 → 关闭 `4401`。
+4. 限速与帧上限见 §9.4（每连接 40 帧/秒、突发 80；单帧 ≤ 64 KiB）。
 
 ### 9.2 消息信封
 
@@ -919,9 +920,9 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 | S→C | `PRESENCE_SNAPSHOT` | `{entries:[{code, online}]}` | 订阅回执 |
 | S→C | `PRESENCE_CHANGED` | `{code, online}` | 上线/掉线推送 |
 | S→C | `TRANSFER_NOTICE` | `{transfer_id, sender_code, sender_nickname, plaintext_size, chunk_count, expires_at}` | 有新传输可收 |
-| S→C | `TRANSFER_STATE` | `{transfer_id, state, terminal_reason?}` | 状态变化（撤回/过期/被取走） |
-| C→S | `INBOX_SYNC` | `{}` | 主动拉一次 |
-| S→C | `INBOX_SNAPSHOT` | `{items:[...]}` | 结构同 §7.1 |
+| S→C | `TRANSFER_STATE` | `{transfer_id, state, terminal_reason?}` | 状态变化（撤回/过期/被取走）。**v1 未实现**（见 §15） |
+| C→S | `INBOX_SYNC` | `{}` | 主动拉一次。**v1 未实现**（见 §15） |
+| S→C | `INBOX_SNAPSHOT` | `{items:[...]}` | 结构同 §7.1。**v1 未实现**（见 §15） |
 | C→S | `RTC_OFFER` | `{transfer_id, to_code, sdp}` | 发起直传 |
 | S→C | `RTC_OFFER` | `{transfer_id, from_code, sdp}` | 转发 |
 | C→S | `RTC_ANSWER` | `{transfer_id, to_code, sdp}` | 应答 |
@@ -931,29 +932,34 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 | C→S | `RTC_BYE` | `{transfer_id, to_code, reason: "done" / "failed" / "cancelled"}` | 结束 |
 | S→C | `PEER_UNREACHABLE` | `{transfer_id, code}` | 对方不在线/信令投递失败 |
 
+> 表里标 **v1 未实现** 的帧类型属排期项（§15 是唯一排期清单），服务端当前既不发送也不接受；客户端 MUST 按 §9.2 的"未知 `type` 忽略"处理，不要依赖其存在。
+> 在线表与 `TRANSFER_NOTICE` 已实现：建包成功时若收件人在线，服务端推送 `TRANSFER_NOTICE`；离线则不发，收件方靠 §7.1 的 `inbox` 拉取。
+
 ### 9.4 信令转发规则
 
-- 服务端校验：`X-YS-Code` 的会话码必须等于该 `transfer_id` 的 `sender_code`，`to_code` 必须等于 `recipient_code`（或反之：接收方回 `ANSWER/ICE` 时身份对调）。不符 → `403 SIGNAL_PEER_MISMATCH`。
+- 服务端校验：连接已认证的会话码必须等于该 `transfer_id` 的 `sender_code`，`to_code` 必须等于 `recipient_code`（或反之：接收方回 `ANSWER`/`ICE` 时身份对调）。不符 → `ERROR{code:"SIGNAL_PEER_MISMATCH"}`，该次直传尝试作废（对应 §10.1 的同名常量）。
 - 服务端**只做字符串转发**：不解析 SDP、不记录 SDP/候选（SDP 含内网地址与 IP，属敏感元数据）。
 - 对端不在线 → `PEER_UNREACHABLE`，客户端 MUST **静默**继续走中转（不弹错误）。
 - 信令帧总大小上限 64 KiB，超出 → `ERROR{code:"SIGNAL_TOO_LARGE"}`。
+- 限速：每连接令牌桶 **40 帧/秒、突发 80**；超限 → `ERROR{code:"RATE_LIMITED", fatal:true}` 并关闭连接（客户端退避后重连，MUST NOT 原地重试）。
+- 帧的 `transfer_id` 必须先能取到才做当事人校验；取不到/格式非法 → `ERROR{code:"BAD_REQUEST"}`，不断连。
 
 ### 9.5 不做 TURN：明确写死
 
-- 本项目**不部署 TURN、不签发 TURN 凭据、不提供 relay 候选**。
+- 本项目**不部署 TURN、不签发 TURN 凭据、不提供 relay 候选**，也**不做 UDP 中继**（服务端只转发信令，不转发媒体/数据）。
 - 客户端 ICE 配置 **MUST** 只包含 `/v1/config` 下发的 `stun_urls`；**MUST NOT** 接受任何 `typ relay` 候选（收到即丢弃）。
 - 打洞失败判定：ICE gathering 5 秒内没有 `srflx` 候选，或 `iceConnectionState` 进入 `failed` → 直接放弃直传，**不重试、不提示**。
 - 直传是**用户点一下才切换**（产品决策）；客户端与服务器都 **MUST NOT** 自动切到直传。
 
 ### 9.6 WS 不可用时的降级（v1 必须支持）
 
-v1 的信令与在线表**未实现**（排期见 §15），所以"WS 不可用"是 v1 的正常路径，不是异常路径：
+v1 **已实现**信令与在线表（§9.1–§9.5）。但"WS 不可用"仍是**必须支持的降级路径**——部署方可以不下发 `ws_url`，链路也可能被代理/CDN 掐断：
 
 | 情形 | 服务端 | 客户端 MUST |
 |---|---|---|
-| `GET /v1/ws` 不可用（503 / 连接被拒 / 握手非 `101`） | 返回 `503 SERVICE_UNAVAILABLE`（错误码同 §10.2） | 视为**直传能力不可用**：本次会话不再尝试 WS（退避重试至多 1 次）、全部走中转、**不向用户报错** |
-| `config.ws_url` 为 `null` | 同上 | 从一开始就不建连，直接走中转 |
-| 建连后 5 秒内未收到 `HELLO_OK` | — | 关闭连接，按第一条处理 |
+| `config.ws_url` 为 `null`（该部署不提供信令） | 不下发 WS 地址 | 从一开始就不建连，直接走中转 |
+| 连接被拒 / 握手非 `101` / 升级被代理阻断 | — | 视为**直传能力不可用**：本次会话不再尝试 WS（退避重试至多 1 次）、全部走中转、**不向用户报错** |
+| 建连后 5 秒内未收到 `HELLO_OK`，或收到 `4408`/`4401` | 按 §9.1 关闭 | 关闭连接，按上一条处理；**不重试同一凭据**（挑战已作废，需重新取挑战再签） |
 
 **收件通知的降级**：没有 WS 时，接收方靠轮询 `GET /v1/inbox`（`INBOX_LIST` 签名）得知新传输。轮询间隔 **MUST ≥ 30 秒**，并指数退避到 ≤ 5 分钟（避免触发 §11.1 的限速）；`next_cursor` 变化即视为有更新。
 
@@ -1026,7 +1032,7 @@ v1 的信令与在线表**未实现**（排期见 §15），所以"WS 不可用"
 
 ### 10.4 WS 错误码与关闭码
 
-WS 层 `ERROR` 帧里的 `code` 复用 §10.1/§10.2 的同一套常量；WS 专属的只有 `SIGNAL_TOO_LARGE`（信令帧 > 64 KiB）。
+WS 层 `ERROR` 帧里的 `code` 复用 §10.1/§10.2 的同一套常量（如 `SIGNAL_PEER_MISMATCH`、`RATE_LIMITED`、`BAD_REQUEST`）；**仅 WS 出现**的只有两个：`SIGNAL_TOO_LARGE`（帧 > 64 KiB）与 `PEER_UNREACHABLE`（对端不在线）。
 
 | close code | 含义 |
 |---:|---|
@@ -1150,4 +1156,5 @@ Content-Type: application/json
 | **1GB 级流式分块 API** | v1 只有既有的分块上传/下载：`PUT /chunks/{index}`（§6.4）、`GET /chunks/{index}`（§7.4）、`prelude` 一次性进出（§6.3 / §7.3）。服务端按块存、按块发，端侧逐块解密落盘，但**接口层不做流式端点**。上限口径看两处：单包 = `plaintext_size ≤ 4 GiB`，单块 = `chunk_size ≤ 1 MiB`，块数 = `chunk_count ≤ 1048576`（字段约束见 §6.1，包级限值见 `CRYPTO-PACK.md` §14） | 下一轮：边传边解（请求/响应体流式，无整包落内存或落盘）。只加端点与传输方式，**不改块格式与 AAD** |
 | 公开举报入口 | 无公开入口；只保留内部 `REVOKED` 终结态（运营手动撤回），语义与用户撤回一致（§11.4） | v2（职责见需求基线 §6） |
 | 用户码校验字符 | 码固定 **4 位**，v1 不启用校验字符；实现可本地计算 `check_symbol()` 作输入框前置防误输提示，不上行、不改变码长度（`CRYPTO-PACK.md` §3.4） | 需要时升 5 位展示，属契约变更，需 ADR |
-| 直传信令与在线表（WebSocket，§9） | `GET /v1/ws` 返回 `503 SERVICE_UNAVAILABLE`；客户端按 §9.6 静默降级到中转，收件通知改为轮询 `inbox`（≥30 秒） | 下一轮实现；消息类型已在 §9 定死，实现时**不需要**再改契约 |
+| WS 帧 `INBOX_SYNC` / `INBOX_SNAPSHOT` / `TRANSFER_STATE`（§9.3） | 信令与在线表已实现（§9.1–§9.5），但这三种帧**未实现**：服务端不发送、也不接受。收件方靠 §7.1 `inbox` 拉取；传输状态变化靠轮询 `GET /transfers/{id}/status` | 下一轮；帧格式已在 §9.3 定死，实现时**不需要**再改契约 |
+| TURN / UDP 中继（§9.5） | **明确不做**：不部署 TURN、不签发凭据、不提供 relay 候选、不转发媒体或数据；直传只走 STUN 打洞，失败即回中转 | 无排期（产品与安全决策，见需求基线） |
