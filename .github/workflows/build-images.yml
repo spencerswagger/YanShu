@@ -16,6 +16,9 @@ env:
   REGISTRY: swr.cn-east-5.myhuaweicloud.com
   NAMESPACE: spencerswagger
   PLATFORMS: linux/amd64
+  # 前端基础镜像（SWR tag 待确认；不存在时在仓库变量/此处替换，不回退 Docker Hub）
+  NODE_IMAGE: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-node:22-alpine
+  NGINX_IMAGE: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-nginx:alpine
 
 jobs:
   build:
@@ -31,6 +34,10 @@ jobs:
             # 前端需要端侧内核 ys_kernel.wasm（server/kernel/），因此上下文是仓库根
             context: .
             dockerfile: ./web/Dockerfile
+            # SWR 上的基础镜像 tag 待目标环境确认；可用 workflow env 覆盖
+            build-args: |
+              NODE_IMAGE=${{ env.NODE_IMAGE }}
+              NGINX_IMAGE=${{ env.NGINX_IMAGE }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -103,6 +110,7 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           push: ${{ steps.creds.outputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
+          build-args: ${{ matrix.build-args }}
           provenance: false
           sbom: false
           labels: |
