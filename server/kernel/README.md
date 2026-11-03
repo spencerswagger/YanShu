@@ -5,10 +5,10 @@
 
 | 项 | 值 |
 |---|---|
-| 来源分支/提交 | `feat/kernel-streaming` @ **`e2aa01e`**（流式内核；字节兼容 YSPK/1.0） |
-| 大小 | **140 742 B** |
-| sha256 | **`8766048ffdd16b9de8c4f3fea49590ec0802418dea9ad0fdca68f0e05bb625f8`** |
-| 旧内核 | `c1b87d0a…7259f`（127 313 B）保留在启动白名单中用于灰度，本目录只保留新内核 |
+| 来源分支/提交 | `feat/kernel-streaming` @ **`42b8457`**（流式内核；修掉分配器长度依赖，字节兼容 YSPK/1.0） |
+| 大小 | **140 762 B** |
+| sha256 | **`daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de`** |
+| 白名单保留项 | `8766048f…25f8`（上一版流式，回滚目标）、`c1b87d0a…7259f`（初版，灰度期）；本目录只放当前内核 |
 | 导出 | 43 个函数 + `memory` = 44，**0 个 import** |
 | 用到的导出 | `ys_alloc` / `ys_free` / `ys_sm2_verify_der` / `ys_version` |
 | 版本 | `ys_version() == 0x00010000`（`YSPK/1.0`） |
@@ -31,7 +31,7 @@ sha256sum <repo>/server/kernel/yanshu_sm.wasm   # 与上表不一致就更新本
 
 1. 取端侧**冻结 head** 的 `yanshu_sm.wasm`（验收组公布的那份），覆盖本目录同名文件；
 2. `sha256sum kernel/yanshu_sm.wasm` 必须等于验收公布值（当前
-   `8766048f…25f8`），否则**不提交**；
+   `daa94926…31de`），否则**不提交**；
 3. 更新本文件三处：来源 commit、字节数、sha256；
 4. 跑 `go test ./internal/auth/`（加载本文件跑验签向量 + 双向对账）与 `sm2` 全链路。
 
