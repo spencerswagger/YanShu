@@ -1,0 +1,5 @@
+bin/
+data/
+
+# 端侧内核副本要进仓库（服务端 sm2 验签依赖它），覆盖根目录的 *.wasm 规则。
+!kernel/yanshu_sm.wasm

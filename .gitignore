@@ -9,3 +9,8 @@ tmp/
 
 # 内核产物的构建溯源（由 npm run wasm:rebuild 生成，跟产物一起本地存在）
 web/public/ys_kernel.build.json
+__pycache__/
+*.pyc
+outbound/
+# 构建产物不入库（内核例外见 server/.gitignore）
+*.exe

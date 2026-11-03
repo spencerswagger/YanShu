@@ -1,0 +1,42 @@
+[package]
+name = "yanshu-sm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+description = "YanShu on-device crypto core: SM3 / SM4-GCM / SM2 / crypto pack / 4-char user code"
+
+[lib]
+name = "yanshu_sm"
+# rlib: native unit tests + host tooling. cdylib: wasm32 raw C ABI (no wasm-bindgen).
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "gen-vectors"
+path = "src/bin/gen_vectors.rs"
+
+[[bin]]
+name = "bench-sm4"
+path = "src/bin/bench_sm4.rs"
+
+[[bin]]
+name = "ys-tool"
+path = "src/bin/ys_tool.rs"
+
+[[bin]]
+name = "gen-code-vectors"
+path = "src/bin/gen_code_vectors.rs"
+
+[[bin]]
+name = "gen-core-vectors"
+path = "src/bin/gen_core_vectors.rs"
+
+[[bin]]
+name = "gen-user-code-vectors"
+path = "src/bin/gen_user_code_vectors.rs"
+
+[[bin]]
+name = "gen-host-crosscheck"
+path = "src/bin/gen_host_crosscheck.rs"
+
+[dependencies]
