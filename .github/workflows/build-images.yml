@@ -17,8 +17,6 @@ env:
   NAMESPACE: spencerswagger
   PLATFORMS: linux/amd64
   # 前端基础镜像（SWR tag 待确认；不存在时在仓库变量/此处替换，不回退 Docker Hub）
-  NODE_IMAGE: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-node:22-alpine
-  NGINX_IMAGE: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-nginx:alpine
 
 jobs:
   build:
@@ -35,9 +33,11 @@ jobs:
             context: .
             dockerfile: ./web/Dockerfile
             # SWR 上的基础镜像 tag 待目标环境确认；可用 workflow env 覆盖
+            # 注意：strategy.matrix 里不能用 ${{ env.X }}（GitHub 解析期报 Unrecognized named-value: 'env'），
+            # 这里必须写字面量；镜像 tag 已核对 SWR 上确实存在。
             build-args: |
-              NODE_IMAGE=${{ env.NODE_IMAGE }}
-              NGINX_IMAGE=${{ env.NGINX_IMAGE }}
+              NODE_IMAGE=swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-node:22-alpine
+              NGINX_IMAGE=swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-nginx:alpine
     steps:
       - name: Checkout
         uses: actions/checkout@v4
