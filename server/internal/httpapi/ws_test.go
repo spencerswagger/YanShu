@@ -351,3 +351,54 @@ func TestWSPresenceSubscriptionRateAndCap(t *testing.T) {
 		t.Fatalf("presence payload wrong: %v", p)
 	}
 }
+
+// 重复订阅已订阅的码不计数：既不占速率额度、也不占并发额度；但也不能用来绕过并发上限。
+func TestWSPresenceResubscribeDoesNotCount(t *testing.T) {
+	e := newEnv(t, "")
+	me, _ := e.register("me")
+	a := dialWS(t, e.srv.URL, me, e.challenge(spec.PurposeWSHello).ChallengeID, "sig")
+	readWS(t, a.c) // HELLO_OK
+
+	sub := func(codes ...string) map[string]any {
+		writeWS(t, a.c, map[string]any{"type": "PRESENCE_SUBSCRIBE", "payload": map[string]any{"codes": codes}})
+		return readWS(t, a.c)
+	}
+
+	// 首次订阅 A：净新增 1。
+	first := sub("AAAA")
+	if first["type"] != "PRESENCE_SNAPSHOT" {
+		t.Fatalf("first sub: %v", first)
+	}
+	entries := first["payload"].(map[string]any)["entries"].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+
+	// 连发 10 次同一个码：不触发 RATE_LIMITED、不被并发上限拒，快照仍是 1 条。
+	for i := 0; i < 10; i++ {
+		got := sub("AAAA")
+		if got["type"] != "PRESENCE_SNAPSHOT" {
+			t.Fatalf("repeat %d rejected: %v", i, got)
+		}
+		entries := got["payload"].(map[string]any)["entries"].([]any)
+		if len(entries) != 1 {
+			t.Fatalf("repeat %d: entries = %d, want 1（净新增应仍为 1）", i, len(entries))
+		}
+	}
+
+	// 反向：重复订阅没有把并发上限也绕过去——慢慢补到 8 个后，第 9 个仍被拒。
+	for i, code := range []string{"B001", "B002", "B003", "B004", "B005", "B006", "B007"} {
+		time.Sleep(550 * time.Millisecond)
+		if got := sub(code); got["type"] != "PRESENCE_SNAPSHOT" {
+			t.Fatalf("fill %d (%s): %v", i, code, got)
+		}
+	}
+	got := sub("B008")
+	if got["type"] != "ERROR" {
+		t.Fatalf("9th distinct code should be rejected, got %v", got)
+	}
+	p := got["payload"].(map[string]any)
+	if p["code"] != "RATE_LIMITED" || p["fatal"] != false {
+		t.Fatalf("want RATE_LIMITED non-fatal, got %v", p)
+	}
+}
