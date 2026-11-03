@@ -1,0 +1,76 @@
+# 雁书 · 前置反向代理示例（外层 nginx）
+#
+# 用途：放在 compose 栈前面，负责 TLS 终止与统一入口，向内转发到本机 18080
+#       （compose 里 web 容器映射的端口，默认 127.0.0.1 绑定更安全）。
+#
+# 放置：/etc/nginx/conf.d/yanshu.conf（或 sites-available + 软链）
+# 证书：把下面 ssl_certificate / ssl_certificate_key 换成你的真实路径后再启用 HTTPS server。
+#
+# 关键点：
+#   1) 直接覆盖 X-Forwarded-For（不追加），并同时给 X-Real-IP —— 服务端只取 XFF 第一跳，
+#      覆盖可顺手清掉客户端伪造的头；
+#   2) 客户端上传体积、缓冲与超时都要放大，否则分块上传会 413 / 卡死；
+#   3) 透传 Range 与 WebSocket 升级头。
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# HTTP：仅用于 ACME 挑战与跳转 HTTPS（不需要 80 时整段删掉）
+server {
+    listen 80;
+    server_name _;                      # 换成你的域名
+
+    # Let's Encrypt webroot（如用 certbot --webroot）
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name _;                      # 换成你的域名
+
+    # ssl_certificate     /etc/letsencrypt/live/example.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1h;
+
+    # 上传体积：内层已放到 32m，外层不能小于它（默认 1m 会让分块上传 413）
+    client_max_body_size 32m;
+    client_body_timeout  300s;
+
+    location / {
+        proxy_pass http://127.0.0.1:18080;
+        proxy_http_version 1.1;
+
+        # 真实客户端 IP：直接赋值（覆盖客户端自带的值），避免伪造
+        proxy_set_header X-Real-IP        $remote_addr;
+        proxy_set_header X-Forwarded-For  $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host             $host;
+
+        # WebSocket（/v1/ws 预留）：保留 Upgrade/Connection
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        # 大文件上传/下载：关闭请求与响应缓冲，放宽超时
+        proxy_request_buffering off;
+        proxy_buffering         off;
+        proxy_connect_timeout   10s;
+        proxy_send_timeout      300s;
+        proxy_read_timeout      300s;
+
+        # Range 透传（分段下载）：默认已透传，显式关闭缓存改写
+        proxy_set_header Range      $http_range;
+        proxy_set_header If-Range   $http_if_range;
+        proxy_force_ranges on;
+    }
+}

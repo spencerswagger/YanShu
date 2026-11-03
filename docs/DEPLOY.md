@@ -98,3 +98,39 @@ curl -sf http://127.0.0.1:18080/healthz
 docker compose logs --tail=20 yanshu-server | grep "sm2 verifier loaded"   # 期望含 version=0x00010000
 curl -s http://127.0.0.1:18080/v1/config | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["token_epoch"], d["verifier"], d["kernel_sha256"][:16])'
 ```
+
+## 7. 前置反向代理（外层 nginx）
+
+服务前面再挂一层 nginx（TLS 终止 + 统一入口）时的要点。示例配置见
+`deploy/nginx-front.conf.example`（不含真实域名/证书路径）。
+
+① **端口只绑本机**：`YANSHU_PORT=127.0.0.1:18080 docker compose up -d`，不要公网直接暴露 18080。
+   开启 `YANSHU_TRUST_PROXY=true` 后服务端会采信 `X-Forwarded-For`，直接暴露等于把限速/配额交给客户端伪造。
+
+② **`client_max_body_size`**：内层已是 32m，**外层不能小于它**（nginx 默认 1m，会让分块上传直接 413）。
+
+③ **缓冲与超时**：外层需 `proxy_request_buffering off; proxy_buffering off;`，
+   并把 `proxy_send_timeout` / `proxy_read_timeout` 放大到 300s（大文件上传/下载）。
+
+④ **Range 透传**：分段下载依赖 `Range` / `If-Range`，不要在外层做响应缓存或改写这两个头。
+
+⑤ **WebSocket**：`/v1/ws` 目前返回 503 桩，但外层仍应透传 `Upgrade` / `Connection`（预留）。
+
+⑥ **TLS 只在外层终止**：内层 compose 的 web 容器只监听 HTTP 80（映射到本机 18080），不需要证书。
+
+⑦ **CSP**：内层下发 `connect-src 'self'` 与 `frame-ancestors 'none'` —— 前端若从**其他域名/端口**
+   访问，或因需要被 iframe 嵌入，都会被浏览器拦；这类场景要改 `web/nginx.conf` 的 CSP，而不是只改外层。
+
+### 7.1 X-Forwarded-For 取值链（决定真实 IP 是否正确）
+
+服务端 `clientIP()`（`server/internal/httpapi/api.go:86`）在 `YANSHU_TRUST_PROXY=true` 时取
+**第一跳（最左）**，遇到第一个 `,` 即截断。
+
+因此链路必须是：**外层覆盖写 → 内层原样透传**：
+
+- 外层：`proxy_set_header X-Forwarded-For $remote_addr;`（直接赋值，同时清掉客户端伪造的头）
+- 内层（`web/nginx.conf`）：上游给了 XFF 就原样传（`$http_x_forwarded_for`），无上游时用 `$remote_addr`
+  —— 不再用 `$proxy_add_x_forwarded_for` 追加，否则真实 IP 会被挤到后面，服务端取到的是内层看到的地址。
+
+校验：`go test ./internal/httpapi -run TestClientIPUsesFirstHop`。
+
