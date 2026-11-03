@@ -48,6 +48,7 @@ services:
       YANSHU_STORAGE_QUOTA_BYTES: ${YANSHU_STORAGE_QUOTA_BYTES:-8589934592}
     ports:
       - "${YANSHU_PORT:-18080}:8080"
+    # 命名卷首次创建属主是 root:root；镜像入口会 chown 到 10001 后再降权运行。
     volumes:
       - blobdata:/app/data/blobs
       - logdata:/app/data/logs
