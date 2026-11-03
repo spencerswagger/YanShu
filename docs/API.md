@@ -50,6 +50,18 @@
 - `message`：给开发者看的英文短句，**不含**任何用户数据、文件名、密钥、IP。
 - `scope` / `retry_after`：仅限速类错误出现（见第 12 章）。
 - `request_id`：服务端生成，便于对日志；不含用户信息。
+- `details`：**可选**对象，只承载结构化、非用户内容的信息。v1 **只允许一个键** `missing`（缺块区间数组，见 §6.6）；新增键必须走 ADR。服务端 MUST NOT 在 `details` 里回显请求体、文件名、明文或任何码以外的用户输入。
+
+```json
+{
+  "error": {
+    "code": "CHUNKS_MISSING",
+    "message": "chunks missing",
+    "details": { "missing": [ { "start": 2, "count": 1 } ] },
+    "request_id": "req_7f3a1c9e"
+  }
+}
+```
 
 ### 0.3 已锁死的边界（不重开论证）
 
@@ -67,14 +79,14 @@
 
 | 项 | 规格 |
 |---|---|
-| `code` | 4 字符，Crockford Base32 字母表 `0123456789ABCDEFGHJKMNPQRSTVWXYZ`；由 `SM3(公钥)` 前 20 bit 派生（见 `CRYPTO-PACK.md` §3.4） |
+| `code` | **固定 4 字符**，Crockford Base32 字母表 `0123456789ABCDEFGHJKMNPQRSTVWXYZ`；由 `SM3(公钥)` 前 20 bit 派生（见 `CRYPTO-PACK.md` §3.4）。**码本身不含校验字符**：传输、入库、比对一律只有这 4 位（校验字符 v1 不启用，见 §15）。服务端的归一化规则见 §1.6 |
 | `public_key` | SM2 未压缩点，65 字节，base64url 无填充（编码后 87 字符） |
 | `nickname` | UTF-8 NFC，1..32 字节，不允许控制字符与 `<>`，可含中英文；服务端只做长度与字符集校验，不做内容过滤以外的推断 |
 
 ### 1.2 签名挑战（所有写操作的门）
 
 1. 客户端 `POST /v1/challenges` 拿一个一次性挑战。
-2. 客户端按 §1.3 的公式拼 `SIG_INPUT`，用自己私钥 SM2 签名（SM3 + 默认 ZA，DER 编码）。
+2. 客户端按 §1.3 的公式拼 `SIG_INPUT`，用自己私钥做 SM2 签名（DER 编码）：`e = SM3(ZA ‖ SIG_INPUT)`，`ZA` 用默认 userID `1234567812345678` + `ENTL=0x0080`，逐字节定义见 `CRYPTO-PACK.md` §10.2；**`ZA` 由算法内部参与，不要拼进 `SIG_INPUT`**。
 3. 客户端把签名放进请求头，与业务请求一起提交。
 4. 服务端：验签 + 校验挑战未过期/未使用/用途一致 + 校验 `X-YS-Code` 与 `SIG_INPUT` 里被签名的 `CODE(4)` 逐字节相同（不符 → `AUTH_CODE_MISMATCH`）；成功后**立即作废**该挑战。
 
@@ -100,15 +112,61 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 
 字段串里的整数一律 `u16be/u32be/u64be`，字符串一律 UTF-8 原始字节 + 显式长度前缀（若有变长字段）。
 
-| PURPOSE | 名称 | 字段串（按序拼接） |
-|---:|---|---|
-| `0x01` | `REGISTER` | `CODE(4 ASCII) ‖ PUBKEY(65)` |
-| `0x02` | `NICKNAME_UPDATE` | `CODE(4 ASCII) ‖ u16be(NICK_LEN) ‖ NICKNAME(UTF-8)` |
-| `0x03` | `TRANSFER_CREATE` | `SENDER_CODE(4) ‖ RECIPIENT_CODE(4) ‖ u64be(PLAINTEXT_SIZE) ‖ u32be(CHUNK_SIZE) ‖ u32be(CHUNK_COUNT) ‖ u32be(PRELUDE_LEN) ‖ PRELUDE_SM3(32)` |
-| `0x04` | `TRANSFER_REVOKE` | `SENDER_CODE(4) ‖ TRANSFER_ID(32 ASCII 小写 hex)` |
-| `0x05` | `INBOX_LIST` | `CODE(4 ASCII)` |
-| `0x06` | `WS_HELLO` | `CODE(4 ASCII)` |
-| `0x07` | `TRANSFER_ACK` | `RECEIVER_CODE(4) ‖ TRANSFER_ID(32 ASCII)` |
+> **`ZA` / userID 口径（与包签名完全相同，别抄两套）**：`ID = "1234567812345678"`（16 字节 ASCII）、`ENTL = 0x0080`，`ZA` 按 `CRYPTO-PACK.md` §10.2 构造；`SIG_INPUT` 是 `ZA` 之后的**消息 M**，两者不互相包含。挑战域前缀 `YSAUTH1` 与包签名域前缀 `YSSIG1` 是两套拼接，**M 不同但 SM2 与 ZA 完全一致**。
+
+**`SIG_INPUT` 长度上限（由字段上限推导，不是拍脑袋）**
+
+```
+SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段串)
+```
+
+| PURPOSE | 字段串构成 | 字段串上限 |
+|---|---|---:|
+| `0x01 REGISTER` | `CODE(4) ‖ PUBKEY(65)` | **69** |
+| `0x02 NICKNAME_UPDATE` | `CODE(4) ‖ u16be(2) ‖ NICKNAME(≤32)` | 38 |
+| `0x03 TRANSFER_CREATE` | `4+4+8+4+4+4+32` | 60 |
+| `0x04 TRANSFER_REVOKE` | `CODE(4) ‖ TRANSFER_ID(32)` | 36 |
+| `0x05 INBOX_LIST` | `CODE(4)` | 4 |
+| `0x06 WS_HELLO` | `CODE(4)` | 4 |
+| `0x07 TRANSFER_ACK` | `CODE(4) ‖ TRANSFER_ID(32)` | 36 |
+| `0x08 UPLOAD_TOKEN_ISSUE` | `CODE(4) ‖ TRANSFER_ID(32)` | 36 |
+
+**结论（写死）**：
+
+- **`SIG_INPUT_MAX = 40 + 69 = 109 字节`**（`REGISTER` 最长）。`nickname ≤ 32 字节`（§1.1）、`transfer_id` 固定 32 字符、`CODE` 固定 4 字符——因此**任何合法请求拼接后的长度必然 ≤ 109**，不存在"字段各自合法、拼起来超限"的组合。
+- 服务端 MUST 对 `SIG_INPUT` **按 PURPOSE 解析并逐字段校验**（字段越界报各自错误名，如 `NICKNAME_INVALID` / `CODE_FORMAT_INVALID`）；**MUST NOT** 用一个笼统的字节上限代替字段校验。
+- **防御性硬上限 `SIG_INPUT_HARD_LIMIT = 512` 字节**（实现侧常量）：超长输入 MUST 在解析前被拒，防 DoS；触发时返回 §10.1 表中那条专属 400 码（当前仅库层可触发）。**该门在实际请求路径上不可达**——昵称先被字段级校验拒（`≤32` 字节，返回 `400 NICKNAME_INVALID`）、其余字段定长，所以任何请求都到不了 513 字节。
+- **两层限额分工（写死）**：**109 是合法性边界**（越界走字段级错误，如 `NICKNAME_INVALID` / `CODE_FORMAT_INVALID`）；**512 是防御性 DoS 门**（对应 §10.1 那条 400 码，当前 HTTP 不可达、仅库层可触发）。服务端 MUST NOT 用字节上限代替字段校验；客户端 MUST 按字段上限本地校验、**不应依赖**该码。
+- **客户端义务**：发请求前 MUST 在本地按字段上限校验（昵称 ≤32 字节、码 4 位、`transfer_id` 32 字符），**不要依赖服务端兜底**；否则用户会看到"签名无效"这类误导性错误。
+- 未来若新增 PURPOSE 或放宽某字段上限而使 `SIG_INPUT_MAX` 超过 109，必须同步更新本表与常数（走 ADR），并保证 `SIG_INPUT_HARD_LIMIT ≥ SIG_INPUT_MAX`。
+
+| PURPOSE | 名称 | 字段串（按序拼接） | 字段串上限 | `SIG_INPUT` 总长（实测） |
+|---:|---|---|---:|---:|
+| `0x01` | `REGISTER` | `CODE(4 ASCII) ‖ PUBKEY(65)` | 69 | **109** |
+| `0x02` | `NICKNAME_UPDATE` | `CODE(4 ASCII) ‖ u16be(NICK_LEN) ‖ NICKNAME(UTF-8)` | 38 | **78** |
+| `0x03` | `TRANSFER_CREATE` | `SENDER_CODE(4) ‖ RECIPIENT_CODE(4) ‖ u64be(PLAINTEXT_SIZE) ‖ u32be(CHUNK_SIZE) ‖ u32be(CHUNK_COUNT) ‖ u32be(PRELUDE_LEN) ‖ PRELUDE_SM3(32)` | 60 | **100** |
+| `0x04` | `TRANSFER_REVOKE` | `SENDER_CODE(4) ‖ TRANSFER_ID(32 ASCII 小写 hex)` | 36 | **76** |
+| `0x05` | `INBOX_LIST` | `CODE(4 ASCII)` | 4 | **44** |
+| `0x06` | `WS_HELLO` | `CODE(4 ASCII)` | 4 | **44** |
+| `0x07` | `TRANSFER_ACK` | `RECEIVER_CODE(4) ‖ TRANSFER_ID(32)` | 36 | **76** |
+| `0x08` | `UPLOAD_TOKEN_ISSUE` | `SENDER_CODE(4) ‖ TRANSFER_ID(32)` | 36 | **76** |
+
+共 **8 个** `PURPOSE`（`0x01`–`0x08`）；上表总长 = `7 + 1 + 32 + 字段串` = 40 + 字段串，与实测一致，最长仍是 `REGISTER` 的 **109**。
+
+**`0x08 UPLOAD_TOKEN_ISSUE` 的逐字节定义**（重签发端点 §1.7.5 用）：
+
+```
+SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
+          ‖ 0x08                (1 字节 PURPOSE)
+          ‖ NONCE               (32 字节，挑战下发)
+          ‖ SENDER_CODE         (4 字节 ASCII，归一化后的发送方码)
+          ‖ TRANSFER_ID         (32 字节 ASCII，小写 hex)
+                                 共 76 字节
+```
+
+- 两个字段都是**定长**，因此**不加长度前缀**（与 `0x02 NICKNAME_UPDATE` 变长字段的处理不同）。
+- **`KID` 不参与 `SIG_INPUT`**：`KID` 是服务端状态，客户端在签名时无法可靠得知；它只在服务端派生与校验凭据时使用（§1.7.2）。把 `KID` 拼进签名输入会让"轮换版本后旧签名无法复现"，且不增加任何安全性。
+- `SENDER_CODE` 必须与请求头 `X-YS-Code` 逐字节相同（归一化后，§1.6）。
 
 **每个 PURPOSE 的字段串第一位都是 `CODE(4)`**（`REGISTER` 用待注册的码，`TRANSFER_ACK` 用接收方码），且它必须与请求头 `X-YS-Code` 逐字节相同。所以"你持有这个码对应的私钥"由**签名覆盖 code** 证明，不依赖挑战绑码。
 
@@ -140,9 +198,182 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 | 凭证 | 语义 | 有效期 |
 |---|---|---|
 | `transfer_id` | 128 bit 不可猜的**能力凭证**：持有它即可读取该传输的密文。它只会经由已鉴权通道（WS `TRANSFER_NOTICE` / `GET /v1/inbox`）送到接收方 | 传输生命周期内 |
-| `upload_token` | 发送方上传侧凭证（`POST /transfers` 下发），可读写自己这条传输的上传状态 | 传输生命周期内 |
+| `upload_token` | 发送方上传侧凭证（`POST /transfers` 下发），可读写自己这条传输的上传状态 | **= 传输 `expires_at`**（TTL ≤ 24 h，部署可配更短）；随传输终结失效，可重签发（§1.7.5） |
+| `download_id` | 接收方下载租约凭证（`GET /prelude` 下发），只用于取块与 `ack` | **30 分钟**（§7.3） |
+
+用户码**不是**凭证、不授予任何操作权限。三者的完整生命周期、失效语义与应急吊销见 §1.7。
+
+**`upload_token` 的构造（写死）**：`upload_token = base64url( HMAC-SHA256(TOKEN_SECRET, "yanshu/upload-token/v1" ‖ TRANSFER_ID_ASCII ‖ u32be(KID)) )`，32 字节、无填充。
+
+- 库内只存 `SM3(upload_token)`，无明文 token 可被拖库窃取；`Idempotency-Key` 重放时用同一 `transfer_id` 与同一密钥重算即可返回**逐字节相同**的 token。
+- 校验时**不重算**：只比库内 `SM3(token)` 与记录里的 `KID`（§1.7.2）；`TOKEN_SECRET` 只在**签发**时参与派生。
+- `TOKEN_SECRET` 只来自部署密钥，不入库、不写日志。
+- **`KID` 进派生输入**：递增 `KID` 后重签发的凭据与旧凭据逐字节不同，旧凭据不会因重签发而复活（§1.7.3）。`KID` 只作派生输入与记录元数据，**不出现在任何请求/响应字段里**，wire 格式不变。
+- **吊销只由 `KID` 承担**：递增 `KID` → 旧凭据 `AUTH_TOKEN_STALE`；只换 `TOKEN_SECRET`（`KID` 不变）**不吊销**任何既有凭据，只影响此后新签发凭据的派生值（§1.7.3）。
 
 服务端只存 `SM3(upload_token)`，不存明文 token。`transfer_id` 泄漏的后果：他人可消耗你的下载次数并拿到密文（拿不到明文，因为 DK 被 `SM2` 封给接收方）——这是被显式接受的风险，写入威胁模型。
+
+### 1.6 码的归一化与规范形式
+
+码只有一种规范形态：**4 个 Crockford 符号**。归一化是"映射到规范形态"的幂等函数，规则与端侧完全一致（`CRYPTO-PACK.md` §3.4）：
+
+1. 去 `-` 与空白 → 转大写 → `O→0`、`I→1`、`L→1`；
+2. 结果必须**正好 4 个符号**，且每个都在字母表内（`U` 一律拒绝）；
+3. 只允许上述映射：**禁止**任何猜测性纠错（不做编辑距离、不做邻近键替换、**不把 5 位截成 4 位**）。
+
+服务端 MAY 执行这套归一化，但下列约束是硬的：
+
+| 约束 | 说明 |
+|---|---|
+| 幂等 | `normalize(normalize(x)) == normalize(x)`，实现必须可重复 |
+| 唯一落点 | 归一化 MUST 在**任何**判定之前完成：撞码判定、限速计数、失败锁定、`SIG_INPUT` 里的 `CODE(4)` 比对、审计记录，全部只用归一化结果 |
+| 4 位硬门 | 归一化后不是正好 4 位 → `400 CODE_FORMAT_INVALID`。v1 **不接受** 5 位 `CODE-CHECK` 形式：校验字符 v1 不启用（§15），服务端无法区分"校验符"与"用户多打一位" |
+| 不改变码空间 | 归一化只归并**同一个码的不同写法**（大小写、易混字符、分组符），不会把两个不同的规范码映射到一起；码空间仍是 2^20 个规范值 |
+
+**安全结论（写死）**：容错归一化**不扩大撞码面**，但会归并同一码的多种书写——因此限速与失败锁定必须按**归一化后的码**计数，否则可用大小写变体绕过锁定。防"手滑打到另一个合法码"的责任在发送端：发送前 MUST 展示对方昵称供确认（`check_symbol()` 只是本地提示，见 `CRYPTO-PACK.md` §3.4）。
+
+### 1.7 能力凭证的生命周期与版本吊销（KID）
+
+#### 1.7.1 三种凭证
+
+| 凭证 | 授予什么 | 绑定 | 寿命 | 谁持有 |
+|---|---|---|---|---|
+| `transfer_id` | 读该传输的元数据与密文（**能力凭证**，持有即可读） | 单一传输 | 传输生命周期 | 接收方（经已鉴权通道获得） |
+| `upload_token` | 写操作：`PUT prelude`、`PUT chunks/{i}`、`GET status`、`POST complete` | 单一传输 + 签发时的 KID | **6 小时**（且 ≤ 传输 `expires_at`） | 发送方 |
+| `download_id` | 下载租约：`GET chunks/{i}`、`POST ack` | 单一传输的**一次**租约 + 签发时的 KID | 30 分钟 | 接收方 |
+
+`transfer_id` 与 token **互不替代**：前者能读密文，后者能写。用户码不是凭证（§1.1）。
+
+#### 1.7.2 存储与校验口径
+
+- 服务端**只存凭据的哈希**（`upload_token` 存 `SM3`），不存明文。
+- `upload_token` 由令牌派生密钥 `TOKEN_SECRET` 与**凭据版本 `KID`** 确定性派生（§1.5）；`KID` 是**服务端元数据**：不出现在任何请求/响应字段、不改变 wire 格式（仍是 32 字节 base64url）。
+- **校验顺序写死（四类）**：① 比 `KID`（记录里的签发 `KID` vs 当前 `KID`）——不等即 `AUTH_TOKEN_STALE`；② 比 `SM3(token)` 与库内记录——不等即 `AUTH_TOKEN_INVALID`；③ 比凭据自身有效期（上传 **6 小时** / 租约 **30 分钟**）——超期即 `AUTH_TOKEN_EXPIRED`；④ 最后才看传输状态（`409`/`410`）。
+- **不重算**：校验不比 `TOKEN_SECRET`（它只是派生盐），因此**轮换 secret 不影响既有凭据**；吊销只由 `KID` 承担。
+
+#### 1.7.3 版本吊销（`KID`，版本只能前进）
+
+**`KID` 的取值规则（写死）**
+
+- 凭据版本号 `KID`：**正整数**（十进制）。部署配置项为 `YANSHU_TOKEN_EPOCH`；**`YANSHU_TOKEN_KID` 是它的旧别名，两者等价**（设其一即可，同时设置时以 `YANSHU_TOKEN_EPOCH` 为准）。
+- **未配置时使用默认 `KID = 1`**（仅对**全新库**成立；库里已有记录时以记录值为准，见下）。首次部署给默认值不构成风险——唯一危险的是"调回旧值让旧凭据复活"。
+- **版本只能前进**：轮换时新值 MUST **严格大于**当前值；**同一版本重启允许相等**（否则每次重启都会被自己挡住）。
+- 服务端 MUST 持久化"已生效的最大 `KID`"（记为 `current`），启动时按下表校验：
+
+| 配置值 `provided` | 启动行为 |
+|---|---|
+| 未配置且库内无记录（全新库） | 正常启动，`KID` 取默认 `1` |
+| 未配置且库内已有记录 | 正常启动，以**记录值**为准（不覆盖、不重置） |
+| `provided < current` | **拒绝启动**（`exit 1`），错误信息须同时打印两个值，例如 `YANSHU_TOKEN_EPOCH=1 is lower than the recorded epoch 3: epoch must strictly increase` |
+| `provided == current` | 正常启动（同一版本重启） |
+| `provided > current` | 正常启动，生效并把 `current` 更新为新值（新签发的凭据用新 `KID`） |
+
+  理由：把 `KID` 调回旧值会让**已被吊销的旧凭据瞬间复活**——这是本机制最危险的误操作，必须在启动时挡住，不能靠人记得。
+- **唯一会拒绝启动的情形是"调小"**（`provided < current`）；未配置不构成拒绝理由（见上表前两行）。
+
+**吊销效果（`KID` 是唯一吊销开关）**
+
+- 签发凭据时把当时的 `KID` 写进记录；校验时**先比 `KID`**：记录 `KID` ≠ 当前 `KID` → 一律 `AUTH_TOKEN_STALE`（立即生效，不等过期）。
+- **递增 `KID` 即刻生效**：不需要重启进程、不需要删库——更新"当前 `KID`"后新请求立刻按新版本校验（重启或热载都可，但都不是必要条件）。
+- 新签发/重签发的凭据用当前 `KID` 派生，**与任何旧凭据逐字节不同**——旧凭据不会因为重签发而复活。
+- `/v1/config` 暴露只读 `token_epoch`（**对外字段名保留 `token_epoch`，语义等价本节 `KID`**），便于观测版本切换。
+- 这是**全局操作**：影响全站所有在传任务（发送中的上传会中断，需要重签发或重建传输），属**应急手段**，不作日常轮换。
+
+**运维「一次性吊销」标准步骤（可直接照抄）**
+
+1. 二选一把当前版本加一：① **直接推进库内版本状态**（等价 `UPDATE token_kid_state SET kid = kid + 1`）——**立即生效，不需要重启、不需要删库**；或 ② 把部署配置项 `YANSHU_TOKEN_EPOCH`（= 本节 `KID`）改成**比当前更大的整数**并重启。需要更强隔离时可**同时**更换 `TOKEN_SECRET`（可选，不影响吊销本身）。
+2. 生效后**所有既有凭据立即失效**：记录 `KID` ≠ 当前 `KID` → `401 AUTH_TOKEN_STALE`（若同时换了 secret，仍是版本失效码，因为先比 `KID`）。
+4. 客户端处置：**重新挑战 → 签名 → 取新凭据**（上传走 §1.7.5，下载重新 `GET /prelude`），**不要重算签名**；已传块不重传。
+5. 记一条运维日志：`KID` 旧值 → 新值、时间、原因（应急吊销）；**不要**把 `TOKEN_SECRET` 写进日志。
+
+**两种运维动作的语义必须分开写清**（不要混为一谈）：
+
+| 运维操作 | 旧凭据结果 | 语义 |
+|---|---|---|
+| **只换 `TOKEN_SECRET`**（`KID` 不变） | **仍然有效**（`SM3(token)` 与记录一致、`KID` 一致） | `TOKEN_SECRET` 只是派生盐：轮换它**不吊销**任何凭据，只影响此后新签发凭据的派生值 |
+| **递增 `KID`**（`TOKEN_SECRET` 可不变） | `401 AUTH_TOKEN_STALE` | 版本已轮换——"我签发过，但版本作废了" |
+| 两者都做 | `401 AUTH_TOKEN_STALE` | 先比 `KID`，版本失效优先 |
+
+**吊销只认 `KID`**：希望"换 secret 即全站失效"的部署必须**同时递增 `KID`**；只换 secret 不构成吊销。
+
+#### 1.7.4 失效条件与错误名（凭据类与签名类严格分开）
+
+| 情形 | HTTP | `code` | 客户端处置 |
+|---|---:|---|---|
+| 缺凭证头 | 401 | `AUTH_MISSING` | 补头 |
+| 凭据不存在 / 格式错 / 与任何已签发凭据不匹配 | 401 | `AUTH_TOKEN_INVALID` | 重新申领（上传见 §1.7.5；下载重新 `GET /prelude`）；**不要**重试同一凭据 |
+| 凭据记录的 `KID` 落后于当前版本（版本已轮换） | 401 | `AUTH_TOKEN_STALE` | 重新挑战 → 签名 → 取新凭据（§1.7.5）；**不要重算签名**；文案"凭据已过期版本，请重新获取" |
+| 凭据超过自身有效期：**上传 6 小时** / **下载租约 30 分钟** | 401 | `AUTH_TOKEN_EXPIRED` | 上传走 §1.7.5 重签发（已传块不重传）；下载重新 `GET /prelude` 取新租约 |
+| 传输进入终态 | 410 | `TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` | 停止并清理本地 |
+
+**判定顺序写死（四类）**：`KID` 不符 → `AUTH_TOKEN_STALE`；值不对/不存在/格式错 → `AUTH_TOKEN_INVALID`；超期 → `AUTH_TOKEN_EXPIRED`；最后才是传输状态 `409`/`410`。即先凭据（401）、后状态（410）；凭据内部**先 `KID`、再值、再有效期**。
+
+**三码的触发位置（便于构造用例）**：`STALE` 在**第 ① 步**（比 `KID`）触发，需要一次版本轮换；`INVALID` 在**第 ② 步**（比 `SM3(token)`）触发，构造方式为错 token / 格式错 / 别的传输的 token；`EXPIRED` 在**第 ③ 步**（比有效期）触发，需把上传 6 h 或租约 30 min 调短、或构造过期记录。"在线路上正常流转的凭据**不会**触发 `INVALID`/`EXPIRED`，所以这两个码只能用针对性用例验证。
+
+**两类错误不得互相顶替**（写死）：
+
+- 凭据类**三个**：`AUTH_TOKEN_STALE`（`KID` 已轮换）、`AUTH_TOKEN_INVALID`（不存在 / 格式错 / 值不匹配）、`AUTH_TOKEN_EXPIRED`（超 6 h / 30 min 有效期）；
+- 签名类：`AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受：伪造 DER、消息被改、公钥不符）、`AUTH_CODE_MISMATCH`（码与签名不一致）。
+
+**终值（定稿）**：凭据类**三个** —— `AUTH_TOKEN_STALE`（`KID` 已轮换）、`AUTH_TOKEN_INVALID`（值不匹配·格式错·不存在）、`AUTH_TOKEN_EXPIRED`（超 6 h / 30 min）；签名类**一个** —— `AUTH_SIGNATURE_INVALID`（**仅**签名本身不被接受）。
+
+> 凭据类错误名**只有** `AUTH_TOKEN_STALE` / `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` 三个，签名类只有一个 `AUTH_SIGNATURE_INVALID`；不存在其它凭据错误名。
+
+**客户端处置按名字分叉**：前两个都走"重新挑战 → 签名 → 取新凭据"（**不要重算签名**，那是签名问题的解法）；只有拿到 `AUTH_SIGNATURE_INVALID` 才去查 `SIG_INPUT` 拼接、私钥与公钥是否配对。
+
+**`AUTH_TOKEN_EXPIRED`（401）与 `TRANSFER_EXPIRED`（410）的边界（写死）**：前者是**凭据自身**超期（上传 6 h / 租约 30 min），可重签发或重取租约恢复；后者是**传输**终结（TTL 到期），不可恢复。语义不同、状态码不同，**不得混用**。
+
+凭据失效 **MUST NOT** 返回签名类错误：否则客户端会被引去"重算签名 / 怀疑私钥"，而真正原因是"该换凭据了"。同理 `AUTH_TOKEN_STALE` 也 **MUST NOT** 被 `AUTH_TOKEN_INVALID` 顶替——两者客户端处置相同，但排查含义完全不同（一个是版本、一个是来源）。
+
+#### 1.7.5 重签发（可选端点）
+
+`POST /v1/transfers/{id}/token`，无请求体。**v1 定义并实现**（不是可选特性、不是未来版本），用于"吊销后不重传大文件"；部署方 MAY 通过配置关闭（关闭后返回 `501 FEATURE_DISABLED`，代价是吊销后只能重建传输并重传）。
+
+**① 鉴权：只认发送方签名**
+
+- 必须带 `X-YS-Code`（发送方）+ `X-YS-Challenge-Id` + `X-YS-Signature`，`PURPOSE = 0x08 UPLOAD_TOKEN_ISSUE`（§1.3），验签通过才签发。
+- **MUST NOT** 接受仅凭 `transfer_id`、旧 `upload_token`、用户码或 `Idempotency-Key` 换取——否则等同"凭据永不过期"。
+- 签名有效但不是该传输的发送方 → `403 NOT_TRANSFER_PARTY`。
+
+**② 幂等与限次**
+
+- **幂等键是 `(transfer_id, KID)`**：同一键下重复调用返回**逐字节相同**的凭据与相同 `expires_at`（`200`），不刷新、不累加。
+- 派生输入含 `KID` 与 `TOKEN_SECRET`：若期间只换过 `TOKEN_SECRET`（`KID` 未变），重签发会得到**新值**，旧值已 `AUTH_TOKEN_INVALID`——这是预期行为，不属于幂等破坏。
+- 限速：按传输 10 次/分钟、按码 30 次/分钟（§11.1），超限 `429`。
+
+**③ 失效联动：旧凭据不得复活**
+
+新凭据用当前 `KID` 派生，与旧凭据**逐字节不同**；旧凭据的记录 `KID` 永久落后 → 永久 `AUTH_TOKEN_STALE`。重签发不是"续期"，MUST NOT 让任何旧凭据重新可用。
+
+**④ 已传块不重传（该端点的核心价值）**
+
+拿到新凭据后，先 `GET /status` 取 `missing`，只补缺失块；已 `201/204` 的 `prelude` 与块**不重传**。重新上传已完成块属实现缺陷（浪费带宽，且可能触发 `409 CHUNK_CONFLICT`）。
+
+**⑤ 响应**
+
+| 响应 | 含义 |
+|---|---|
+| `200 { "upload_token": "...", "expires_at": "..." }` | 新凭据用当前 `(TOKEN_SECRET, KID)` 派生，有效期 = 传输 `expires_at` |
+| `403 NOT_TRANSFER_PARTY` | 签名有效但调用方不是发送方 |
+| `404 TRANSFER_NOT_FOUND` | 传输不存在 |
+| `410` + 对应终结码 | 传输已终态 |
+| `501 FEATURE_DISABLED` | 部署方关闭了该可选端点 |
+
+#### 1.7.6 可复跑用例（验收集固定剧本）
+
+1. 建传输记 `tokenA`，`PUT /prelude` → 期望 `201`；
+2. 递增 `KID`（可同时换 `TOKEN_SECRET`）并生效；
+3. 用 `tokenA` 再打 `PUT /prelude` → **期望 `401 AUTH_TOKEN_STALE`**；
+4. `POST /v1/transfers/{id}/token`（`PURPOSE 0x08`）换 `tokenB` → `200`，且 `tokenB ≠ tokenA`；
+5. 用 `tokenB` 打 `PUT /prelude` → 期望 `201`/`204`（**不得要求重传已完成块**）；
+6. 同一 `(TOKEN_SECRET, KID)` 下重复第 4 步 → `200` 且返回**与 `tokenB` 逐字节相同**（幂等）；
+7. 补一条**只换 `TOKEN_SECRET`、不动 `KID`** 的场景：旧凭据 → **期望仍然有效**（`200`/`201`/`204`，与第 3 步的版本失效形成对照）；再补一条**超期**场景：把上传凭据的签发时间推到 6 h 前（或把租约调短）→ 期望 `401 AUTH_TOKEN_EXPIRED`。
+
+只验证"重启后仍可用/不可用"不构成通过：必须验证"版本递增即全站失效 + 重签发恢复 + 幂等 + 两种吊销语义可分"。
+
+#### 1.7.7 本节不定义的东西
+
+表名/列名、`KID` 的存储方式、热载还是重启生效、是否保留上一代密钥——都属实现自由。契约只约束**行为**与**可观测结果**（错误名、HTTP 状态、可复跑用例）。
 
 ---
 
@@ -153,10 +384,16 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 | 域 | 字段 |
 |---|---|
 | 码 | `code`、`public_key`、`nickname`、`registered_at`、`updated_at` |
-| 传输 | `transfer_id`、`sender_code`、`recipient_code`、`plaintext_size`、`chunk_size`、`chunk_count`、`prelude_len`、`prelude_sm3`、`total_ciphertext_bytes`、`created_at`、`expires_at`、`state`、`terminal_reason`、`terminal_at`、`download_count`、`max_downloads` |
+| 传输 | `transfer_id`、`sender_code`、`recipient_code`、`plaintext_size`、`chunk_size`、`chunk_count`、`prelude_len`、`prelude_sm3`、`total_ciphertext_bytes`、`created_at`、`expires_at`、`state`、`terminal_reason`、`terminal_at`、`download_count`、`max_downloads`、`uploader_ip`（派生列，仅用于按 IP 配额与反滥用）、`updated_at` |
 | 块 | `transfer_id`、`index`、`length`、`ciphertext_sm3`（幂等比对用）、`stored_at` |
 | 挑战 | `challenge_id`、`purpose`、`nonce`（协议数据，过期即删）、`expires_at`、`used` |
-| 审计 | `ip`、`method`、`path`（**不含文件名**）、`status`、`bytes`、`ts`、`request_id` |
+| 派生状态（服务端内部，无业务内容） | `prelude_received`、`received_chunks`（位图或行集）、`upload_token_sm3`、`uploaded_bytes`、下载租约与取件记录（`download_id`、`lease_expires_at`、`acked_at`）、幂等键映射（`idempotency_key → transfer_id`，≤600 秒） |
+| 审计 | `ip`、`method`、`route_template`（**路由模板，如 `/v1/transfers/{id}/chunks/{index}`，不含实际路径参数**）、`status`、`bytes`、`ts`、`request_id` |
+
+白名单的两条硬规矩：
+
+1. **新增列/字段前必须先更新本节**；Gate 的列白名单断言以本节为唯一依据（多一列即失败）。
+2. 任何列 MUST NOT 含文件内容、文件名、MIME、明文、密钥、`DK`、清单明文；错误响应与日志同理。审计只记**路由模板**而非实际路径，是为了不让 `transfer_id`（能力凭证）落进日志；需要按单条传输追溯时用 `request_id` + 元数据表，不写路径参数。
 
 ### 2.2 服务端**永不**知道、永不落盘的字段
 
@@ -194,7 +431,8 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 | 15 | GET | `/v1/transfers/{id}/chunks/{index}` | `transfer_id` + `download_id` | 下载一个块切片 |
 | 16 | POST | `/v1/transfers/{id}/ack` | 签名 `TRANSFER_ACK` | 取件完成确认 → 删密文 |
 | 17 | POST | `/v1/transfers/{id}/revoke` | 签名 `TRANSFER_REVOKE` | 发送方主动撤回 |
-| 18 | WS | `/v1/ws` | 首帧签名 `WS_HELLO` | 在线状态、收件通知、直传信令 |
+| 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`。**v1 定义并实现**；部署方可配置关闭（关闭返回 `501 FEATURE_DISABLED`，代价是吊销后需重建传输并重传）。细则见 §1.7.5 |
+| 19 | WS | `/v1/ws` | 首帧签名 `WS_HELLO` | 在线状态、收件通知、直传信令。**v1 未实现**：返回 `503 SERVICE_UNAVAILABLE`，客户端按 §9.6 降级（排期见 §15） |
 
 ---
 
@@ -211,6 +449,7 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
   "chunk_size": 1048576,
   "max_plaintext_size": 4294967296,
   "max_ttl_seconds": 86400,
+  "token_epoch": 1,
   "stun_urls": ["stun:stun.yan-shu.example:3478"],
   "ws_url": "wss://yan-shu.example/v1/ws",
   "limits": {
@@ -223,6 +462,10 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 ```
 
 **不返回**任何密钥、任何内部地址、任何 turn 配置（本项目**没有** TURN，见 §9.5）。
+
+**`token_epoch`**：只读整数，与 §1.7 的凭据版本 `KID` **同义**（对外沿用 `token_epoch` 这个字段名）；递增即吊销全部既有凭据。只用于观测与排查，客户端 MUST NOT 依赖它做鉴权判断。
+
+**`stun_urls` / `ws_url` 的契约约束**：由部署注入，契约不给默认值。`stun_urls` MUST 至少 1 条且 MUST NOT 含 `turn:` / `turns:`；`ws_url` 允许为 `null`（表示该部署不提供信令），此时客户端 MUST 按 §9.6 降级；`config` 里 MUST NOT 出现密钥、TURN 凭据或内部地址。
 
 ### 4.2 `POST /v1/challenges`
 
@@ -280,6 +523,9 @@ SIG_INPUT   = SIGN_PREFIX ‖ PURPOSE(1 字节) ‖ NONCE(32 字节) ‖ <该用
 |---|---|---|
 | `409 CODE_TAKEN` | 该 4 位码已被别的公钥占用 | **丢弃当前密钥对**，重新生成 SM2 密钥对，重新派生码，重新走本接口；最多 8 次；8 次仍冲突则提示"稍后重试"并停止（**不得**自动加长码、**不得**换别人的码） |
 | `409 PUBKEY_TAKEN` | 同一公钥已注册在另一个码下（本地状态异常） | 清本地身份、重新生成密钥对并注册；或使用既有码（实现可提示"恢复既有身份"） |
+| `200`（重复注册） | 同码 + 同公钥（重装/换设备前的重复提交） | 幂等：返回与首次相同的 body（`registered_at` 不变），**不覆盖昵称**——改昵称只能走 §4.5 的签名挑战 |
+
+**码格式**：`code` 一律按 §1.6 归一化；归一化后不是正好 4 个合法符号 → `400 CODE_FORMAT_INVALID`；v1 **不接受** 5 位 `CODE-CHECK` 形式。
 
 服务端**不得**在 `409` 响应里返回占用者的昵称或任何信息（否则等于开了一个"码占用枚举"接口）。
 
@@ -482,7 +728,7 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
 | 响应 | 含义 |
 |---|---|
 | `200 { "state": "READY", "expires_at": "..." }` | prelude 与全部块齐备 → 通知接收方（WS `TRANSFER_NOTICE`） |
-| `409 CHUNKS_MISSING` + `{ "missing": [...] }` | 还有块没传 |
+| `409 CHUNKS_MISSING` + `error.details.missing`（槽位定义见 §0.2） | 还有块没传 |
 | `409 PRELUDE_MISSING` | prelude 没传 |
 | `409 TRANSFER_STATE_CONFLICT` | 已 `READY` 之后重复调用以外的非法转换 |
 
@@ -563,7 +809,7 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
 }
 ```
 
-终态时同一接口返回 200 + `state` / `terminal_reason` / `terminal_at`（tombstone），此时 `lease_expires_at`、`prelude_sm3` 不再返回（密文已删）。
+终态（tombstone）仍返回 `200`，字段集**固定**为：`transfer_id`、`sender_code`、`sender_nickname`、`recipient_code`、`plaintext_size`、`chunk_size`、`chunk_count`、`prelude_len`、`total_ciphertext_bytes`、`download_count`、`max_downloads`、`created_at`、`expires_at`、`state`、`terminal_reason`、`terminal_at`；**不再返回** `prelude_sm3` 与 `lease_expires_at`（密文已删、租约已终止）。
 
 ### 7.3 `GET /v1/transfers/{id}/prelude` —— 开启下载租约
 
@@ -578,10 +824,11 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
 
 | 项 | 值 |
 |---|---|
-| 头 | `X-YS-Download-Id: <先前拿到的>`；缺失/过期 → `409 DOWNLOAD_NOT_STARTED` |
+| 头 | `X-YS-Download-Id: <先前拿到的>`；缺失 → `409 DOWNLOAD_NOT_STARTED`；租约过期（30 min）→ `401 AUTH_TOKEN_EXPIRED`；`KID` 轮换后 → `401 AUTH_TOKEN_STALE`（§1.7.4，重新 `GET /prelude` 取新租约） |
 | 响应 200 | 块切片原始字节（`PT_LEN+16` 字节），`Accept-Ranges: bytes` |
 | Range | 支持单区间（§8） |
 | 乱序 | 任意顺序请求，服务端不做顺序约束（顺序由端侧 AAD 保证） |
+| 响应头（非契约扩展） | 实现可附加 `X-YS-Ciphertext-Sm3`（base64url，对 `CHUNK_CT ‖ TAG` 求 SM3）供调试；**客户端 MUST NOT 依赖**它做完整性判断（完整性由 AEAD tag + 清单摘要保证，见 `CRYPTO-PACK.md` §7.5） |
 
 ### 7.5 `POST /v1/transfers/{id}/ack` —— 取件完成
 
@@ -698,6 +945,20 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 - 打洞失败判定：ICE gathering 5 秒内没有 `srflx` 候选，或 `iceConnectionState` 进入 `failed` → 直接放弃直传，**不重试、不提示**。
 - 直传是**用户点一下才切换**（产品决策）；客户端与服务器都 **MUST NOT** 自动切到直传。
 
+### 9.6 WS 不可用时的降级（v1 必须支持）
+
+v1 的信令与在线表**未实现**（排期见 §15），所以"WS 不可用"是 v1 的正常路径，不是异常路径：
+
+| 情形 | 服务端 | 客户端 MUST |
+|---|---|---|
+| `GET /v1/ws` 不可用（503 / 连接被拒 / 握手非 `101`） | 返回 `503 SERVICE_UNAVAILABLE`（错误码同 §10.2） | 视为**直传能力不可用**：本次会话不再尝试 WS（退避重试至多 1 次）、全部走中转、**不向用户报错** |
+| `config.ws_url` 为 `null` | 同上 | 从一开始就不建连，直接走中转 |
+| 建连后 5 秒内未收到 `HELLO_OK` | — | 关闭连接，按第一条处理 |
+
+**收件通知的降级**：没有 WS 时，接收方靠轮询 `GET /v1/inbox`（`INBOX_LIST` 签名）得知新传输。轮询间隔 **MUST ≥ 30 秒**，并指数退避到 ≤ 5 分钟（避免触发 §11.1 的限速）；`next_cursor` 变化即视为有更新。
+
+**不变量**：WS 不可用时，上传、下载、续传、取件、撤回**全部功能不受影响**——直传只是加速路径（§9.5）。
+
 ---
 
 ## 10. 错误码表（唯一权威）
@@ -719,11 +980,16 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 | `PRELUDE_DIGEST_MISMATCH` | 400 | `SM3(body) != prelude_sm3` | 重算 prelude 并重建传输（prelude 已被签名绑定，不能改） |
 | `RANGE_UNSUPPORTED` | 400 | 多区间或非法 Range | 改成单区间或整块重传 |
 | `SIZE_LIMIT_EXCEEDED` | 400 | **声明值**超上限：`plaintext_size > 4 GiB`、`chunk_count > 1048576`、`prelude_len > 4 MiB` | 提示用户拆分文件 |
+| `SIG_INPUT_TOO_LONG` | 400 | **防御性上限（>512 字节）触发；当前 HTTP 路径不可达**（字段级校验先行：昵称 ≤32 等），**仅库层可触发** | 客户端按字段上限本地校验，不要依赖该码 |
 | `AUTH_MISSING` | 401 | 缺 `X-YS-*` 鉴权头 | 补签名后重试 |
-| `AUTH_SIGNATURE_INVALID` | 401 | 验签失败或签名与字段不匹配 | 用同一挑战重算签名；**不要**无限重试（挑战已作废，需重新申请） |
+| `AUTH_SIGNATURE_INVALID` | 401 | **仅**签名本身不被接受（伪造 DER、消息被改、公钥不符） | 检查 `SIG_INPUT` 拼接顺序与私钥/公钥配对，用同一挑战重算签名；**不要**无限重试（挑战已作废，需重新申请） |
 | `AUTH_CHALLENGE_INVALID` | 401 | 挑战过期/已用/用途不符 | 重新 `POST /challenges` 后重试一次 |
 | `AUTH_CODE_MISMATCH` | 401 | `X-YS-Code` 与 `SIG_INPUT` 里被签名的 `CODE(4)` 不一致 | 修 bug；用同一码重算签名 |
+| `AUTH_TOKEN_INVALID` | 401 | 凭据不存在 / 格式错 / 与任何已签发凭据不匹配（§1.7.4） | 重新申领（上传 §1.7.5、下载重取租约）；不要重试同一凭据 |
+| `AUTH_TOKEN_STALE` | 401 | 凭据记录的 `KID` 落后于当前版本（版本已轮换，§1.7.3） | 重新挑战 → 签名 → 取新凭据（上传 §1.7.5、下载重取租约）；**不要重算签名**；文案"凭据已过期版本，请重新获取" |
+| `AUTH_TOKEN_EXPIRED` | 401 | 凭据超过自身有效期：上传 **6 小时**、下载租约 **30 分钟**（§1.7.4）；与 `410 TRANSFER_EXPIRED`（传输终结）不同 | 上传重签发（已传块不重传）、下载重取租约 |
 | `SIGNAL_PEER_MISMATCH` | 403 | 信令双方与传输不匹配 | 停止该直传尝试，走中转 |
+| `NOT_TRANSFER_PARTY` | 403 | 已认证（签名有效）但**不是该传输的当事人**：非接收方调 `ack`、非发送方调 `revoke` | 停止操作、不要重试；提示"这不是你的传输" |
 | `CODE_NOT_FOUND` | 404 | 码未注册 | 提示"码不对或对方已换浏览器" |
 | `TRANSFER_NOT_FOUND` | 404 | 传输不存在/已物理删除 | 从本地列表移除 |
 | `CHUNK_NOT_FOUND` | 404 | 该块不存在 | 按 §7.6 重新探块；必要时让发送方重传该块 |
@@ -731,7 +997,7 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 | `PUBKEY_TAKEN` | 409 | 公钥已在别的码下注册 | 清本地身份重来，或复用既有码 |
 | `PRELUDE_CONFLICT` | 409 | 已存在不同的 prelude | 停止；不要覆盖（签名已绑定） |
 | `CHUNK_CONFLICT` | 409 | 同块序号已有不同内容 | 停止该块重传；核对是否两条传输混了 id |
-| `CHUNKS_MISSING` | 409 | `complete` 时仍有缺块 | 用返回的 `missing` 补传 |
+| `CHUNKS_MISSING` | 409 | `complete` 时仍有缺块 | 用 `error.details.missing`（§0.2）补传 |
 | `PRELUDE_MISSING` | 409 | `complete` 时没有 prelude | 先传 prelude |
 | `TRANSFER_NOT_READY` | 409 | 传输还没就绪 | 轮询/等 `TRANSFER_STATE` |
 | `DOWNLOAD_NOT_STARTED` | 409 | 缺有效 `download_id` | 先 `GET /prelude` 拿租约 |
@@ -750,6 +1016,7 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 | `code` | HTTP | 含义 | 客户端处置 |
 |---|---:|---|---|
 | `INTERNAL` | 500 | 服务端内部错误 | 5s→20s→60s 退避重试，最多 3 次 |
+| `FEATURE_DISABLED` | 501 | 该部署关闭了某个可选端点（当前仅 `POST /transfers/{id}/token`，§1.7.5⑤） | 不要重试；提示"该部署已关闭凭证重签发，请重新发送"，允许重建传输 |
 | `SERVICE_UNAVAILABLE` | 503 | 维护/过载 | 同上，指数退避 |
 | `INSUFFICIENT_STORAGE` | 507 | 配额类：服务端整体存储不足，或该 IP 未取走密文总量超配额（见 §11.4） | 提示"稍后重试"；**不是**速率错误，不要按 `Retry-After` 循环重试 |
 
@@ -784,6 +1051,7 @@ WS 层 `ERROR` 帧里的 `code` 复用 §10.1/§10.2 的同一套常量；WS 专
 | 按码 | `PATCH /codes/{code}` | 5 次/小时 | `429` |
 | 按传输 | `PUT /chunks/{i}` | 600 次/分钟 | `429`（`scope: "transfer"`） |
 | 按传输 | `GET /prelude` + `GET /chunks/{i}` | 600 次/分钟 | `429` |
+| 按传输 / 按码 | `POST /transfers/{id}/token` | 10 次/分钟 / 30 次/分钟 | `429`（`scope: "transfer"` / `"code"`，§1.7.5②） |
 | 按 IP | 新建 WS 连接 | 10 次/分钟 | 连接被拒（HTTP 429 或 close `4429`） |
 
 ### 11.2 `429` 响应语义
@@ -821,14 +1089,14 @@ Content-Type: application/json
 
 - 单码并发未终结传输上限 20；超出 → `429`（`scope: "code"`）。
 - 单 IP 未取走密文总量上限（默认 8 GiB）→ 统一 `507 INSUFFICIENT_STORAGE`（配额类，不是速率类；`429` 只用于 §11.1 的时间窗限速）。
-- 举报下架：**v1 不提供公开举报入口**，只保留内部 `REVOKED` 终结态（运营手动撤回），语义与用户撤回完全一致；公开举报入口排期 v2（职责见需求基线 §6）。
+- 举报下架：**v1 不提供公开举报入口**，只保留内部 `REVOKED` 终结态（运营手动撤回），语义与用户撤回完全一致。排期统一记在 §15，本节不重复列排期。
 
 ---
 
 ## 12. 安全与日志纪律（API 层可核查项）
 
 1. 服务端 **不落明文**：唯一二进制通道是 `prelude` 与块切片，服务端不解析、不记录内容片段。
-2. 日志字段白名单 = §2.1 的审计字段；`Query String` 只允许记录白名单参数名（`state/limit/cursor`），不记值之外的原文。
+2. 日志字段白名单 = §2.1 的审计字段（含 `route_template`：只记路由模板，不记实际路径参数，避免 `transfer_id` 这类能力凭证落进日志）；`Query String` 只允许记录白名单参数名（`state/limit/cursor`），不记值之外的原文。
 3. 错误响应 **不泄露**：不区分"码不存在"与"码已注销"；不返回占用者信息；不返回服务端路径/栈。
 4. 密文删除是**物理删除**：`ack`、`revoke`、TTL 三条路径都必须删 `prelude` 与所有块；tombstone 只留元数据（7 天）。
 5. 传输加密依赖外层 HTTPS（不做国密 TLS），应用层再叠 SM4 密文；两者互不替代。
@@ -865,4 +1133,21 @@ Content-Type: application/json
 9. 撞码只走"重新生成密钥对"这一条路，不自动加长码。
 10. 所有 `429` 都带 `Retry-After`，所有错误都带稳定 `code`；存储/配额类错误用 `507`，不用 `429`。
 11. 挑战只绑 `purpose`，不绑 code；码身份由 `SIG_INPUT` 里的 `CODE(4)` + 验签绑定（`REGISTER` 也走这条）。
-12. v1 无公开举报入口，只有内部 `REVOKED` 终结态。
+12. v1 无公开举报入口，只有内部 `REVOKED` 终结态（排期见 §15）。
+13. 码的归一化在任何判定之前完成，且限速/锁定按归一化后的码计数（§1.6）。
+14. WS 不可用是 v1 的正常路径：上传/下载/续传/取件/撤回功能不受影响，只静默降级（§9.6）。
+15. 审计只记路由模板，不记实际路径参数；`upload_token` 库内只存 `SM3`。
+16. 吊销只认 `KID`（严格单调递增；**只有调小会拒绝启动**，未配置取默认 `1`/沿用记录值）：递增即旧凭据 `401 AUTH_TOKEN_STALE` 且无需重启；只换 `TOKEN_SECRET` 不吊销；凭据类三码 `STALE`/`INVALID`/`EXPIRED`，传输级终结走 410（§1.7）。
+
+---
+
+## 15. 未实现 / 排期（v1 不做）
+
+本节是**唯一**的 v1 未实现清单：其它章节只写 v1 的实际行为，不再另列排期。本节列出的能力在 §3 的接口表里**没有任何端点**，也不预留路径。
+
+| 项 | v1 口径 | 排期 |
+|---|---|---|
+| **1GB 级流式分块 API** | v1 只有既有的分块上传/下载：`PUT /chunks/{index}`（§6.4）、`GET /chunks/{index}`（§7.4）、`prelude` 一次性进出（§6.3 / §7.3）。服务端按块存、按块发，端侧逐块解密落盘，但**接口层不做流式端点**。上限口径看两处：单包 = `plaintext_size ≤ 4 GiB`，单块 = `chunk_size ≤ 1 MiB`，块数 = `chunk_count ≤ 1048576`（字段约束见 §6.1，包级限值见 `CRYPTO-PACK.md` §14） | 下一轮：边传边解（请求/响应体流式，无整包落内存或落盘）。只加端点与传输方式，**不改块格式与 AAD** |
+| 公开举报入口 | 无公开入口；只保留内部 `REVOKED` 终结态（运营手动撤回），语义与用户撤回一致（§11.4） | v2（职责见需求基线 §6） |
+| 用户码校验字符 | 码固定 **4 位**，v1 不启用校验字符；实现可本地计算 `check_symbol()` 作输入框前置防误输提示，不上行、不改变码长度（`CRYPTO-PACK.md` §3.4） | 需要时升 5 位展示，属契约变更，需 ADR |
+| 直传信令与在线表（WebSocket，§9） | `GET /v1/ws` 返回 `503 SERVICE_UNAVAILABLE`；客户端按 §9.6 静默降级到中转，收件通知改为轮询 `inbox`（≥30 秒） | 下一轮实现；消息类型已在 §9 定死，实现时**不需要**再改契约 |

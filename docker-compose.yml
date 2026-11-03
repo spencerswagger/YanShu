@@ -1,0 +1,59 @@
+# 雁书服务端 + PostgreSQL（v1 单实例）
+#
+# 起：
+#   cp .env.example .env   # 若存在；否则手工准备 TOKEN_SECRET
+#   docker compose up -d
+#
+# 说明：
+#   - 容器内必须监听 0.0.0.0 才能映射端口；stub-allow 有 loopback 门禁，
+#     因此默认用 sm2（真验签），stub-allow 只在本地调 loopback 时使用。
+#   - 限速额度是进程内实现：v1 只支持单实例。
+
+services:
+  postgres:
+    # SWR 同步完成后可直接用这一行；拉不到时临时换成 postgres:16-alpine
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine
+    environment:
+      POSTGRES_USER: yanshu
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: yanshu
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yanshu -d yanshu"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  yanshu-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:${YANSHU_IMAGE_TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      YANSHU_DATABASE_URL: postgres://yanshu:${POSTGRES_PASSWORD:-change-me}@postgres:5432/yanshu?sslmode=disable
+      YANSHU_TOKEN_SECRET: ${YANSHU_TOKEN_SECRET:?set YANSHU_TOKEN_SECRET (>=16 bytes)}
+      YANSHU_TOKEN_EPOCH: ${YANSHU_TOKEN_EPOCH:-1}
+      YANSHU_VERIFIER: ${YANSHU_VERIFIER:-sm2}
+      YANSHU_KERNEL_WASM: /app/kernel/yanshu_sm.wasm
+      YANSHU_BLOB_DIR: /app/data/blobs
+      YANSHU_LOG_DIR: /app/data/logs
+      YANSHU_ADDR: 0.0.0.0:8080
+      YANSHU_ENV: ${YANSHU_ENV:-production}
+      YANSHU_STORAGE_QUOTA_BYTES: ${YANSHU_STORAGE_QUOTA_BYTES:-8589934592}
+    ports:
+      - "${YANSHU_PORT:-18080}:8080"
+    volumes:
+      - blobdata:/app/data/blobs
+      - logdata:/app/data/logs
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  blobdata:
+  logdata:
