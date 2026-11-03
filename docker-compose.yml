@@ -1,43 +1,54 @@
-# 雁书服务端 + PostgreSQL（v1 单实例）
+# 雁书服务端 + PostgreSQL（v1 单实例）—— 零配置部署
 #
-# 起（部署：不需要 build，镜像从 SWR 拉）：
-#   cp .env.example .env   # 至少设置 YANSHU_TOKEN_SECRET
+#   mkdir yanshu && cd yanshu
+#   curl -O https://raw.githubusercontent.com/spencerswagger/YanShu/main/docker-compose.yml
 #   docker compose up -d
 #
-# 本地改代码后再起（开发：带上 dev override，直接构建源码）：
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# 首次启动会在当前目录 ./secrets/ 下自动生成 token_secret 与 pg_password（0600），**别删**；
+# 重启用同一份密钥；想彻底重来用 `docker compose down -v` 再删 ./secrets。
+# 端口/镜像标签可选覆盖（不写也能跑）：YANSHU_PORT=8000 docker compose up -d
 #
-# 说明：
-#   - 容器内必须监听 0.0.0.0 才能映射端口；stub-allow 有 loopback 门禁，
-#     因此默认用 sm2（真验签），stub-allow 只在本地调 loopback 时使用。
-#   - 限速额度是进程内实现：v1 只支持单实例。
+# 开发（改代码后重新构建）：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 services:
-  # 一次性任务：把两个数据卷的属主改成容器运行用户（10001）。
-  # 不修这一步，服务写日志会被拒 → 崩溃循环（fatal: permission denied）。
+  # 一次性：生成密钥（不存在时）+ 修数据卷属主（业务进程以 10001 运行，写不了 root 卷）
   init:
     image: alpine:3.20
-    command: ["sh", "-c", "chown -R 10001:10001 /data/blobs /data/logs"]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mkdir -p /secrets
+        [ -s /secrets/token_secret ] || head -c 32 /dev/urandom | base64 > /secrets/token_secret
+        [ -s /secrets/pg_password ] || head -c 24 /dev/urandom | base64 > /secrets/pg_password
+        chmod 600 /secrets/token_secret /secrets/pg_password
+        chown -R 10001:10001 /data/blobs /data/logs
+        echo "[init] ./secrets 已就绪，数据卷属主已修正"
     volumes:
+      - ./secrets:/secrets
       - blobdata:/data/blobs
       - logdata:/data/logs
     restart: "no"
 
   postgres:
-    # SWR 同步完成后可直接用这一行；拉不到时临时换成 postgres:16-alpine
     image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine
     environment:
       POSTGRES_USER: yanshu
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (e.g. openssl rand -hex 12)}
       POSTGRES_DB: yanshu
+      POSTGRES_PASSWORD_FILE: /secrets/pg_password
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./secrets:/secrets:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U yanshu -d yanshu"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 20s
+    depends_on:
+      init:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   yanshu-server:
@@ -47,9 +58,17 @@ services:
         condition: service_healthy
       init:
         condition: service_completed_successfully
+    # 密钥从 ./secrets 读入环境变量后再启动（用户无需写任何 .env）
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        YANSHU_TOKEN_SECRET="$$(cat /secrets/token_secret)"; export YANSHU_TOKEN_SECRET
+        YANSHU_DATABASE_URL="postgres://yanshu:$$(cat /secrets/pg_password)@postgres:5432/yanshu?sslmode=disable"; export YANSHU_DATABASE_URL
+        /app/yanshu-server -migrate-only
+        exec /app/yanshu-server
     environment:
-      YANSHU_DATABASE_URL: postgres://yanshu:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/yanshu?sslmode=disable
-      YANSHU_TOKEN_SECRET: ${YANSHU_TOKEN_SECRET:?set YANSHU_TOKEN_SECRET (>=16 bytes)}
       YANSHU_TOKEN_EPOCH: ${YANSHU_TOKEN_EPOCH:-1}
       YANSHU_VERIFIER: ${YANSHU_VERIFIER:-sm2}
       YANSHU_KERNEL_WASM: /app/kernel/yanshu_sm.wasm
@@ -63,6 +82,7 @@ services:
     volumes:
       - blobdata:/app/data/blobs
       - logdata:/app/data/logs
+      - ./secrets:/secrets:ro
     restart: unless-stopped
 
 volumes:

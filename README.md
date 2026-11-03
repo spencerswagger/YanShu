@@ -13,28 +13,25 @@
 - 默认走服务端中转；浏览器之间尝试直连，通了会提示切换（无 TURN，只配 STUN）。
 - **边界**：不做账号体系、不做云盘、不做 TURN 中继、不做国密合规测评、v1 不支持多副本横向扩展。
 
-## 2. 快速开始（Docker，一条命令）
-
-SWR 上的镜像已公开，**部署端不需要构建**：
+## 2. 快速开始（零配置，三行）
 
 ```sh
-git clone --depth 1 https://github.com/spencerswagger/YanShu.git && cd YanShu
-cp .env.example .env
-sed -i "s|^YANSHU_TOKEN_SECRET=.*|YANSHU_TOKEN_SECRET=$(head -c 32 /dev/urandom | base64)|; s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 12)|" .env
+mkdir yanshu && cd yanshu
+curl -O https://raw.githubusercontent.com/spencerswagger/YanShu/main/docker-compose.yml
 docker compose up -d
-
-curl -s http://127.0.0.1:18080/healthz      # {"status":"ok","api_version":"v1","contract":"v1"}
-docker compose logs yanshu-server | grep -i "sm2 verifier loaded"   # version=0x00010000
 ```
 
-也可以只拷 `docker-compose.yml` 与 `.env.example` 两个文件，不必 clone 整个仓库。
-
-- 首次启动会先跑一个**一次性 `init` 容器**改数据卷属主（约 1 秒），属正常现象。
-- 服务启动时自动建表；数据卷 `pgdata` / `blobdata` / `logdata`，`docker compose down` 不删卷。
-- 对外端口默认 `18080`（改 `.env` 里的 `YANSHU_PORT`）；容器内监听 `0.0.0.0:8080`。
+- 首次启动自动生成密钥到当前目录 **`./secrets/`**（`token_secret` / `pg_password`，0600）——**别删**；
+  重启用同一份，`docker compose down -v` + 删 `./secrets` 才算彻底重来。
+- 起来后自检：
+  ```sh
+  curl -s http://127.0.0.1:18080/healthz      # {"status":"ok","api_version":"v1","contract":"v1"}
+  docker compose logs yanshu-server | grep -i "sm2 verifier loaded"   # version=0x00010000
+  ```
+- 端口/镜像标签可选覆盖（不写也能跑）：`YANSHU_PORT=8000 docker compose up -d`，或写一个 `.env`（见 `.env.example`）。
 - 要**改代码自己构建**才用 dev override：`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`。
 
-一条命令起不来时看 §7 排错。
+出问题看 §7 排错。
 
 ## 3. 环境要求
 
