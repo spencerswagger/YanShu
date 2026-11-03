@@ -72,7 +72,7 @@ services:
         YANSHU_TOKEN_SECRET="$$(cat /secrets/token_secret)"; export YANSHU_TOKEN_SECRET
         # 口令做 URL 编码再拼 DSN：老版本可能生成过含 '/' 或 '+' 的口令（base64），
         # 不编码会把 DSN 截断成 invalid port —— 编码后老部署无需删数据即可恢复。
-        PG_PW_ENC="$$(sed 's|/|%2F|g; s|@|%40|g; s|:|%3A|g; s|+|%2B|g' /secrets/pg_password)"
+        PG_PW_ENC="$$(sed 's|%|%25|g; s|/|%2F|g; s|@|%40|g; s|:|%3A|g; s|+|%2B|g' /secrets/pg_password)"
         YANSHU_DATABASE_URL="postgres://yanshu:$${PG_PW_ENC}@postgres:5432/yanshu?sslmode=disable"; export YANSHU_DATABASE_URL
         /app/yanshu-server -migrate-only
         exec /app/yanshu-server

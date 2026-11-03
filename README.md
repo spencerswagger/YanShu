@@ -17,7 +17,10 @@
 
 ```sh
 mkdir yanshu && cd yanshu
-curl -O https://raw.githubusercontent.com/spencerswagger/YanShu/main/docker-compose.yml
+# 带上时间戳/禁缓存，避免拿到 CDN 上的旧版本
+curl -fsSL -H 'Cache-Control: no-cache' -o docker-compose.yml \
+  "https://raw.githubusercontent.com/spencerswagger/YanShu/main/docker-compose.yml?cb=$(date +%s)"
+grep -q PG_PW_ENC docker-compose.yml || { echo "拿到的是旧版 compose，请重试"; exit 1; }
 docker compose up -d
 ```
 
