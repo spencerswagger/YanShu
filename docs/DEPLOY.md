@@ -79,6 +79,8 @@ docker compose exec postgres psql -U yanshu -d yanshu \
 
 ## 4.1 STUN 与网络
 
+- `YANSHU_WS_URL`：直传信令地址（`wss://<你的域名>/v1/ws`）。**不设则 `config.ws_url` 为 null**，
+  客户端按契约 §9.6 直接走中转（功能不受影响，只是没有直传与在线通知）。
 - 默认 STUN 是公共服务器，**部分地区不可用**。替换方式：设置 `YANSHU_STUN_URLS`（逗号分隔，
   只支持 STUN，本项目**没有 TURN**），例如 compose 里加 `YANSHU_STUN_URLS=stun:stun.example.net:3478`。
 - 该值只影响 `/v1/config` 下发给客户端的 ICE 配置，不影响服务端连通性。
