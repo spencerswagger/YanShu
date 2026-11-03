@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, clock, percent } from '../lib/format.js'
+import ReportSheet from './ReportSheet.vue'
 
 const props = defineProps({
   api: { type: Object, default: null },
@@ -85,7 +86,7 @@ refresh()
           {{ fmtBytes(item.plaintext_size) }} · {{ item.chunk_count }} 块 · 到期
           {{ clock(item.expires_at) }}
         </div>
-        <div class="row" style="margin-top: 8px">
+        <div class="row" style="margin-top: 8px; justify-content: space-between">
           <button
             type="button"
             class="primary"
@@ -94,6 +95,7 @@ refresh()
           >
             {{ activeId === item.transfer_id ? '取回中…' : '取回并解密' }}
           </button>
+          <ReportSheet :api="api" :transfer-id="item.transfer_id" />
         </div>
         <div v-if="activeId === item.transfer_id">
           <div class="progress">
