@@ -32,6 +32,10 @@ type Verifier interface {
 // FrozenKernelSHA256 是允许加载的内核白名单（冻结产物）。
 // 新增内核时必须显式登记，避免"同源不同字节"的产物被静默采用。
 var FrozenKernelSHA256 = map[string]bool{
+	// 流式内核（140,742 B，43+memory=44 导出）：新增常量内存打包/解包，字节兼容 YSPK/1.0。
+	"8766048ffdd16b9de8c4f3fea49590ec0802418dea9ad0fdca68f0e05bb625f8": true,
+	// 旧内核（127,313 B，34+memory=35 导出）：保留用于灰度期——已部署实例仍可启动；
+	// 待全部环境切换完成后由单独 PR 移除。
 	"c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f": true,
 }
 
