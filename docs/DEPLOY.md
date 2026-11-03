@@ -32,6 +32,12 @@ curl -s http://127.0.0.1:18080/v1/config | head  # 含 token_epoch / verifier / 
 | `YANSHU_ENV` | 否 | 空 | 部署环境标识；`stub-allow` 需 `local\|test` |
 | `YANSHU_STORAGE_QUOTA_BYTES` | 否 | `8589934592`（8 GiB） | 单 IP 未取走密文总量上限 |
 
+**容器权限模型**：镜像不再声明 `USER`，容器**以 root 进入入口脚本**，入口只做两件事——修正
+`/app/data/blobs`、`/app/data/logs` 的属主，然后用 `su-exec yanshu:yanshu` 把所有业务进程
+（含 `-migrate-only`）降权到 UID 10001 运行。若 `chown` 失败（只读挂载、SELinux 拒绝等），入口会打印
+`entrypoint: cannot fix ownership …` 并 **以 1 退出**（快速失败，避免 `permission denied` 崩溃循环）。
+不要据此认为整个容器都以非 root 运行。
+
 镜像内的内核 sha256 必须命中内建白名单（当前仅
 `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`），否则进程拒绝启动。
 自检命令（不需要数据库）：

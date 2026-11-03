@@ -10,8 +10,14 @@ blob="${YANSHU_BLOB_DIR:-/app/data/blobs}"
 logs="${YANSHU_LOG_DIR:-/app/data/logs}"
 
 mkdir -p "$blob" "$logs"
-# 幂等：属主已正确或卷只读时 chown 可能失败，不阻塞启动（真正写不进去会在业务层报错）
-chown -R 10001:10001 "$blob" "$logs" 2>/dev/null || true
+
+# 快速失败：chown 失败（只读挂载、SELinux 拒绝等）继续启动只会变成 permission denied 崩溃循环，
+# 且日志难定位；这里直接报明确错误并退出。
+if ! chown -R 10001:10001 "$blob" "$logs"; then
+    echo "entrypoint: cannot fix ownership of $blob / $logs" \
+         "(check volume mount and permissions; need writable dirs owned by 10001)" >&2
+    exit 1
+fi
 
 # 迁移也以非 root 身份执行
 su-exec yanshu:yanshu /app/yanshu-server -migrate-only
