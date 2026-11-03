@@ -942,7 +942,7 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 - 对端不在线 → `PEER_UNREACHABLE`，客户端 MUST **静默**继续走中转（不弹错误）。
 - 信令帧总大小上限 64 KiB，超出 → `ERROR{code:"SIGNAL_TOO_LARGE"}`。
 - 限速：每连接令牌桶 **40 帧/秒、突发 80**；超限 → `ERROR{code:"RATE_LIMITED", fatal:true}` 并关闭连接（客户端退避后重连，MUST NOT 原地重试）。
-- 帧的 `transfer_id` 必须先能取到才做当事人校验；取不到/格式非法 → `ERROR{code:"BAD_REQUEST"}`，不断连。
+- 帧的 `transfer_id` 缺失或非法 → `ERROR{code:"SIGNAL_PEER_MISMATCH", fatal:false}`，**保持连接**（继续读帧、不关闭、无关闭码）；`payload` 不是合法 JSON 时服务端直接忽略该帧，同样不断连。
 
 ### 9.5 不做 TURN：明确写死
 
@@ -959,9 +959,9 @@ v1 **已实现**信令与在线表（§9.1–§9.5）。但"WS 不可用"仍是*
 |---|---|---|
 | `config.ws_url` 为 `null`（该部署不提供信令） | 不下发 WS 地址 | 从一开始就不建连，直接走中转 |
 | 连接被拒 / 握手非 `101` / 升级被代理阻断 | — | 视为**直传能力不可用**：本次会话不再尝试 WS（退避重试至多 1 次）、全部走中转、**不向用户报错** |
-| 建连后 5 秒内未收到 `HELLO_OK`，或收到 `4408`/`4401` | 按 §9.1 关闭 | 关闭连接，按上一条处理；**不重试同一凭据**（挑战已作废，需重新取挑战再签） |
+| 建连后 **10 秒**内未收到 `HELLO_OK`（服务端 `4408`），或收到 `4401` | 首帧超时关 `4408`；验签失败关 `4401`（§9.1） | 关闭连接，按上一条处理；**不重试同一凭据**（挑战已作废，需重新取挑战再签） |
 
-**收件通知的降级**：没有 WS 时，接收方靠轮询 `GET /v1/inbox`（`INBOX_LIST` 签名）得知新传输。轮询间隔 **MUST ≥ 30 秒**，并指数退避到 ≤ 5 分钟（避免触发 §11.1 的限速）；`next_cursor` 变化即视为有更新。
+**收件通知的降级**：没有 WS 时，接收方靠轮询 `GET /v1/inbox`（`INBOX_LIST` 签名）得知新传输。**服务端不实现任何轮询节奏**（只提供 `GET /v1/inbox` 的 cursor/limit 分页）；节奏是**客户端 MUST**：间隔 ≥ 30 秒、指数退避至 ≤ 5 分钟（避免触发 §11.1 的限速），`next_cursor` 变化即视为有更新。
 
 **不变量**：WS 不可用时，上传、下载、续传、取件、撤回**全部功能不受影响**——直传只是加速路径（§9.5）。
 
@@ -1032,7 +1032,7 @@ v1 **已实现**信令与在线表（§9.1–§9.5）。但"WS 不可用"仍是*
 
 ### 10.4 WS 错误码与关闭码
 
-WS 层 `ERROR` 帧里的 `code` 复用 §10.1/§10.2 的同一套常量（如 `SIGNAL_PEER_MISMATCH`、`RATE_LIMITED`、`BAD_REQUEST`）；**仅 WS 出现**的只有两个：`SIGNAL_TOO_LARGE`（帧 > 64 KiB）与 `PEER_UNREACHABLE`（对端不在线）。
+WS 层 `ERROR` 帧里的 `code` 复用 §10.1/§10.2 的同一套常量（如 `SIGNAL_PEER_MISMATCH`、`RATE_LIMITED`）；**仅 WS 出现**的只有两个：`SIGNAL_TOO_LARGE`（帧 > 64 KiB）与 `PEER_UNREACHABLE`（对端不在线）。
 
 | close code | 含义 |
 |---:|---|
