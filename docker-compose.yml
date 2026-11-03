@@ -31,7 +31,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    image: yanshu-server:local
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:${YANSHU_IMAGE_TAG:-latest}
     depends_on:
       postgres:
         condition: service_healthy
