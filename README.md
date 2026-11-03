@@ -15,36 +15,18 @@
 
 ## 2. 快速开始（复制粘贴就能跑）
 
-前提：本机有 PostgreSQL 16 与 Go 1.27（见 §3）。
-
 ```sh
-# 1) 编译（在仓库根目录）
-cd server && go build -trimpath -buildvcs=false -ldflags "-s -w" -o yanshu-server ./cmd/yanshu-server
-
-# 2) 建库（示例用本机 postgres；换成你自己的 DSN）
-createdb yanshu
-
-# 3) 起服务（自检最小配置）
-export YANSHU_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu?sslmode=disable"
-export YANSHU_TOKEN_SECRET="$(head -c 32 /dev/urandom | base64)"   # ≥16 字节
-export YANSHU_VERIFIER=sm2
-export YANSHU_KERNEL_WASM=./kernel/yanshu_sm.wasm
-./yanshu-server -migrate-only        # 建表；成功输出 msg="migrations applied"
-./yanshu-server                      # 起服务，默认监听 :8080
-
-# 4) 验证成功（看到这个响应就算起来了）
-curl -s http://127.0.0.1:8080/healthz
-# {"status":"ok","api_version":"v1","contract":"v1"}
+mkdir yanshu && cd yanshu
+curl -O https://raw.githubusercontent.com/spencerswagger/YanShu/main/docker-compose.yml
+docker compose up -d
+curl -s localhost:18080/healthz      # {"status":"ok","api_version":"v1","contract":"v1"}
 ```
 
-启动日志里应同时出现这两行（内核版本与哈希校验）：
+**首次启动会在 `./secrets/` 生成密钥，别删**（`token_secret` 与 `pg_password`，目录 0700 / 文件 0600）；
+之后重启复用，`docker compose down -v` 才会重新生成。
+不需要写 `.env`、不需要手工填任何密钥。
 
-```
-msg="sm2 verifier loaded" kernel=./kernel/yanshu_sm.wasm version=0x00010000
-msg="kernel verified" sha256=c1b87d0a…7259f version=0x00010000 exports=35
-```
-
-需要你改的地方：`YANSHU_DATABASE_URL`（换成真实 DSN）、`YANSHU_TOKEN_SECRET`（换成固定随机值并存好）。
+需要改端口或镜像标签时再建一个可选的 `.env`（见 §5）。
 
 ## 3. 环境要求
 
@@ -99,6 +81,10 @@ TEST_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu_test?sslmode=disable" 
 | `YANSHU_SWEEP_INTERVAL` | 否 | `30s` | 过期清理扫描间隔 |
 
 敏感值只从环境变量或 0600 文件读取，仓库里没有任何真实凭据。
+
+**零配置默认值**：compose 部署时密钥由一次性 `init` 容器生成在 `./secrets/`（`token_secret`、
+`pg_password`），服务端入口脚本读取后自行拼 `YANSHU_DATABASE_URL` 并 export `YANSHU_TOKEN_SECRET`
+（显式环境变量优先）。`.env` 是**可选**的，只用于覆盖端口、镜像标签、配额等。
 
 ## 6. 部署
 
