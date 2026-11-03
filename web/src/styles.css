@@ -1,0 +1,267 @@
+/* 雁书前端样式：移动端优先、单列、正文 ≥16px（下限 14px）、可点区域 ≥44px。
+   不做主题美化、不做动画（REQUIREMENTS §9 与今晚任务书的"界面从简"）。 */
+
+:root {
+  --bg: #f6f7f8;
+  --card: #ffffff;
+  --ink: #16181b;
+  --muted: #5b6470;
+  --line: #d9dde3;
+  --accent: #14532d;
+  --accent-ink: #ffffff;
+  --warn-bg: #fdecec;
+  --warn-ink: #a4161a;
+  --info-bg: #eef4ff;
+  --info-ink: #1d3b7a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+}
+
+#app {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 12px 14px 40px;
+}
+
+h1 {
+  font-size: 1.35rem;
+  margin: 4px 0 2px;
+}
+
+h2 {
+  font-size: 1.05rem;
+  margin: 0 0 10px;
+}
+
+p {
+  margin: 6px 0;
+  font-size: 0.95rem;
+}
+
+small,
+.hint {
+  color: var(--muted);
+  font-size: 0.875rem; /* 14px，不能再小 */
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 12px 0;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.row > * {
+  min-width: 0;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+label {
+  display: block;
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+input[type='text'],
+input[type='file'] {
+  width: 100%;
+  font-size: 1rem;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+}
+
+input[type='file'] {
+  padding: 9px;
+}
+
+button {
+  font-size: 1rem;
+  min-height: 44px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.link {
+  border: none;
+  background: none;
+  color: var(--accent);
+  padding: 6px 2px;
+  min-height: 32px;
+  text-decoration: underline;
+}
+
+.code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.75rem;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+}
+
+.code small {
+  font-size: 0.9rem;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
+.banner {
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  margin: 10px 0;
+}
+
+.banner.warn {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  border: 1px solid #f3c4c4;
+}
+
+.banner.info {
+  background: var(--info-bg);
+  color: var(--info-ink);
+  border: 1px solid #c9d8f2;
+}
+
+.progress {
+  height: 8px;
+  background: #e6e9ee;
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 8px 0 4px;
+}
+
+.progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.list > li {
+  border-top: 1px solid var(--line);
+  padding: 12px 0;
+}
+
+.list > li:first-child {
+  border-top: none;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.tag {
+  display: inline-block;
+  font-size: 0.875rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.tag.ok {
+  border-color: #b7e1c4;
+  color: #14532d;
+}
+
+.tag.bad {
+  border-color: #f3c4c4;
+  color: var(--warn-ink);
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0 4px;
+}
+
+.tabs button {
+  flex: 1;
+  min-width: 0;
+}
+
+.tabs button[aria-selected='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.log {
+  max-height: 220px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 12px 0;
+}
+
+@media (min-width: 720px) {
+  #app {
+    padding-top: 24px;
+  }
+}

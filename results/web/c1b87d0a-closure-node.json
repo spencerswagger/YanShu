@@ -1,0 +1,64 @@
+{
+  "base": "http://127.0.0.1:18080/v1",
+  "server": "host 127.0.0.1:18080 (real sm2)",
+  "checks": [
+    {
+      "label": "nickname_valid",
+      "ok": true,
+      "status": 200
+    },
+    {
+      "label": "tampered_signature",
+      "ok": false,
+      "status": 401,
+      "code": "AUTH_SIGNATURE_INVALID",
+      "raw": {
+        "error": {
+          "code": "AUTH_SIGNATURE_INVALID",
+          "message": "signature verification failed",
+          "request_id": "b55a2dcf24652b21"
+        }
+      }
+    },
+    {
+      "label": "code_mismatch",
+      "ok": false,
+      "status": 401,
+      "code": "AUTH_SIGNATURE_INVALID",
+      "raw": {
+        "error": {
+          "code": "AUTH_SIGNATURE_INVALID",
+          "message": "signature verification failed",
+          "request_id": "064a4515b477d44d"
+        }
+      }
+    },
+    {
+      "label": "prelude_after_ack",
+      "ok": false,
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "raw": {
+        "error": {
+          "code": "TRANSFER_CONSUMED",
+          "message": "transfer has been consumed",
+          "request_id": "25ac1e6507e62e5b"
+        }
+      }
+    }
+  ],
+  "codes": {
+    "alice": "0Y9J",
+    "bob": "7800"
+  },
+  "transfer": {
+    "transferId": "dc09ba810c2b4015c7cf48c84597477b",
+    "chunks": 2,
+    "bytes": 5000,
+    "bytesEqual": true
+  },
+  "terminal": {
+    "state": "CONSUMED",
+    "terminal_reason": "CONSUMED"
+  }
+}
