@@ -916,7 +916,7 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 | S→C | `ERROR` | `{code, message, fatal}` | `fatal: true` 时随后关闭 |
 | C→S | `PING` | `{}` | 每 25 s 一次 |
 | S→C | `PONG` | `{}` | — |
-| C→S | `PRESENCE_SUBSCRIBE` | `{codes: ["WTJF", ...]}` | ≤ 32 个码 |
+| C→S | `PRESENCE_SUBSCRIBE` | `{codes: ["WTJF", ...]}` | 并发订阅 ≤ **8** 个码；**新增订阅** ≤ **2 码/秒**（见下方限速） |
 | S→C | `PRESENCE_SNAPSHOT` | `{entries:[{code, online}]}` | 订阅回执 |
 | S→C | `PRESENCE_CHANGED` | `{code, online}` | 上线/掉线推送 |
 | S→C | `TRANSFER_NOTICE` | `{transfer_id, sender_code, sender_nickname, plaintext_size, chunk_count, expires_at}` | 有新传输可收 |
@@ -932,8 +932,17 @@ u32be index ‖ u32be length ‖ length 字节（CHUNK_CT ‖ TAG）
 | C→S | `RTC_BYE` | `{transfer_id, to_code, reason: "done" / "failed" / "cancelled"}` | 结束 |
 | S→C | `PEER_UNREACHABLE` | `{transfer_id, code}` | 对方不在线/信令投递失败 |
 
-> 表里标 **v1 未实现** 的帧类型属排期项（§15 是唯一排期清单），服务端当前既不发送也不接受；客户端 MUST 按 §9.2 的"未知 `type` 忽略"处理，不要依赖其存在。
+> 表里标 **v1 未实现** 的帧类型属排期项（§15 是唯一排期清单），服务端当前既不发送也不接受；客户端 MUST 按 §9.2 的"未知 `type` 忽略"处理，不要依赖它存在。
+
 > 在线表与 `TRANSFER_NOTICE` 已实现：建包成功时若收件人在线，服务端推送 `TRANSFER_NOTICE`；离线则不发，收件方靠 §7.1 的 `inbox` 拉取。
+
+**`PRESENCE_SUBSCRIBE` 的两条硬限（写死）**：
+
+- **并发订阅上限 8 个码**（单连接）。订阅集超过 8 个码 → 整帧拒绝，回 `ERROR{code:"RATE_LIMITED", fatal:false}`。
+- **新增订阅速率 ≤ 2 码/秒**（单连接，令牌桶，突发按 1 秒额度）。计数口径是**新增**：重复订阅已在集合内的码**不计数**（幂等重发不会触发限速）；一次请求里带多个码，按"本次真正新增的码数"扣额度。
+- 两种超限都**只拒该帧**：`fatal:false`、**连接保持**、**已有订阅不清空**（不会因为一次越限丢掉此前的在线状态）。
+- 为什么不放宽：4 位 Crockford 码空间只有 `32^4 = 1,048,576` 个码，若不限订阅，单连接按 40 帧/秒 × 32 码就能到 ≈1280 码/秒，**约 13 分钟即可把整个码空间扫一遍**、拿到全站在线状态（谁注册了、谁此刻在线）。订阅限速与并发上限就是为堵这个枚举面；**MUST NOT** 为了"方便批量订阅"把它调回去。
+
 
 ### 9.4 信令转发规则
 
