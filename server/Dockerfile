@@ -18,7 +18,8 @@ RUN addgroup -g 10001 -S yanshu \
 
 WORKDIR /app
 COPY --from=build /out/yanshu-server /app/yanshu-server
-COPY --chmod=0444 kernel/yanshu_sm.wasm /app/kernel/yanshu_sm.wasm
+COPY kernel/yanshu_sm.wasm /app/kernel/yanshu_sm.wasm
+RUN chmod 0444 /app/kernel/yanshu_sm.wasm
 
 ENV YANSHU_KERNEL_WASM=/app/kernel/yanshu_sm.wasm \
     YANSHU_ADDR=0.0.0.0:8080 \

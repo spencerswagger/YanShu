@@ -70,6 +70,14 @@ docker compose exec postgres psql -U yanshu -d yanshu \
 前端静态资源：当前服务端**不提供静态文件服务**（无 `web/` 产物进镜像）；若后续引入前端构建产物，
 需要另建 `yanshu-web` 镜像或由服务端同端口提供，届时同步更新本文件与 workflow 矩阵。
 
+## 4.1 STUN 与网络
+
+- 默认 STUN 是公共服务器，**部分地区不可用**。替换方式：设置 `YANSHU_STUN_URLS`（逗号分隔，
+  只支持 STUN，本项目**没有 TURN**），例如 compose 里加 `YANSHU_STUN_URLS=stun:stun.example.net:3478`。
+- 该值只影响 `/v1/config` 下发给客户端的 ICE 配置，不影响服务端连通性。
+- 构建镜像需要 BuildKit（`docker buildx` 或 `DOCKER_BUILDKIT=1`）；Dockerfile 已避免 `COPY --chmod`
+  这类仅 BuildKit 支持的写法，用 `RUN chmod` 代替。
+
 ## 5. v1 限制
 
 - **单实例**：限速额度是进程内内存实现，多副本会让有效额度变成 N 倍且互不同步。

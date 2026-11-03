@@ -80,6 +80,17 @@ jobs:
           username: ${{ secrets.SWR_USERNAME }}
           password: ${{ secrets.SWR_PASSWORD }}
 
+      - name: Summary
+        if: always()
+        run: |
+          if [ "${{ steps.creds.outputs.push }}" = "true" ]; then
+            echo "### ${{ matrix.name }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- 已构建并**推送**：\`${{ steps.meta.outputs.tags }}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ${{ matrix.name }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **未推送**（缺少 SWR_USERNAME/SWR_PASSWORD）：仅完成构建，镜像未上传注册表" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
