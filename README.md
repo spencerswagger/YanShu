@@ -121,7 +121,7 @@ TEST_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu_test?sslmode=disable" 
 ```sh
 git clone --depth 1 https://github.com/spencerswagger/YanShu.git && cd YanShu
 cp .env.example .env
-sed -i "s|^YANSHU_TOKEN_SECRET=.*|YANSHU_TOKEN_SECRET=$(head -c 32 /dev/urandom | base64)|" .env
+sed -i "s|^YANSHU_TOKEN_SECRET=.*|YANSHU_TOKEN_SECRET=$(head -c 32 /dev/urandom | base64)|; s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 12)|" .env
 docker compose up -d          # 自动拉镜像（不需要 build）
 
 curl -s http://127.0.0.1:18080/healthz        # {"status":"ok","api_version":"v1","contract":"v1"}
