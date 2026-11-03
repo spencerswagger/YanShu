@@ -85,6 +85,11 @@ func (w *wsConn) Send(v any) error {
 
 // handleWS 把 /v1/ws 从 503 占位升级为最小可用信令。
 func (a *API) handleWS(w http.ResponseWriter, r *http.Request) {
+	// 契约 §11.1：按 IP 新建 WS 连接 10 次/分钟；超限直接 HTTP 429（也可用 close 4429）。
+	if !a.allow(w, r, "wsconn:ip:"+a.clientIP(r), "ip", spec.DefaultLimits.WSConnPerIP) {
+		return
+	}
+
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		// 鉴权靠 HELLO 签名而不是 Origin：部署常在同源反代之后，Origin 可能被改写。
 		OriginPatterns: []string{"*"},

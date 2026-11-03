@@ -245,3 +245,45 @@ func TestWSTransferNotice(t *testing.T) {
 		t.Fatalf("notice payload wrong: %v", p)
 	}
 }
+
+// 契约 §11.1：按 IP 新建 WS 连接 10 次/分钟，超限 HTTP 429（带 Retry-After）。
+func TestWSConnectionRateLimit(t *testing.T) {
+	e := newEnv(t, "")
+	code, _ := e.register("heavy")
+
+	url := "ws" + strings.TrimPrefix(e.srv.URL, "http") + spec.PathWS
+	conns := make([]*websocket.Conn, 0, 10)
+	for i := 0; i < 10; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		c, _, err := websocket.Dial(ctx, url, nil)
+		cancel()
+		if err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+		conns = append(conns, c)
+		// 每条连接完成 HELLO，避免占用未认证态
+		writeWS(t, c, map[string]any{"type": "HELLO", "payload": map[string]any{
+			"code": code, "challenge_id": e.challenge(spec.PurposeWSHello).ChallengeID, "signature": "sig",
+		}})
+		readWS(t, c)
+	}
+	defer func() {
+		for _, c := range conns {
+			_ = c.CloseNow()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, resp, err := websocket.Dial(ctx, url, nil); err == nil {
+		t.Fatal("11th connection should be limited")
+	} else if resp == nil || resp.StatusCode != 429 {
+		got := 0
+		if resp != nil {
+			got = resp.StatusCode
+		}
+		t.Fatalf("want 429, got %d", got)
+	} else if resp.Header.Get("Retry-After") == "" {
+		t.Fatal("429 must carry Retry-After")
+	}
+}
