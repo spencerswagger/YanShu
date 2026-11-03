@@ -13,7 +13,39 @@
 - 默认走服务端中转；浏览器之间尝试直连，通了会提示切换（无 TURN，只配 STUN）。
 - **边界**：不做账号体系、不做云盘、不做 TURN 中继、不做国密合规测评、v1 不支持多副本横向扩展。
 
-## 2. 快速开始（复制粘贴就能跑）
+## 2. 快速开始（Docker，一条命令）
+
+SWR 上的镜像已公开，**部署端不需要构建**：
+
+```sh
+git clone --depth 1 https://github.com/spencerswagger/YanShu.git && cd YanShu
+cp .env.example .env
+sed -i "s|^YANSHU_TOKEN_SECRET=.*|YANSHU_TOKEN_SECRET=$(head -c 32 /dev/urandom | base64)|; s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 12)|" .env
+docker compose up -d
+
+curl -s http://127.0.0.1:18080/healthz      # {"status":"ok","api_version":"v1","contract":"v1"}
+docker compose logs yanshu-server | grep -i "sm2 verifier loaded"   # version=0x00010000
+```
+
+也可以只拷 `docker-compose.yml` 与 `.env.example` 两个文件，不必 clone 整个仓库。
+
+- 首次启动会先跑一个**一次性 `init` 容器**改数据卷属主（约 1 秒），属正常现象。
+- 服务启动时自动建表；数据卷 `pgdata` / `blobdata` / `logdata`，`docker compose down` 不删卷。
+- 对外端口默认 `18080`（改 `.env` 里的 `YANSHU_PORT`）；容器内监听 `0.0.0.0:8080`。
+- 要**改代码自己构建**才用 dev override：`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`。
+
+一条命令起不来时看 §7 排错。
+
+## 3. 环境要求
+
+| 依赖 | 版本 | 说明 |
+|---|---|---|
+| Go | 1.27 | 编译服务端（`server/go.mod` 声明 `go 1.27`） |
+| PostgreSQL | 16 | 存码、传输元数据、审计；**必须**，无内置存储替代 |
+| Docker | 24+（可选） | 只用容器部署时需要；构建镜像建议启用 BuildKit |
+| 冻结内核 | `server/kernel/yanshu_sm.wasm`，127,313 B，sha256 `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f` | `YANSHU_VERIFIER=sm2` 时必需，仓库已附带 |
+
+## 4. 本地开发（从源码直接跑，不用 Docker）
 
 前提：本机有 PostgreSQL 16 与 Go 1.27（见 §3）。
 
@@ -46,16 +78,7 @@ msg="kernel verified" sha256=c1b87d0a…7259f version=0x00010000 exports=35
 
 需要你改的地方：`YANSHU_DATABASE_URL`（换成真实 DSN）、`YANSHU_TOKEN_SECRET`（换成固定随机值并存好）。
 
-## 3. 环境要求
-
-| 依赖 | 版本 | 说明 |
-|---|---|---|
-| Go | 1.27 | 编译服务端（`server/go.mod` 声明 `go 1.27`） |
-| PostgreSQL | 16 | 存码、传输元数据、审计；**必须**，无内置存储替代 |
-| Docker | 24+（可选） | 只用容器部署时需要；构建镜像建议启用 BuildKit |
-| 冻结内核 | `server/kernel/yanshu_sm.wasm`，127,313 B，sha256 `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f` | `YANSHU_VERIFIER=sm2` 时必需，仓库已附带 |
-
-## 4. 本地开发
+### 4.1 其他常用命令
 
 ```sh
 # 在 server/ 下执行
@@ -114,65 +137,7 @@ TEST_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu_test?sslmode=disable" 
   （`Login Succeeded!`），推送了 `:latest` 与 `:f47d0f3`，digest `sha256:802ee7d2…`。
 - CI 未配置 `SWR_USERNAME`/`SWR_PASSWORD` 时**只构建不推送**（job 仍成功，Summary 里标注“未推送”）。
 
-### 6.2 一条命令起（compose，**不需要构建**）
-
-镜像由 CI 构建好推到 SWR（见 6.1），部署端只做"拉取 + 起"：
-
-目标环境实测（4C/8G，全流程约 4.1 分钟）：
-
-| 步骤 | 结果 |
-|---|---|
-| `docker build -t yanshu-server:local ./server` | ✅ **26.0s**（`golang:1.27` 构建 → `alpine:3.20` 运行，冻结内核已进镜像） |
-| postgres 从 SWR 直拉 | ✅ **healthy** |
-| `docker compose config` | ✅ **71 行变量全解析** |
-| `curl -s localhost:18080/healthz` | ✅ `{"status":"ok","api_version":"v1","contract":"v1"}` |
-| 启动日志 | ✅ `sm2 verifier loaded`、`version=0x00010000`、`kernel=/app/kernel/yanshu_sm.wasm` |
-| `GET /v1/config` | ✅ `verifier=sm2`、`env=production`、`kernel_sha256=c1b87d0a…7259f`、`kernel_exports=35` |
-| `docker compose up -d`（首次，`down -v` 后） | ❌ 命名卷 `logdata`/`blobdata` 建成 `root:root`，非 root 进程写不了日志：`fatal err="logging: open /app/data/logs/yanshu-server-…log: permission denied"` → `Restarting (1)` |
-
-**卷权限修复版重跑验证进行中**（镜像入口已改为：以 root 修正两卷属主后 `su-exec` 降权运行；
-修复通过前，上述 `up -d` 一条仍是失败状态）。
-
-```sh
-git clone --depth 1 https://github.com/spencerswagger/YanShu.git && cd YanShu
-cp .env.example .env
-sed -i "s|^YANSHU_TOKEN_SECRET=.*|YANSHU_TOKEN_SECRET=$(head -c 32 /dev/urandom | base64)|; s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 12)|" .env
-docker compose up -d          # 自动拉镜像（不需要 build）
-
-```sh
-git clone --depth 1 https://github.com/spencerswagger/YanShu.git && cd YanShu
-cp .env.example .env
-sed -i "s|^YANSHU_TOKEN_SECRET=.*|YANSHU_TOKEN_SECRET=$(head -c 32 /dev/urandom | base64)|" .env
-docker compose config          # 校验并展开配置
-docker compose up -d           # 自动拉镜像（不需要 build）
-curl -s localhost:18080/healthz        # {"status":"ok","api_version":"v1","contract":"v1"}
-docker compose logs yanshu-server | grep -i "sm2 verifier loaded"   # version=0x00010000
-docker compose down -v         # 清理（含数据卷）
-```
-
-也可以只拷 `docker-compose.yml`、`docker-compose.dev.yml` 与 `.env.example` 三个文件（不必 clone 整个仓库）。
-
-- **首次启动会有一个一次性 `init` 容器**：把两个数据卷属主改成容器运行用户（不做这步服务写日志会被拒、崩溃循环）；它跑完即退出，属正常现象。
-  **修复版重跑验证进行中**：下面"实测记录"里的 `up -d` 失败即由该问题导致，修复以真机复跑为准。
-- `postgres` 用 `swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine`；**该镜像拉不到时**把那一行临时改成 `postgres:16-alpine`。
-- SWR 仓库若为私有：先 `docker login swr.cn-east-5.myhuaweicloud.com`；设为公开后可匿名拉取。
-- 数据卷：`pgdata` / `blobdata` / `logdata`；`docker compose down` 不删卷，`down -v` 才删。
-- 容器内监听 `0.0.0.0:8080`，宿主映射 `${YANSHU_PORT:-18080}:8080`；compose 默认 `sm2`（真验签）。
-- **要自己改代码再构建**才用 dev override：`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`。
-
-实测记录（4C/8G，全流程约 4.1 分钟，修复前的原始结果）：
-
-| 步骤 | 结果 |
-|---|---|
-| `docker build -t yanshu-server:local ./server` | ✅ **26.0s**（`golang:1.27` 构建 → `alpine:3.20` 运行，冻结内核已进镜像） |
-| postgres 从 SWR 直拉 | ✅ **healthy** |
-| `docker compose config` | ✅ **71 行变量全解析** |
-| `curl -s localhost:18080/healthz` | ✅ `{"status":"ok","api_version":"v1","contract":"v1"}` |
-| 启动日志 | ✅ `sm2 verifier loaded`、`version=0x00010000`、`kernel=/app/kernel/yanshu_sm.wasm` |
-| `GET /v1/config` | ✅ `verifier=sm2`、`env=production`、`kernel_sha256=c1b87d0a…7259f`、`kernel_exports=35` |
-| `docker compose up -d`（`down -v` 后首次） | ❌ 命名卷 `logdata`/`blobdata` 建成 `root:root`，非 root 进程写不了日志：`fatal err="logging: open /app/data/logs/yanshu-server-…log: permission denied"` → `Restarting (1)` |
-
-### 6.3 升级与回滚
+### 6.2 升级与回滚
 
 - 升级：改 `docker-compose.yml` 的 `image:` 标签（或 `docker compose pull` 后 `up -d`）；迁移随启动自动执行。
 - 回滚：把标签改回上一个版本并 `up -d`；迁移是**只增不改**的，旧版本可继续运行。
