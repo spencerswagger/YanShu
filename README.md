@@ -114,47 +114,28 @@ TEST_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu_test?sslmode=disable" 
   （`Login Succeeded!`），推送了 `:latest` 与 `:f47d0f3`，digest `sha256:802ee7d2…`。
 - CI 未配置 `SWR_USERNAME`/`SWR_PASSWORD` 时**只构建不推送**（job 仍成功，Summary 里标注“未推送”）。
 
-### 6.2 一条命令起（compose）
+### 6.2 一条命令起（compose，**不需要构建**）
+
+镜像由 CI 构建好推到 SWR（见 6.1），部署端只做"拉取 + 起"：
 
 ```sh
-# 0) 私有仓库先登录（否则 pull 会被拒：unauthorized）
-docker login swr.cn-east-5.myhuaweicloud.com
+git clone --depth 1 https://github.com/spencerswagger/YanShu.git && cd YanShu
+cp .env.example .env
+sed -i "s|^YANSHU_TOKEN_SECRET=.*|YANSHU_TOKEN_SECRET=$(head -c 32 /dev/urandom | base64)|" .env
+docker compose up -d          # 自动拉镜像（不需要 build）
 
-# 1) 生成必填变量（写进 .env，compose 会自动读取）
-cat > .env <<'ENV'
-YANSHU_TOKEN_SECRET=0123456789abcdef0123456789abcdef
-ENV
-
-# 2) 构建镜像（本地构建时用；直接用 SWR 镜像可跳过）
-docker build -f server/Dockerfile -t yanshu-server:local server
-
-# 3) 校验并展开 compose 配置
-docker compose config
-
-# 4) 创建并启动
-docker compose create
-docker compose up -d
-
-# 5) 验证
-curl -s http://127.0.0.1:18080/healthz
-# {"status":"ok","api_version":"v1","contract":"v1"}
-docker compose logs yanshu-server | grep "verifier loaded"
-# msg="sm2 verifier loaded" kernel=/app/kernel/yanshu_sm.wasm version=0x00010000
-
-# 6) 清理（含数据卷）
-docker compose down -v
+curl -s http://127.0.0.1:18080/healthz        # {"status":"ok","api_version":"v1","contract":"v1"}
+docker compose logs yanshu-server | grep -i "sm2 verifier loaded"   # version=0x00010000
 ```
 
-状态：**镜像构建、SWR 拉取、`/healthz`、`sm2 verifier loaded` 已在目标环境实测；卷权限修复版镜像的重跑验证进行中**。
-命名卷 `logdata`/`blobdata` 首次创建属主为 root，镜像入口会在启动时修正属主再降权运行，
-因此**不需要手工 chown**。
+也可以只拷 `docker-compose.yml` 与 `.env.example` 两个文件（不必 clone 整个仓库）。
 
-- `postgres` 用 `swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine`；
-  **该镜像未同步时**把 `docker-compose.yml` 里那一行临时改成 `postgres:16-alpine`，同步后切回。
-- 数据卷：`pgdata`（数据库）、`blobdata`（密文块）、`logdata`（滚动日志）；`docker compose down` 不会删卷，
-  加 `-v` 才会删除。
-- 容器内监听 `0.0.0.0:8080`，宿主映射 `${YANSHU_PORT:-18080}:8080`；`stub-allow` 的 loopback 门禁因此不适用，compose 默认 `sm2`。
-- 服务启动时会先跑 `-migrate-only` 再起进程（镜像入口脚本），首次启动即建表。
+- **首次启动会有一个一次性 `init` 容器**：把两个数据卷属主改成容器运行用户（不做这步服务写日志会被拒、崩溃循环）；它跑完即退出，属正常现象。
+- `postgres` 用 `swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine`；**该镜像拉不到时**把那一行临时改成 `postgres:16-alpine`。
+- SWR 仓库若为私有：先 `docker login swr.cn-east-5.myhuaweicloud.com`；设为公开后可匿名拉取。
+- 数据卷：`pgdata` / `blobdata` / `logdata`；`docker compose down` 不删卷，`down -v` 才删。
+- 容器内监听 `0.0.0.0:8080`，宿主映射 `${YANSHU_PORT:-18080}:8080`；compose 默认 `sm2`（真验签）。
+- **要自己改代码再构建**才用 dev override：`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`。
 
 ### 6.3 升级与回滚
 
