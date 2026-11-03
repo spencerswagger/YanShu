@@ -1,8 +1,11 @@
 # 雁书服务端 + PostgreSQL（v1 单实例）
 #
-# 起：
-#   cp .env.example .env   # 若存在；否则手工准备 TOKEN_SECRET
+# 起（部署：不需要 build，镜像从 SWR 拉）：
+#   cp .env.example .env   # 至少设置 YANSHU_TOKEN_SECRET
 #   docker compose up -d
+#
+# 本地改代码后再起（开发：带上 dev override，直接构建源码）：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 #
 # 说明：
 #   - 容器内必须监听 0.0.0.0 才能映射端口；stub-allow 有 loopback 门禁，
@@ -10,6 +13,16 @@
 #   - 限速额度是进程内实现：v1 只支持单实例。
 
 services:
+  # 一次性任务：把两个数据卷的属主改成容器运行用户（10001）。
+  # 不修这一步，服务写日志会被拒 → 崩溃循环（fatal: permission denied）。
+  init:
+    image: alpine:3.20
+    command: ["sh", "-c", "chown -R 10001:10001 /data/blobs /data/logs"]
+    volumes:
+      - blobdata:/data/blobs
+      - logdata:/data/logs
+    restart: "no"
+
   postgres:
     # SWR 同步完成后可直接用这一行；拉不到时临时换成 postgres:16-alpine
     image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine
@@ -28,13 +41,12 @@ services:
     restart: unless-stopped
 
   yanshu-server:
-    build:
-      context: ./server
-      dockerfile: Dockerfile
     image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:${YANSHU_IMAGE_TAG:-latest}
     depends_on:
       postgres:
         condition: service_healthy
+      init:
+        condition: service_completed_successfully
     environment:
       YANSHU_DATABASE_URL: postgres://yanshu:${POSTGRES_PASSWORD:-change-me}@postgres:5432/yanshu?sslmode=disable
       YANSHU_TOKEN_SECRET: ${YANSHU_TOKEN_SECRET:?set YANSHU_TOKEN_SECRET (>=16 bytes)}

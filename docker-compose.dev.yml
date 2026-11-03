@@ -1,0 +1,8 @@
+# 开发用 override：从源码构建镜像（部署不需要这个文件）
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+services:
+  yanshu-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
