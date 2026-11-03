@@ -1,0 +1,32 @@
+{
+  "run": "B-core-contract-kernel",
+  "relay": "core-server",
+  "appUrl": "http://127.0.0.1:5173/",
+  "sample": {
+    "bytes": 2506889,
+    "sha256": "4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f",
+    "file": "ys-e2e-input.bin"
+  },
+  "acceptance": true,
+  "note": "Core 真服务（9065eb8）+ 契约布局内核（a33c2de）；服务端仍 stub-allow 不验签，验签后需复跑",
+  "startedAt": "2026-11-02T16:50:46.807Z",
+  "kernel": "真实加密 · 契约布局内核（YSPK/1.0）",
+  "layout": "contract-112",
+  "kernelBuild": {
+    "commit": "a33c2de",
+    "ysVersion": "0x00010000"
+  },
+  "codeA": "DCWK",
+  "codeB": "KR1X",
+  "sent": true,
+  "received": true,
+  "downloaded": [
+    "ys-e2e-input.bin"
+  ],
+  "downloadSize": 2506889,
+  "downloadSha256": "4b0c533a77c670b05d0ee1bd235449ff312c27ee8b3375a492c5a88ac058482f",
+  "bytesEqual": true,
+  "downloadName": "ys-e2e-input.bin",
+  "finishedAt": "2026-11-02T16:50:54.967Z",
+  "ok": true
+}

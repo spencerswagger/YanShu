@@ -1,0 +1,18 @@
+{
+  "run": "c1b87d0a-sm2-token-heal",
+  "relay": "local-core-18091-sm2",
+  "server": "core built from 06c9f56, YANSHU_VERIFIER=sm2, YANSHU_TOKEN_EPOCH 1 -> 2",
+  "kernel": { "sha256": "c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f", "bytes": 127313 },
+  "steps": [
+    { "step": "upload_interrupted", "record": true, "chunks": 3 },
+    {
+      "step": "old_token_status",
+      "http": 401,
+      "body": "{\"error\":{\"code\":\"AUTH_TOKEN_STALE\",\"message\":\"upload token was revoked by a key version rotation; create a new transfer\",\"request_id\":\"req_03af8ad4b890f21c\"}}"
+    },
+    { "step": "resumeSend", "state": "READY", "transferId": "b09a5db4765158a7d6973f2401348a83" },
+    { "step": "receive_after_heal", "name": "heal.bin", "size": 12000, "bytesEqual": true }
+  ],
+  "note": "EPOCH 1->2 用同一二进制重启构造；客户端拿到 401 STALE 后自动重建传输并传完，未把用户卡住",
+  "acceptance": true
+}

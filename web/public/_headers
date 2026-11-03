@@ -1,0 +1,13 @@
+# Cloudflare Pages 下发的真实 HTTP 头。
+# meta 标签里的 frame-ancestors 会被浏览器忽略，防 iframe 嵌套必须走 HTTP 头。
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  X-Frame-Options: DENY
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+# 内核产物：长缓存但必须允许重新验证（换内核后要立刻生效）
+/ys_kernel.wasm
+  Cache-Control: public, max-age=0, must-revalidate
+  Content-Type: application/wasm
