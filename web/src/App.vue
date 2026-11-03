@@ -12,6 +12,9 @@ import { describeError } from './net/errors.js'
 import { saveBlob } from './lib/save.js'
 import { decode as b64uDecode } from './lib/base64url.js'
 import { info } from './lib/log.js'
+import { createSignaler } from './net/signal.js'
+import { createResponder } from './net/p2pResponder.js'
+import { createDirectBuffer } from './net/p2pChunks.js'
 import MyCodeCard from './components/MyCodeCard.vue'
 import SendPanel from './components/SendPanel.vue'
 import InboxPanel from './components/InboxPanel.vue'
@@ -195,16 +198,53 @@ async function fetchSenderPublic(code) {
 }
 
 async function doReceive({ transferId, onProgress }) {
-  return receiveTransfer({
-    api: api.value,
-    kernel: kernel.value,
-    session: identityManager.value.session,
-    transferId,
-    senderPublic: fetchSenderPublic,
-    onProgress,
-    save: saveBlob,
-  })
+  // 接收侧直连（answerer）：有 ws_url 才起信令；任何失败都静默回落中转，下载本身不依赖它
+  let signaler = null
+  let responder = null
+  const directBuffer = createDirectBuffer()
+  const wsUrl = serverConfig.value?.ws_url || ''
+  const stunUrls = serverConfig.value?.stun_urls || []
+  if (wsUrl && stunUrls.length && api.value && kernel.value) {
+    try {
+      signaler = createSignaler({
+        wsUrl,
+        client: api.value.client,
+        kernel: kernel.value,
+        session: identityManager.value.session,
+      })
+      await signaler.open()
+      if (signaler.authed) {
+        responder = createResponder({
+          signaler,
+          transferId,
+          selfCode: identityManager.value.session.code,
+          peerCode: undefined, // 对端码以服务端帧里的 from_code 为准，这里不强校验
+          stunUrls,
+          buffer: directBuffer,
+        })
+      }
+    } catch {
+      signaler = null
+      responder = null
+    }
+  }
+  try {
+    return await receiveTransfer({
+      api: api.value,
+      kernel: kernel.value,
+      session: identityManager.value.session,
+      transferId,
+      senderPublic: fetchSenderPublic,
+      onProgress,
+      save: saveBlob,
+      directBuffer,
+    })
+  } finally {
+    responder?.close()
+    signaler?.close()
+  }
 }
+
 </script>
 
 <template>

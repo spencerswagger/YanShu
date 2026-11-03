@@ -104,12 +104,21 @@ async function receiveOnce({
       async (index) => {
         if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
         // 直连收到的块优先（`directBuffer` 由直连通道灌入）；没有就走中转，行为与原来一致
-        const { bytes } = await takeChunkBytes({
-          directBuffer,
-          index,
-          getChunk: (i) => api.getChunk({ transferId, downloadId: prelude.downloadId, index: i }),
-        })
-        unpack.feed(index, bytes)
+        const relayGet = (i) => api.getChunk({ transferId, downloadId: prelude.downloadId, index: i })
+        const picked = await takeChunkBytes({ directBuffer, index, getChunk: relayGet })
+        let bytes = picked.bytes
+        if (picked.source === 'direct') {
+          // 直连块不可信：喂不进内核（长度/序号不对）就当这块没收到，改走中转补齐，
+          // 绝不因为"直连半途失败"交出残缺文件。
+          try {
+            unpack.feed(index, bytes)
+          } catch {
+            bytes = await relayGet(index)
+            unpack.feed(index, bytes)
+          }
+        } else {
+          unpack.feed(index, bytes)
+        }
         done += bytes.length
         report({ phase: 'downloading', done, total: meta.total_ciphertext_bytes || done, message: `下载块 ${index + 1}/${chunkCount}` })
       },
