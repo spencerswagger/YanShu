@@ -17,6 +17,13 @@ curl -s http://127.0.0.1:18080/v1/config | head  # 含 token_epoch / verifier / 
 服务启动时会先跑 `-migrate-only` 再起进程（镜像入口脚本），因此**首次启动即完成建表**。
 `postgres` 自带 healthcheck，服务通过 `depends_on: condition: service_healthy` 等它就绪。
 
+### 1.1 端口与组件
+
+- 对外**只暴露一个端口**（默认 `18080`）：`web` 容器（nginx）提供界面，并把 `/v1/`、`/healthz`
+  反代到内部网络里的 `yanshu-server:8080`。服务端**不 publish 端口**。
+- 常驻容器：`postgres`、`yanshu-server`、`web`；另有一次性 `init`（生成密钥 + 修卷属主，跑完退出）。
+- 打开 `http://<host>:18080/` 是界面；`/healthz` 经 nginx 直通仍返回 200。
+
 ## 2. 环境变量
 
 | 变量 | 必填 | 默认 | 说明 |

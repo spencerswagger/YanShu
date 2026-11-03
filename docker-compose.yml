@@ -81,12 +81,21 @@ services:
       YANSHU_ADDR: 0.0.0.0:8080
       YANSHU_ENV: ${YANSHU_ENV:-production}
       YANSHU_STORAGE_QUOTA_BYTES: ${YANSHU_STORAGE_QUOTA_BYTES:-8589934592}
-    ports:
-      - "${YANSHU_PORT:-18080}:8080"
+    # 不对外发布端口：只由 web 容器在内部网络访问
     volumes:
       - blobdata:/app/data/blobs
       - logdata:/app/data/logs
       - ./secrets:/secrets:ro
+    restart: unless-stopped
+
+  web:
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:${YANSHU_IMAGE_TAG:-latest}
+    depends_on:
+      yanshu-server:
+        condition: service_healthy
+    ports:
+      # 唯一对外端口：界面 + /v1 反代 + /healthz 直通
+      - "${YANSHU_PORT:-18080}:80"
     restart: unless-stopped
 
 volumes:
