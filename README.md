@@ -108,26 +108,40 @@ TEST_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu_test?sslmode=disable" 
 - 标签规则（`.github/workflows/build-images.yml`）：
   - push tag `vX.Y.Z` → `:<tag>`；**正式版**额外打 `:latest`，预发布（如 `v1.0.0-rc1`）**不打** `latest`；
   - 手动触发（workflow_dispatch）→ `:<short-sha>` 与 `:latest`。
-- 平台 `linux/amd64`；私有仓库登录：`docker login swr.cn-east-5.myhuaweicloud.com`。
+- 平台 `linux/amd64`；仓库目前**私有**，拉取前先 `docker login swr.cn-east-5.myhuaweicloud.com`
+  （或把仓库设为公开后匿名拉取）。
+- 镜像由 CI 构建并推送（workflow `build-images`，run `41568888831`）：登录成功
+  （`Login Succeeded!`），推送了 `:latest` 与 `:f47d0f3`，digest `sha256:802ee7d2…`。
 - CI 未配置 `SWR_USERNAME`/`SWR_PASSWORD` 时**只构建不推送**（job 仍成功，Summary 里标注“未推送”）。
 
 ### 6.2 一条命令起（compose）
 
 ```sh
-# 仓库根目录；compose 会构建本地镜像 yanshu-server:local
+# 0) 私有仓库先登录（否则 pull 会被拒：unauthorized）
+docker login swr.cn-east-5.myhuaweicloud.com
+
+# 1) 仓库根目录；准备好必填环境变量
 export YANSHU_TOKEN_SECRET="$(head -c 32 /dev/urandom | base64)"
+
+# 2) 拉镜像并启动
+docker compose pull
 docker compose up -d
+
+# 3) 验证
 curl -s http://127.0.0.1:18080/healthz
+# {"status":"ok","api_version":"v1","contract":"v1"}
 ```
+
+> **未在目标主机实测**：上面 `docker compose pull` / `up -d` 的具体输出未在本仓库环境中跑过
+> （开发沙盒无 docker CLI）。镜像本身的构建与推送有 CI 记录（run `41568888831`），
+> 首次在目标机器执行时请先 `docker compose config -q` 校验配置。
 
 - `postgres` 用 `swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine`；
   **该镜像未同步时**把 `docker-compose.yml` 里那一行临时改成 `postgres:16-alpine`，同步后切回。
 - 数据卷：`pgdata`（数据库）、`blobdata`（密文块）、`logdata`（滚动日志）；`docker compose down` 不会删卷。
 - 容器内监听 `0.0.0.0:8080`，宿主映射 `${YANSHU_PORT:-18080}:8080`；`stub-allow` 的 loopback 门禁因此不适用，compose 默认 `sm2`。
 - 服务启动时会先跑 `-migrate-only` 再起进程（镜像入口脚本），首次启动即建表。
-
-> 说明：`docker build` / `docker compose config` 在当前开发沙盒里**没有实跑**（无 docker CLI），
-> 其余命令均实测；首次在目标机器部署时请先 `docker compose config -q` 校验一遍。
+- `docker build` / `docker compose config` 在当前开发环境**未实跑**（无 docker CLI）；其余命令均实测。
 
 ### 6.3 升级与回滚
 
@@ -150,16 +164,23 @@ docker compose exec postgres psql -U yanshu -d yanshu \
 此后旧凭据一律 `401 AUTH_TOKEN_STALE`，客户端应重建传输；已上传密文块不受影响。
 若改的是 `YANSHU_TOKEN_EPOCH` 环境变量则需重启，且**调小会被拒绝启动**。
 
-常见报错 → 原因 → 处置：
+常见报错 → 原因 → 处置（以下四条均为实际部署中遇到过的）：
 
 | 现象 | 原因 | 处置 |
 |---|---|---|
-| 启动即退出，日志 `YANSHU_TOKEN_EPOCH must increase (current=3, provided=2)` | 配置的 EPOCH 小于库内已记录值 | 改成 ≥ 当前值；不要为了"回退"调小 |
-| 启动即退出，`kernel sha256 … is not in the frozen allowlist` | 内核文件不是冻结产物（或从错误目录构建） | 用仓库内 `server/kernel/yanshu_sm.wasm`（127,313 B / `c1b87d0a…`），或 `-verify-kernel` 自检 |
-| 启动即退出，`YANSHU_VERIFIER=stub-allow requires YANSHU_ENV=local|test` | 在非本地环境开了全放行 | 改 `sm2`；`stub-allow` 只在 local/test + loopback 用 |
-| 上传/取件返回 `401 AUTH_TOKEN_STALE` | 凭据版本被轮换 | 重建传输取新凭据，不要重算签名 |
-| 上传/取件返回 `401 AUTH_TOKEN_INVALID` | 凭据值不对（串了传输/伪造） | 检查本地存的 token 与 transfer_id 是否配对 |
-| 取件返回 `410 TRANSFER_EXPIRED` / `410 TRANSFER_CONSUMED` | 传输终态（过期或已取完） | 重新发起一次传输；终态不可恢复 |
+| `docker compose pull` 报 `unauthorized` / `denied` | 仓库是私有的，未登录就匿名拉取 | `docker login swr.cn-east-5.myhuaweicloud.com`，或把仓库设为公开 |
+| `docker compose up` 直接退出，提示 `set YANSHU_TOKEN_SECRET` | `.env`/环境中缺 `YANSHU_TOKEN_SECRET`（必填，≥16 字节） | 补上该变量；compose 里用的是 `${YANSHU_TOKEN_SECRET:?…}`，缺失会立即失败 |
+| 启动即退出，`kernel sha256 … is not in the frozen allowlist`（或内核文件不存在） | 内核缺失，或不是冻结产物（从错误目录构建会得到不同字节） | 用仓库内 `server/kernel/yanshu_sm.wasm`（127,313 B / `c1b87d0a…7259f`）；镜像内应为 `/app/kernel/yanshu_sm.wasm`；可用 `-verify-kernel` 自检 |
+| 启动即退出，`YANSHU_VERIFIER=stub-allow requires YANSHU_ENV=local\|test`（或要求 loopback） | 在容器/非本地环境开了全放行 | 容器部署一律 `YANSHU_VERIFIER=sm2`；`stub-allow` 只在 `local\|test` + loopback 调试用 |
+
+其余业务侧报错：
+
+| 现象 | 原因 | 处置 |
+|---|---|---|
+| `401 AUTH_TOKEN_STALE` | 凭据版本（EPOCH）被轮换 | 重建传输取新凭据，不要重算签名 |
+| `401 AUTH_TOKEN_INVALID` | 凭据值不对（串了传输/伪造） | 检查本地 token 与 transfer_id 是否配对 |
+| `401 AUTH_TOKEN_EXPIRED` | 上传凭据超过 6 小时，或下载租约超过 30 分钟 | 重建传输 / 重新取租约 |
+| `410 TRANSFER_EXPIRED` / `410 TRANSFER_CONSUMED` | 传输终态（过期或已取完） | 重新发起一次传输；终态不可恢复 |
 | `401 AUTH_CODE_MISMATCH` | `X-YS-Code` 与签名覆盖的码不一致 | 签名用的头码必须与请求头一致 |
 | `401 AUTH_SIGNATURE_INVALID` | 签名本身不被接受 | 检查 `SIG_INPUT` 拼装与私钥；与 token 无关 |
 
