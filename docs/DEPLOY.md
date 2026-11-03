@@ -65,7 +65,7 @@ docker compose exec postgres psql -U yanshu -d yanshu \
   - push tag `vX.Y.Z` → `:<tag>`；**正式版**（不以 `-` 结尾段）额外打 `:latest`，预发布（如 `v1.0.0-rc1`）不打 `latest`；
   - 手动触发（workflow_dispatch）→ `:<short-sha>` 与 `:latest`。
 - 平台：`linux/amd64`。
-- 未配置 `SWR_USERNAME`/`SWR_PASSWORD` 时，workflow **只构建不推送**并打 warning，不失败。
+- 登录 SWR 用 `SWR_USERNAME`/`SWR_PASSWORD`；**为兼容旧命名，也接受 `DOCKER_USERNAME`/`DOCKER_PASSWORD`**（两者都存在时优先 `SWR_*`）。均未配置时 workflow **只构建不推送**并打 warning，不失败。
 
 前端静态资源：当前服务端**不提供静态文件服务**（无 `web/` 产物进镜像）；若后续引入前端构建产物，
 需要另建 `yanshu-web` 镜像或由服务端同端口提供，届时同步更新本文件与 workflow 矩阵。
