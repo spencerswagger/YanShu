@@ -23,6 +23,7 @@ docker compose up -d
 
 - 首次启动自动生成密钥到当前目录 **`./secrets/`**（`token_secret` / `pg_password`，属主 10001、权限 600）——**别删**；
   重启用同一份，`docker compose down -v` + 删 `./secrets` 才算彻底重来。
+- **打开 `http://<host>:18080/` 就是界面**（nginx 提供静态页，并把 `/v1`、`/healthz` 反代给服务端）。
 - 起来后自检：
   ```sh
   curl -s http://127.0.0.1:18080/healthz      # {"status":"ok","api_version":"v1","contract":"v1"}
@@ -160,6 +161,7 @@ docker compose exec postgres psql -U yanshu -d yanshu \
 
 | 现象 | 原因 | 处置 |
 |---|---|---|
+| 打开 `http://<host>:18080/` 是 **404** | 只起了服务端、没起 web 容器；或 nginx 配置未生效 | `docker compose ps` 确认 `web` 在跑（应为 3 个容器：postgres/server/web）；只 publish web 的 18080 端口 |
 | `docker compose pull` 报 `unauthorized` / `denied` | 仓库是私有的，未登录就匿名拉取 | `docker login swr.cn-east-5.myhuaweicloud.com`，或把仓库设为公开 |
 | `docker compose up` 直接退出，提示 `set YANSHU_TOKEN_SECRET` | `.env`/环境中缺 `YANSHU_TOKEN_SECRET`（必填，≥16 字节） | 补上该变量；compose 里用的是 `${YANSHU_TOKEN_SECRET:?…}`，缺失会立即失败 |
 | 启动即退出，`kernel sha256 … is not in the frozen allowlist`（或内核文件不存在） | 内核缺失，或不是冻结产物（从错误目录构建会得到不同字节） | 用仓库内 `server/kernel/yanshu_sm.wasm`（127,313 B / `c1b87d0a…7259f`）；镜像内应为 `/app/kernel/yanshu_sm.wasm`；可用 `-verify-kernel` 自检 |
