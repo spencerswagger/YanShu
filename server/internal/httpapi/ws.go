@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -36,6 +37,11 @@ const (
 	wsFrameBurst = 80.0
 
 	wsHeartbeatMS = 25000
+
+	// 订阅收紧（防在线状态枚举）：每连接最多 8 个订阅码，新增订阅 ≤2 码/秒（突发 2）。
+	wsMaxSubscriptions = 8
+	wsSubRatePerSecond = 2.0
+	wsSubBurst         = 2.0
 )
 
 // wsFrame 是 §9.2 的信封。
@@ -51,6 +57,11 @@ type wsConn struct {
 	code string
 	seq  atomic.Int64
 	mu   sync.Mutex
+
+	// 订阅状态（仅本连接）：已订阅集合 + 新增订阅令牌桶。
+	subs      map[string]struct{}
+	subTokens float64
+	subLast   time.Time
 }
 
 func (w *wsConn) Code() string { return w.code }
@@ -129,7 +140,12 @@ func (a *API) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn := &wsConn{c: c, code: code}
+	conn := &wsConn{
+		c: c, code: code,
+		subs:      map[string]struct{}{},
+		subTokens: wsSubBurst,
+		subLast:   time.Now(),
+	}
 	if err := conn.Send(map[string]any{
 		"type": "HELLO_OK",
 		"payload": map[string]any{
@@ -238,7 +254,58 @@ func (a *API) handleWSFrame(ctx context.Context, conn *wsConn, f wsFrame) bool {
 		if len(p.Codes) > 32 {
 			p.Codes = p.Codes[:32]
 		}
-		snapshot := a.hub.Subscribe(conn, p.Codes)
+
+		// 只对**新增**订阅计速与计上限：重复订阅同一码不消耗配额。
+		seen := make(map[string]struct{}, len(p.Codes))
+		var newCodes []string
+		for _, raw := range p.Codes {
+			if len(raw) != 4 {
+				continue
+			}
+			if _, dup := seen[raw]; dup {
+				continue
+			}
+			seen[raw] = struct{}{}
+			if _, already := conn.subs[raw]; !already {
+				newCodes = append(newCodes, raw)
+			}
+		}
+
+		now := time.Now()
+		conn.subTokens += now.Sub(conn.subLast).Seconds() * wsSubRatePerSecond
+		if conn.subTokens > wsSubBurst {
+			conn.subTokens = wsSubBurst
+		}
+		conn.subLast = now
+
+		// 并发上限 8：超过就整帧拒绝（不部分接受，避免"部分成功"的歧义）。
+		if len(conn.subs)+len(newCodes) > wsMaxSubscriptions {
+			_ = conn.Send(map[string]any{"type": "ERROR", "payload": map[string]any{
+				"code":    "RATE_LIMITED",
+				"message": fmt.Sprintf("at most %d concurrent presence subscriptions", wsMaxSubscriptions),
+				"fatal":   false,
+			}})
+			return true // 保连：既有订阅不受影响
+		}
+		if float64(len(newCodes)) > conn.subTokens {
+			_ = conn.Send(map[string]any{"type": "ERROR", "payload": map[string]any{
+				"code":    "RATE_LIMITED",
+				"message": fmt.Sprintf("at most %.0f new presence subscriptions per second", wsSubRatePerSecond),
+				"fatal":   false,
+			}})
+			return true // 保连
+		}
+
+		conn.subTokens -= float64(len(newCodes))
+		all := make([]string, 0, len(conn.subs)+len(newCodes))
+		for c := range conn.subs {
+			all = append(all, c)
+		}
+		for _, c := range newCodes {
+			conn.subs[c] = struct{}{}
+			all = append(all, c)
+		}
+		snapshot := a.hub.Subscribe(conn, all)
 		entries := make([]map[string]any, 0, len(snapshot))
 		for c, online := range snapshot {
 			entries = append(entries, map[string]any{"code": c, "online": online})

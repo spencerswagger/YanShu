@@ -287,3 +287,67 @@ func TestWSConnectionRateLimit(t *testing.T) {
 		t.Fatal("429 must carry Retry-After")
 	}
 }
+
+// 订阅收紧：新增订阅 ≤2 码/秒（突发 2），并发上限 8；超限回 RATE_LIMITED 但保连。
+func TestWSPresenceSubscriptionRateAndCap(t *testing.T) {
+	e := newEnv(t, "")
+	me, _ := e.register("me")
+	other, _ := e.register("other")
+
+	a := dialWS(t, e.srv.URL, me, e.challenge(spec.PurposeWSHello).ChallengeID, "sig")
+	readWS(t, a.c) // HELLO_OK
+
+	sub := func(codes ...string) map[string]any {
+		writeWS(t, a.c, map[string]any{"type": "PRESENCE_SUBSCRIBE", "payload": map[string]any{"codes": codes}})
+		return readWS(t, a.c)
+	}
+	expectRateLimited := func(frame map[string]any, why string) {
+		t.Helper()
+		if frame["type"] != "ERROR" {
+			t.Fatalf("%s: want ERROR, got %v", why, frame)
+		}
+		p := frame["payload"].(map[string]any)
+		if p["code"] != "RATE_LIMITED" || p["fatal"] != false {
+			t.Fatalf("%s: want RATE_LIMITED non-fatal, got %v", why, p)
+		}
+	}
+
+	// ③ 速率：突发 2，连订第 3 个被拒。
+	if got := sub("AAAA"); got["type"] != "PRESENCE_SNAPSHOT" {
+		t.Fatalf("1st sub: %v", got)
+	}
+	if got := sub("BBBB"); got["type"] != "PRESENCE_SNAPSHOT" {
+		t.Fatalf("2nd sub: %v", got)
+	}
+	expectRateLimited(sub("CCCC"), "3rd rapid sub")
+
+	// ④ 被拒后连接保持：PING/PONG 仍可用。
+	writeWS(t, a.c, map[string]any{"type": "PING", "payload": map[string]any{}})
+	if got := readWS(t, a.c); got["type"] != "PONG" {
+		t.Fatalf("connection should stay alive: %v", got)
+	}
+
+	// ② 并发上限 8：已订 2 个（AAAA/BBBB），再慢慢订 6 个（含真实码 other），第 9 个被拒。
+	time.Sleep(600 * time.Millisecond)
+	if got := sub(other); got["type"] != "PRESENCE_SNAPSHOT" {
+		t.Fatalf("sub other: %v", got)
+	}
+	for i := 0; i < 5; i++ {
+		time.Sleep(550 * time.Millisecond)
+		code := []string{"D001", "D002", "D003", "D004", "D005"}[i]
+		if got := sub(code); got["type"] != "PRESENCE_SNAPSHOT" {
+			t.Fatalf("sub %s: %v", code, got)
+		}
+	}
+	expectRateLimited(sub("D006"), "9th concurrent sub")
+
+	// ⑤ 拒绝不清空既有订阅、也不中断通知：other 上线 → 仍应收到 PRESENCE_CHANGED。
+	_ = dialWS(t, e.srv.URL, other, e.challenge(spec.PurposeWSHello).ChallengeID, "sig")
+	got := readWS(t, a.c)
+	if got["type"] != "PRESENCE_CHANGED" {
+		t.Fatalf("want PRESENCE_CHANGED after cap rejection, got %v", got)
+	}
+	if p := got["payload"].(map[string]any); p["code"] != other || p["online"] != true {
+		t.Fatalf("presence payload wrong: %v", p)
+	}
+}
