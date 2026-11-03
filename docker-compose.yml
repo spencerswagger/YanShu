@@ -8,12 +8,13 @@
 # 重启用同一份密钥；想彻底重来用 `docker compose down -v` 再删 ./secrets。
 # 端口/镜像标签可选覆盖（不写也能跑）：YANSHU_PORT=8000 docker compose up -d
 #
+# 所有镜像均取自国内源（华为云 SWR），无需外网 Docker Hub。
 # 开发（改代码后重新构建）：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 services:
   # 一次性：生成密钥（不存在时）+ 修数据卷属主（业务进程以 10001 运行，写不了 root 卷）
   init:
-    image: alpine:3.20
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-alpine:3.20
     command:
       - /bin/sh
       - -c

@@ -3,15 +3,17 @@
 # 构建：docker build -f server/Dockerfile -t yanshu-server:dev server
 # 注意：冻结内核必须一起进镜像——启动路径上有 sha256 白名单校验，缺了会直接拒启。
 
-FROM golang:1.27 AS build
+FROM swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+ENV GOPROXY=https://goproxy.cn,direct GOSUMDB=sum.golang.google.cn
+RUN apk add --no-cache git ca-certificates \
+ && go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w" \
       -o /out/yanshu-server ./cmd/yanshu-server
 
-FROM alpine:3.20
+FROM swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-alpine:3.20
 RUN addgroup -g 10001 -S yanshu \
  && adduser -u 10001 -S -G yanshu -H -h /app yanshu \
  && apk add --no-cache ca-certificates wget
