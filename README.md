@@ -116,6 +116,21 @@ TEST_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu_test?sslmode=disable" 
 
 ### 6.2 一条命令起（compose）
 
+目标环境实测（4C/8G，全流程约 4.1 分钟）：
+
+| 步骤 | 结果 |
+|---|---|
+| `docker build -t yanshu-server:local ./server` | ✅ **26.0s**（`golang:1.27` 构建 → `alpine:3.20` 运行，冻结内核已进镜像） |
+| postgres 从 SWR 直拉 | ✅ **healthy** |
+| `docker compose config` | ✅ **71 行变量全解析** |
+| `curl -s localhost:18080/healthz` | ✅ `{"status":"ok","api_version":"v1","contract":"v1"}` |
+| 启动日志 | ✅ `sm2 verifier loaded`、`version=0x00010000`、`kernel=/app/kernel/yanshu_sm.wasm` |
+| `GET /v1/config` | ✅ `verifier=sm2`、`env=production`、`kernel_sha256=c1b87d0a…7259f`、`kernel_exports=35` |
+| `docker compose up -d`（首次，`down -v` 后） | ❌ 命名卷 `logdata`/`blobdata` 建成 `root:root`，非 root 进程写不了日志：`fatal err="logging: open /app/data/logs/yanshu-server-…log: permission denied"` → `Restarting (1)` |
+
+**卷权限修复版重跑验证进行中**（镜像入口已改为：以 root 修正两卷属主后 `su-exec` 降权运行；
+修复通过前，上述 `up -d` 一条仍是失败状态）。
+
 ```sh
 # 0) 私有仓库先登录（否则 pull 会被拒：unauthorized）
 docker login swr.cn-east-5.myhuaweicloud.com
@@ -125,8 +140,8 @@ cat > .env <<'ENV'
 YANSHU_TOKEN_SECRET=0123456789abcdef0123456789abcdef
 ENV
 
-# 2) 构建镜像（本地构建时用；直接用 SWR 镜像可跳过）
-docker build -f server/Dockerfile -t yanshu-server:local server
+# 2) 构建镜像（用 SWR 镜像可跳过）
+docker build -t yanshu-server:local ./server
 
 # 3) 校验并展开 compose 配置
 docker compose config
@@ -135,8 +150,8 @@ docker compose config
 docker compose create
 docker compose up -d
 
-# 5) 验证
-curl -s http://127.0.0.1:18080/healthz
+# 5) 验证（端口默认 18080）
+curl -s localhost:18080/healthz
 # {"status":"ok","api_version":"v1","contract":"v1"}
 docker compose logs yanshu-server | grep "verifier loaded"
 # msg="sm2 verifier loaded" kernel=/app/kernel/yanshu_sm.wasm version=0x00010000
@@ -145,10 +160,7 @@ docker compose logs yanshu-server | grep "verifier loaded"
 docker compose down -v
 ```
 
-状态：**镜像构建、SWR 拉取、`/healthz`、`sm2 verifier loaded` 已在目标环境实测；卷权限修复版镜像的重跑验证进行中**。
-命名卷 `logdata`/`blobdata` 首次创建属主为 root，镜像入口会在启动时修正属主再降权运行，
-因此**不需要手工 chown**。
-
+- 命名卷属主由容器入口修正，**不需要手工 chown**。
 - `postgres` 用 `swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine`；
   **该镜像未同步时**把 `docker-compose.yml` 里那一行临时改成 `postgres:16-alpine`，同步后切回。
 - 数据卷：`pgdata`（数据库）、`blobdata`（密文块）、`logdata`（滚动日志）；`docker compose down` 不会删卷，
