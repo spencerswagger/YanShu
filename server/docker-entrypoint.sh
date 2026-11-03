@@ -14,6 +14,6 @@ mkdir -p "$blob" "$logs"
 chown -R 10001:10001 "$blob" "$logs" 2>/dev/null || true
 
 # 迁移也以非 root 身份执行
-su-exec 10001:10001 /app/yanshu-server -migrate-only
+su-exec yanshu:yanshu /app/yanshu-server -migrate-only
 
-exec su-exec 10001:10001 /app/yanshu-server "$@"
+exec su-exec yanshu:yanshu /app/yanshu-server "$@"
