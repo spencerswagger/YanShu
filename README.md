@@ -28,6 +28,7 @@ docker compose up -d
   curl -s http://127.0.0.1:18080/healthz      # {"status":"ok","api_version":"v1","contract":"v1"}
   docker compose logs yanshu-server | grep -i "sm2 verifier loaded"   # version=0x00010000
   ```
+- **所有镜像都来自国内源**（华为云 SWR，含 postgres 与 app 镜像；不需要访问 Docker Hub）。
 - 端口/镜像标签可选覆盖（不写也能跑）：`YANSHU_PORT=8000 docker compose up -d`，或写一个 `.env`（见 `.env.example`）。
 - 要**改代码自己构建**才用 dev override：`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`。
 
