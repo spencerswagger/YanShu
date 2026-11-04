@@ -35,7 +35,9 @@ COPY web/ ./
 # 下面从实际 COPY 进来的字节现算 sha256 / 导出数 / 版本 / 头长；`YS_KERNEL_SHA` 只作**可选断言**
 # （CI 想固定值时可 --build-arg 传入，传入就必须一致，否则构建失败）。
 ARG YS_KERNEL_COMMIT=unknown
-ARG YS_KERNEL_SHA=""
+# 兜底值 = 当前冻结内核（daa94926… / 140,762 B / 43 导出）；实际校验已改为构建时现算，
+# 这里的默认值只防"忘了传 build-arg"时无参考。历史值见 v0.1.1（c1b87d0a… / 127,313 / 34 导出）。
+ARG YS_KERNEL_SHA=daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de
 COPY server/kernel/yanshu_sm.wasm ./public/ys_kernel.wasm
 RUN node -e "\
 const fs=require('fs'),crypto=require('crypto');\

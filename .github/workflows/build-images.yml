@@ -102,6 +102,17 @@ jobs:
             echo "- **未推送**（缺少 SWR_USERNAME/SWR_PASSWORD（兼容名 DOCKER_USERNAME/DOCKER_PASSWORD））：仅完成构建，镜像未上传注册表" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Compute kernel sha256 (build-time, no hardcoded value)
+        id: kernel
+        if: matrix.name == 'yanshu-web'
+        run: |
+          set -eu
+          CALC="$(sha256sum server/kernel/yanshu_sm.wasm | cut -d' ' -f1)"
+          BYTES="$(wc -c < server/kernel/yanshu_sm.wasm | tr -d ' ')"
+          echo "sha256=${CALC}" >> "$GITHUB_OUTPUT"
+          echo "bytes=${BYTES}" >> "$GITHUB_OUTPUT"
+          echo "[kernel] computed at build time: sha256=${CALC} bytes=${BYTES}"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -110,7 +121,9 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           push: ${{ steps.creds.outputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
-          build-args: ${{ matrix.build-args }}
+          build-args: |
+            ${{ matrix.build-args }}
+            ${{ matrix.name == 'yanshu-web' && format('YS_KERNEL_SHA={0}', steps.kernel.outputs.sha256) || '' }}
           provenance: false
           sbom: false
           labels: |

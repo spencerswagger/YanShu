@@ -1,0 +1,8 @@
+== check_all.sh --selftest（只验聚合三态，不需要 crate）==
+  PASS 全跑全过 → exit 0
+  PASS upgrade/kernel 未跑 → exit 2，且点名两步：结论：INCONCLUSIVE —— 以下步骤未跑或判不出结论：kernel upgrade
+  PASS FAIL 优先于 INCONCLUSIVE → exit 1
+  PASS 未跑不计入 PASS（exit 2，非 0）
+  PASS run_step 取命令自身 rc=7（不被 tail 吞）
+  PASS 单步 FAIL → exit 1：结论：FAIL —— 至少一步判定失败
+自测：PASS

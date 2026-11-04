@@ -1,0 +1,13 @@
+========================================================================================
+契约字面 vs 实现返回：双向一致性核对
+========================================================================================
+契约（HEAD:docs/API.md）：14 个 → ['AUTH_CHALLENGE_INVALID', 'AUTH_CODE_MISMATCH', 'AUTH_MISSING', 'AUTH_SIGNATURE_INVALID', 'AUTH_TOKEN_EXPIRED', 'AUTH_TOKEN_INVALID', 'AUTH_TOKEN_STALE', 'SIG_INPUT_TOO_LONG', 'TRANSFER_CONSUMED', 'TRANSFER_EXPIRED', 'TRANSFER_NOT_FOUND', 'TRANSFER_NOT_READY', 'TRANSFER_REVOKED', 'TRANSFER_STATE_CONFLICT']
+实现（server/internal/spec/errors.go）：14 个 → ['AUTH_CHALLENGE_INVALID', 'AUTH_CODE_MISMATCH', 'AUTH_MISSING', 'AUTH_SIGNATURE_INVALID', 'AUTH_TOKEN_EXPIRED', 'AUTH_TOKEN_INVALID', 'AUTH_TOKEN_STALE', 'SIG_INPUT_TOO_LONG', 'TRANSFER_CONSUMED', 'TRANSFER_EXPIRED', 'TRANSFER_NOT_FOUND', 'TRANSFER_NOT_READY', 'TRANSFER_REVOKED', 'TRANSFER_STATE_CONFLICT']
+----------------------------------------------------------------------------------------
+PASS  契约里的每个码在实现里都能找到
+PASS  实现返回的每个码在契约里都有定义
+PASS  禁用名 AUTH_TOKEN_REVOKED 在两侧都不存在
+INFO  两侧共有的码 14 个：['AUTH_CHALLENGE_INVALID', 'AUTH_CODE_MISMATCH', 'AUTH_MISSING', 'AUTH_SIGNATURE_INVALID', 'AUTH_TOKEN_EXPIRED', 'AUTH_TOKEN_INVALID', 'AUTH_TOKEN_STALE', 'SIG_INPUT_TOO_LONG', 'TRANSFER_CONSUMED', 'TRANSFER_EXPIRED', 'TRANSFER_NOT_FOUND', 'TRANSFER_NOT_READY', 'TRANSFER_REVOKED', 'TRANSFER_STATE_CONFLICT']
+INFO  白名单之外的码（两侧都有，属已定义已实现）：['AUTH_CHALLENGE_INVALID', 'AUTH_MISSING', 'SIG_INPUT_TOO_LONG', 'TRANSFER_NOT_FOUND', 'TRANSFER_NOT_READY', 'TRANSFER_STATE_CONFLICT']
+----------------------------------------------------------------------------------------
+结论：PASS —— 契约与实现字面一一对应

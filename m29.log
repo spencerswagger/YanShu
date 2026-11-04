@@ -1,0 +1,9 @@
+Auto-merging web/src/App.vue
+CONFLICT (content): Merge conflict in web/src/App.vue
+Auto-merging web/src/components/SendPanel.vue
+CONFLICT (content): Merge conflict in web/src/components/SendPanel.vue
+Auto-merging web/src/net/download.js
+CONFLICT (content): Merge conflict in web/src/net/download.js
+Auto-merging web/src/net/upload.js
+CONFLICT (content): Merge conflict in web/src/net/upload.js
+Automatic merge failed; fix conflicts and then commit the result.
