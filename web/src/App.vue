@@ -20,7 +20,8 @@ import { createDirectBuffer } from './net/p2pChunks.js'
 import MyCodeCard from './components/MyCodeCard.vue'
 import SendPanel from './components/SendPanel.vue'
 import InboxPanel from './components/InboxPanel.vue'
-import LogPanel from './components/LogPanel.vue'
+import StatsCard from './components/StatsCard.vue'
+import RecentList from './components/RecentList.vue'
 
 const kernel = shallowRef(null)
 const api = shallowRef(null)
@@ -42,6 +43,32 @@ const manualAttempts = ref(0)
 const inboxRef = ref(null)
 /** 本次会话的真实计数（不做假数字）：成功发送 / 成功接收 / 失败 */
 const counts = reactive({ sent: 0, received: 0, failed: 0 })
+const recentSends = ref([])
+const safetyOpen = ref(false)
+const successRate = computed(() => {
+  const total = counts.sent + counts.received + counts.failed
+  if (!total) return '—'
+  return `${Math.round(((counts.sent + counts.received) / total) * 100)}%`
+})
+function focusSend() {
+  sendRef.value?.focusDrop?.()
+  document.querySelector('.col-main')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+function focusInbox() {
+  inboxRef.value?.refresh?.()
+  document.querySelector('.col-right')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+async function refreshRecent() {
+  try {
+    const all = (await pendingBackend.value?.all?.()) || []
+    recentSends.value = all
+      .filter((r) => r?.kind === 'send')
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, 6)
+  } catch {
+    recentSends.value = []
+  }
+}
 
 /** 模板用的会话镜像（身份对象在 identityManager 里是活的，撞码重生成时会换） */
 const session = reactive({
@@ -60,7 +87,7 @@ const layoutFailed = computed(() => kernel.value?.layoutFailedSignals || [])
 const layoutWarning = computed(() => {
   if (kernelMode.value !== 'wasm-noncontract') return ''
   const why = layoutFailed.value.length ? `未通过：${layoutFailed.value.join('、')}` : '自检未通过'
-  return `当前内核未通过契约布局判据（${why}）：加密是真的，但结果不能作为 YSPK/1.0 契约的验收。`
+  return `加密组件与预期不一致（${why}）：结果暂不作为正式验收。`
 })
 
 function syncSession() {
@@ -78,7 +105,7 @@ onMounted(async () => {
     kernel.value = await createKernel()
     kernelMode.value = kernel.value.mode
     if (!kernel.value.isRealCrypto && kernelMode.value !== 'stub-fake') {
-      bootError.value = kernel.value.reason || '端侧加密内核（WASM）未就绪'
+      bootError.value = kernel.value.reason || '加密组件未就绪'
       booting.value = false
       return
     }
@@ -122,6 +149,7 @@ onMounted(async () => {
     }
 
     await ensureRegistered()
+    await refreshRecent()
   } catch (err) {
     const d = describeError(err)
     bootError.value = `${d.title}${d.hint ? '：' + d.hint : ''}`
@@ -197,6 +225,7 @@ async function doSend({ file, recipient, onProgress, signal }) {
       pendingStore: pendingBackend.value,
     })
     counts.sent += 1
+    await refreshRecent()
     return r
   } catch (err) {
     counts.failed += 1
@@ -282,132 +311,104 @@ async function doReceive({ transferId, onProgress }) {
 </script>
 
 <template>
-  <div class="app-top">
-    <h1 class="brand">
-      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path
-          d="M3 13c4.5 0 6-1.5 7.5-4C12 6 13 4 15 4c3 0 6 3 6 7s-3 7-6 7c-2 0-3-1-4.5-2.5"
-          stroke="currentColor"
-          stroke-width="1.6"
-          stroke-linecap="round"
-        />
-        <circle cx="16.4" cy="9.4" r="1.1" fill="var(--accent)" />
-      </svg>
-      雁书
-    </h1>
-    <span class="tag">{{ kernelLabel }}</span>
-  </div>
+  <div class="app-shell">
+    <header class="app-top">
+      <h1 class="brand">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M3 13c4.5 0 6-1.5 7.5-4C12 6 13 4 15 4c3 0 6 3 6 7s-3 7-6 7c-2 0-3-1-4.5-2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <circle cx="16.4" cy="9.4" r="1.1" fill="var(--accent)" />
+        </svg>
+        雁书
+      </h1>
+      <button type="button" class="icon-btn" aria-label="安全说明" @click="safetyOpen = !safetyOpen">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3 5 6v6c0 4 3 7 7 9 4-2 7-5 7-9V6l-7-3Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+        </svg>
+      </button>
+    </header>
 
-  <p class="lede">你的接收码，告知对方即可收文件。<em>私钥不出本机</em></p>
-
-  <div v-if="booting" class="banner info">正在准备本机密钥与中转连接…</div>
-
-  <div v-if="bootError" class="banner warn">
-    {{ bootError }}
-    <div class="hint" style="margin-top: 6px; text-align: left">
-      加密内核未到位时不会伪造“加密成功”，所有加密操作都会如实报错。
-    </div>
-  </div>
-
-  <div v-if="layoutWarning" class="banner warn">{{ layoutWarning }}</div>
-
-  <div v-if="kernelMode === 'stub-fake'" class="banner warn">
-    开发桩模式：<strong>数据没有加密</strong>，只用于打通界面与传输流程，禁止传真实文件。
-  </div>
-
-  <div v-if="regNotice" class="banner info">{{ regNotice }}</div>
-  <div v-if="rekeyNotice" class="banner warn">{{ rekeyNotice }}</div>
-  <div v-if="regError" class="banner warn">
-    {{ regError }}
-    <div class="row" style="margin-top: 8px">
-      <button type="button" :disabled="regBusy" @click="ensureRegistered({ manual: true })">
-        {{ regBusy ? '重试中…' : '重试' }}
+    <div v-if="booting" class="banner info">正在准备本机密钥与中转连接…</div>
+    <div v-if="bootError" class="banner warn">{{ bootError }}</div>
+    <div v-if="kernelMode === 'stub-fake'" class="banner warn">当前未加密，仅用于本地联调</div>
+    <div v-if="regNotice" class="banner info">{{ regNotice }}</div>
+    <div v-if="rekeyNotice" class="banner warn">{{ rekeyNotice }}</div>
+    <div v-if="regError" class="banner warn">
+      {{ regError }}
+      <button type="button" class="icon-btn" style="margin-left: 8px" aria-label="重试" @click="ensureRegistered({ manual: true })">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
       </button>
     </div>
+
+    <main class="grid">
+      <aside class="col-left">
+        <MyCodeCard
+          :code="session.code"
+          :nickname="session.nickname"
+          :registered="session.registered"
+          :real-crypto="realCrypto"
+          :kernel-mode="kernelMode"
+          :kernel-layout="kernelLayout"
+          :save-nickname="saveNickname"
+        />
+        <StatsCard :sent="counts.sent" :received="counts.received" :rate="successRate" />
+        <div class="safety-line">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="5" y="10" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.6" />
+            <path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="1.6" />
+          </svg>
+          <button type="button" class="link-inline" @click="safetyOpen = !safetyOpen">端到端加密 · 私钥仅存本机</button>
+        </div>
+      </aside>
+
+      <section class="col-main">
+        <SendPanel
+          ref="sendRef"
+          :api="api"
+          :kernel="kernel"
+          :session="session"
+          :send-file="doSend"
+          :resume-send="doResume"
+          :pending-backend="pendingBackend"
+          :p2p-config="{ wsUrl: serverConfig?.ws_url || '', stunUrls: serverConfig?.stun_urls || [] }"
+        />
+      </section>
+
+      <aside class="col-right">
+        <InboxPanel ref="inboxRef" :api="api" :receive="doReceive" />
+        <RecentList :items="recentSends" />
+      </aside>
+    </main>
+
+    <div v-if="safetyOpen" class="safety-sheet" role="dialog" aria-label="安全说明" @click.self="safetyOpen = false">
+      <div class="sheet-body">
+        <div class="spread">
+          <strong>安全说明</strong>
+          <button type="button" class="icon-btn" aria-label="关闭" @click="safetyOpen = false">✕</button>
+        </div>
+        <dl>
+          <dt>威胁模型</dt><dd>防传输被窃与服务器留底；不防对方截图转发。</dd>
+          <dt>信任边界</dt><dd>服务器只见密文与 4 位码，不做指纹核对。</dd>
+          <dt>私钥</dt><dd>只在本机，清除浏览器数据等于换人。</dd>
+          <dt>码</dt><dd>只是寻址，先到先得。</dd>
+        </dl>
+      </div>
+    </div>
+
+    <nav class="bottom-bar">
+      <button type="button" class="primary" @click="focusSend">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 12 20 4l-6 16-3-6-7-2Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+        </svg>
+        发送文件
+      </button>
+      <button type="button" class="ghost" @click="focusInbox">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        接收文件
+      </button>
+    </nav>
   </div>
-
-  <MyCodeCard
-    :code="session.code"
-    :nickname="session.nickname"
-    :registered="session.registered"
-    :real-crypto="realCrypto"
-    :kernel-mode="kernelMode"
-    :kernel-layout="kernelLayout"
-    :save-nickname="saveNickname"
-  />
-
-  <section class="card">
-    <h2>选择操作</h2>
-    <button type="button" class="primary block lg" @click="tab = 'send'">发送文件</button>
-    <button
-      type="button"
-      class="block"
-      style="margin-top: 8px; min-height: 44px"
-      @click="tab = 'inbox'"
-    >
-      接收文件
-    </button>
-  </section>
-
-  <section v-show="tab === 'send'" class="screen" :class="{ on: tab === 'send' }">
-    <SendPanel
-      ref="sendRef"
-      :api="api"
-      :kernel="kernel"
-      :session="session"
-      :send-file="doSend"
-      :resume-send="doResume"
-      :pending-backend="pendingBackend"
-      :p2p-config="{ wsUrl: serverConfig?.ws_url || '', stunUrls: serverConfig?.stun_urls || [] }"
-    />
-  </section>
-
-  <section v-show="tab === 'inbox'" class="screen" :class="{ on: tab === 'inbox' }">
-    <InboxPanel ref="inboxRef" :api="api" :receive="doReceive" />
-  </section>
-
-  <section class="card">
-    <h2>今日已完成 {{ counts.sent + counts.received }} 次</h2>
-    <div class="stats">
-      <div class="stat"><b>{{ counts.sent }}</b><span>已发送</span></div>
-      <div class="stat"><b>{{ counts.received }}</b><span>已接收</span></div>
-      <div class="stat"><b>{{ counts.failed }}</b><span>失败</span></div>
-    </div>
-    <p class="hint">仅统计本次打开页面的真实操作</p>
-  </section>
-
-  <LogPanel />
-
-  <details class="safety">
-    <summary><span class="ug"></span>端到端加密，私钥仅存于本机浏览器 · 安全说明</summary>
-    <div class="body">
-      <dl>
-        <dt>威胁模型</dt>
-        <dd>防范传输途中被窃取与服务器留底；不防范接收方主动截图或转发。</dd>
-        <dt>信任边界</dt>
-        <dd>服务器仅见密文与 4 位码，但未做指纹核对，理论上可被替换代码。</dd>
-        <dt>私钥不备份</dt>
-        <dd>私钥仅存本机（IndexedDB），清除浏览器数据即等同于更换身份，无法找回。</dd>
-        <dt>码不是密码</dt>
-        <dd>4 位码仅用于寻址，先到先得；敏感文件请另行约定。</dd>
-      </dl>
-    </div>
-  </details>
-
-  <details class="footer">
-    <summary>内核与中转信息</summary>
-    <p v-if="kernelSelfTest">
-      内核自检（契约 §2.3 四条）：{{ kernelSelfTest.ok ? '版本 / 包头 / V1 样例解包 / 版本闸门 全过' : '未通过 → ' + Object.entries(kernelSelfTest.checks).filter(([, v]) => !v).map(([k]) => k).join('、') }}
-    </p>
-    <p v-if="kernelBuild">
-      端侧内核：commit {{ kernelBuild.commit.slice(0, 7) }} · {{ kernelBuild.ysVersion }} · HEADER
-      {{ kernelBuild.headerLen }} · {{ kernelBuild.exports }} 导出 / {{ kernelBuild.imports }} import ·
-      sha256 {{ kernelBuild.sha256.slice(0, 12) }}…
-    </p>
-    <p v-else-if="realCrypto">端侧内核来源未记录（未找到 ys_kernel.build.json）。</p>
-    <p v-if="serverConfig">
-      中转：{{ config.apiBase }} · 包版本 {{ serverConfig.crypto_pack_version }} · 块
-      {{ serverConfig.chunk_size }} 字节
-    </p>
-  </details>
 </template>

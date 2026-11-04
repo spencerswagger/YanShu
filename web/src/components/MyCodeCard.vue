@@ -106,49 +106,43 @@ async function copy() {
 </script>
 
 <template>
-  <section class="card">
-    <h2>你的接收码</h2>
-    <div class="codebox">
+  <section class="card code-card">
+    <div class="spread">
       <div class="code">{{ display }}</div>
-      <div v-if="code" class="check">校验 {{ kernelLayout === 'contract' ? 'X' : '—' }}</div>
+      <div class="row" style="gap: 8px; flex: none">
+        <button type="button" class="icon-btn" :disabled="!code" aria-label="复制码" @click="copy">
+          <svg v-if="!copied" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.7" />
+            <path d="M15 5H6a2 2 0 0 0-2 2v9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+          </svg>
+          <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </div>
     </div>
 
-    <div class="row" style="margin-top: 6px">
+    <div class="row" style="margin-top: 10px; gap: 8px">
       <button v-if="!editing" type="button" class="nick" :disabled="!code" @click="startEdit">
         <span>{{ nickname || '设置昵称' }}</span>
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path
-            d="M4 20h4l10-10-4-4L4 16v4Z"
-            stroke="currentColor"
-            stroke-width="1.6"
-            stroke-linejoin="round"
-          />
-          <path d="M13.5 6.5 17.5 10.5" stroke="currentColor" stroke-width="1.6" />
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 20h4l10-10-4-4L4 16v4Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
         </svg>
       </button>
-      <button type="button" class="sm" :disabled="!code" @click="copy">
-        {{ copied ? '已复制' : '复制码' }}
-      </button>
-      <span v-if="!editing" class="hint" style="margin: 0; text-align: left">点昵称即可修改</span>
     </div>
 
     <div v-if="editing" class="nickedit">
       <div class="row" style="flex-wrap: nowrap">
-        <input
-          v-model="draft"
-          type="text"
-          :maxlength="NICK_MAX"
-          aria-label="昵称"
-          :disabled="busy"
-          @keyup.enter="save"
-        />
-        <button type="button" class="primary" :disabled="!canSave" @click="save">
-          {{ busy ? '保存中…' : '保存昵称' }}
+        <input v-model="draft" type="text" :maxlength="NICK_MAX" aria-label="昵称" :disabled="busy" @keyup.enter="save" />
+        <button type="button" class="icon-btn" :disabled="!canSave" aria-label="保存昵称" @click="save">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
         </button>
+        <button type="button" class="icon-btn" aria-label="取消" @click="cancelEdit">✕</button>
       </div>
       <div class="row" style="justify-content: space-between; margin-top: 6px">
         <small>{{ draftLen }} / {{ NICK_MAX }}</small>
-        <button type="button" class="link" :disabled="busy" @click="cancelEdit">取消</button>
       </div>
     </div>
 
@@ -156,9 +150,7 @@ async function copy() {
       <span class="t">{{ notice.title }}</span>{{ notice.detail }}
     </div>
 
-    <p v-if="!registered" class="hint">正在向中转登记这个码…</p>
-    <p v-else-if="kernelMode === 'stub-fake'" class="hint">开发桩（未加密），此码仅用于本地联调。</p>
-    <p v-else-if="!realCrypto" class="hint">端侧加密内核未就绪，此码暂不可用于真实传输。</p>
-    <p v-else-if="kernelLayout !== 'contract'" class="hint">当前内核非契约布局，结果不能作为 YSPK/1.0 验收。</p>
+    <p v-if="!registered" class="hint" style="text-align: left">正在登记…</p>
+    <p v-else-if="kernelMode === 'stub-fake'" class="hint" style="text-align: left">未加密（联调模式）</p>
   </section>
 </template>

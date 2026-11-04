@@ -113,5 +113,6 @@ test('举报文案与 docs/UI-COPY.md 逐字一致，且只在待收卡片出现
     assert.ok(sheet.includes(text), `ReportSheet.vue 缺少：${text}`)
   }
   assert.ok(inbox.includes('<ReportSheet'), '举报入口必须挂在待收卡片里')
+  assert.ok(sheet.includes('aria-label="举报"'), '图标入口必须有 aria-label')
   assert.equal(app.includes('举报'), false, '首屏（App.vue）不许出现举报入口')
 })

@@ -641,3 +641,473 @@ hr {
     transform: none;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════
+   v4 布局与动效（照 previews/ui-review-v4.html 实施）
+   - PC ≥1200：三栏栅格（左码+翻牌器+安全行 / 中拖入与进度 / 右待收+最近）
+   - 移动：单列 + 主操作贴底 56 高 + 34px safe-area
+   ══════════════════════════════════════════════════════════════ */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.app-shell .grid {
+  flex: 1;
+  display: grid;
+  gap: 16px;
+  padding: 0 0 96px; /* 给移动端底部主操作留位 */
+}
+
+@media (min-width: 1200px) {
+  .app-shell .grid {
+    grid-template-columns: 380px minmax(0, 1fr) 360px;
+    align-items: start;
+    padding-bottom: 8px;
+  }
+  .app-shell .bottom-bar {
+    display: none;
+  }
+}
+
+.col-left,
+.col-main,
+.col-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+@media (min-width: 1200px) {
+  .col-left,
+  .col-main,
+  .col-right {
+    height: calc(100dvh - 96px);
+    overflow: auto;
+  }
+}
+
+/* 顶栏图标按钮：48×48（移动与桌面一致，触摸/点击都够大） */
+.icon-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card-2);
+  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex: none;
+}
+.icon-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.icon-btn.lg {
+  width: 48px;
+  height: 48px;
+}
+
+/* 统计翻牌器 */
+.stats-card {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.stats-card .stat .k {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.flip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  font: 700 34px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.flip.sm {
+  font-size: 22px;
+}
+.flip .d {
+  display: inline-block;
+  min-width: 0.62em;
+  text-align: center;
+  transform-origin: 50% 60%;
+  animation: flip-in 360ms cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+@keyframes flip-in {
+  0% {
+    transform: rotateX(-88deg);
+    opacity: 0.2;
+  }
+  60% {
+    transform: rotateX(6deg);
+    opacity: 1;
+  }
+  100% {
+    transform: rotateX(0);
+    opacity: 1;
+  }
+}
+
+/* 安全行（全站唯一一处入口） */
+.safety-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  min-height: 44px;
+}
+.link-inline {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+  min-height: 44px;
+}
+.link-inline:hover {
+  color: var(--text);
+}
+.safety-sheet {
+  position: fixed;
+  inset: 0;
+  background: #00000088;
+  display: grid;
+  place-items: center;
+  z-index: 60;
+  padding: 18px;
+}
+.safety-sheet .sheet-body {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  max-width: 460px;
+  width: 100%;
+}
+.safety-sheet dl {
+  margin: 10px 0 0;
+  display: grid;
+  gap: 8px;
+}
+.safety-sheet dt {
+  font-weight: 700;
+  font-size: 13px;
+}
+.safety-sheet dd {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+/* 拖入区：无文件时即视觉主体 */
+.drop {
+  position: relative;
+  min-height: 260px;
+  border: 2px dashed #2f4048;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  background: #10182080;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease-out,
+    background 0.18s ease-out,
+    transform 0.18s ease-out;
+}
+.drop:hover,
+.drop:focus-visible {
+  border-color: var(--accent);
+  background: #12211f80;
+  outline: none;
+}
+.drop.hot {
+  border-color: var(--accent);
+  background: #122a2580;
+  transform: scale(1.004);
+}
+.drop.landed .center {
+  animation: land 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes land {
+  from {
+    transform: translateY(-8px) scale(0.96);
+    opacity: 0.4;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.drop .ring {
+  position: absolute;
+  inset: 14px;
+  border-radius: 16px;
+  border: 1px solid var(--tint-line);
+  pointer-events: none;
+}
+.drop .center {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 18px;
+}
+.drop .drop-icon {
+  color: var(--accent);
+}
+.drop .title {
+  font-size: 18px;
+  font-weight: 700;
+}
+.drop .sub {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.drop .hidden-input {
+  display: none;
+}
+
+/* 块矩阵：格子只表达状态，不承担点击 */
+.matrix {
+  display: grid;
+  gap: 3px;
+  margin-top: 12px;
+}
+.matrix .c {
+  aspect-ratio: 1 / 1;
+  border-radius: 2px;
+  background: var(--wait, #2a363f);
+}
+.matrix .c.run {
+  background: #e2b04a;
+  animation: cell-pulse 1.1s ease-in-out infinite;
+}
+.matrix .c.done {
+  background: var(--accent);
+}
+.matrix .c.fail {
+  background: #e2685c;
+}
+@keyframes cell-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* 大号速率 / 剩余 */
+.progress-block .bigrate {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.progress-block .rate {
+  font: 700 30px/1 ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.progress-block .unit {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.progress-block .grow {
+  flex: 1;
+}
+
+/* 列表：行高 72（底线 56）、图标 48 */
+.rlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ritem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--card-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  min-height: 56px;
+}
+.ritem.row-72 {
+  min-height: 72px;
+}
+.ritem .rname {
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 190px;
+}
+.ritem .avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--tint);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  flex: none;
+}
+.ritem .who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.pill {
+  font: 600 10.5px/1 ui-monospace, monospace;
+  border-radius: 999px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.pill.ok {
+  color: var(--accent);
+  border-color: var(--tint-line);
+  background: var(--ok-bg);
+}
+.pill.run {
+  color: #e2b04a;
+  border-color: #4a3c1f;
+  background: #1d1710;
+}
+.pill.fail {
+  color: #e2685c;
+  border-color: #4e2a26;
+  background: #241513;
+}
+.card-title {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+/* 空态：插画 + 大按钮填满 */
+.empty-state {
+  display: grid;
+  place-items: center;
+  gap: 14px;
+  padding: 26px 12px 18px;
+  text-align: center;
+}
+.empty-state .empty-art {
+  color: #2a3a44;
+}
+.empty-state .empty-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+/* 底部主操作：移动 56 高整宽 + 34px safe-area；桌面隐藏 */
+.bottom-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px calc(10px + 34px);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid var(--line);
+  z-index: 40;
+}
+.bottom-bar button {
+  flex: 1;
+  min-height: 56px;
+  border-radius: 14px;
+  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.bottom-bar button.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  box-shadow: 0 2px 0 var(--accent-d);
+}
+.bottom-bar button.ghost {
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+/* 动效降级：prefers-reduced-motion 下全部静止 */
+@media (prefers-reduced-motion: reduce) {
+  .flip .d,
+  .matrix .c.run,
+  .drop.landed .center,
+  .drop,
+  .mock::before {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* v4：占满视口宽度（v3 的 412 窄列只适用于旧布局，v4 由栅格接管） */
+#app {
+  max-width: none;
+  padding-left: 14px;
+  padding-right: 14px;
+}
+@media (min-width: 1200px) {
+  #app {
+    max-width: 1600px;
+    margin: 0 auto;
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+}
+
+/* v4：所有可点元素 ≥48×48（触摸与鼠标一致，避免小目标） */
+button,
+[role='button'],
+a[href],
+input[type='text'] {
+  min-height: 48px;
+}
+.nick {
+  min-height: 48px;
+  min-width: 48px;
+}
+.link-inline {
+  min-height: 48px;
+  padding: 0 6px;
+}
+
+.btn-48 {
+  min-height: 48px;
+  min-width: 48px;
+}
+
+/* v4：卡片内按钮一律 ≥48 高（内联样式可能写了更小值，这里统一兜底） */
+.card button,
+.safety-sheet button {
+  min-height: 48px !important;
+}

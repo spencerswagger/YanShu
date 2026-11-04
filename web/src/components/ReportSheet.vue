@@ -20,6 +20,7 @@ const NOTE_MAX = 200
 const props = defineProps({
   api: { type: Object, default: null },
   transferId: { type: String, default: '' },
+  iconOnly: { type: Boolean, default: false },
 })
 
 const open = ref(false)
@@ -76,7 +77,18 @@ async function submit() {
 
 <template>
   <div class="report">
-    <button type="button" class="link" @click="start">举报</button>
+    <button
+      v-if="iconOnly"
+      type="button"
+      class="icon-btn"
+      aria-label="举报"
+      @click="start"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M6 21V4h10l-1.5 4L16 12H6" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+      </svg>
+    </button>
+    <button v-else type="button" class="link" @click="start">举报</button>
 
     <div v-if="open" class="sheet-mask" @click.self="close">
       <div class="sheet" role="dialog" aria-label="举报此文件">
