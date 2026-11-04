@@ -9,6 +9,7 @@
 import { CryptoError } from '../crypto/errors.js'
 import { ApiError } from './client.js'
 import { runPool } from '../lib/pool.js'
+import { takeChunkBytes } from './p2pChunks.js'
 import { info } from '../lib/log.js'
 import { config } from '../config.js'
 import { bytes } from '../lib/bytes.js'
@@ -52,17 +53,17 @@ export async function receiveTransfer(params) {
   }
 }
 
-/**
- * 真流式接收（常量内存）：
- *   ① prelude → `ys_unpack_stream_begin`（验签 + 清单校验，拿到 meta）；
- *   ② 逐块 `GET /chunks/{i}` → `ys_unpack_stream_chunk` → **立即交给 sink 写出**（不攒明文）；
- *   ③ `ys_unpack_stream_end()` 全部到齐才算成功（缺块/摘要不符 → 报错，不会交出残缺文件）。
- *
- * `sink` 由调用方给：浏览器用 File System Access（`showSaveFilePicker`）流式写盘，
- * 没有该 API 时退回"分块 Blob 累积"（此时明文仍会驻留内存，见 README 的兼容性说明）。
- */
 const reportStream = (onProgress) => (patch) => onProgress?.(patch)
 
+/**
+ * 真流式接收（**默认路径**，常量内存）：
+ *   ① prelude → `ys_unpack_stream_begin`（验签 + 清单校验，拿到 meta）；
+ *   ② 逐块取切片 → 按 §6.3 重建 16B 记录头 → `ys_unpack_stream_chunk` → **立即交给 sink 写出**；
+ *   ③ `ys_unpack_stream_end()` 全部到齐才算成功（缺块/摘要不符 → 报错，不会交出残缺文件）。
+ *
+ * 直连（P2P）与中转**共用同一个 sink**：`directBuffer` 里有这块就用它，没有就 `GET`；
+ * 直连块喂不进内核（长度/序号不对）时当块改走中转补齐 —— 直连只是快路，不影响完整性。
+ */
 async function receiveStreaming({
   api,
   kernel,
@@ -93,25 +94,31 @@ async function receiveStreaming({
   })
 
   const sink = await (sinkFactory ? sinkFactory(meta) : createMemorySink())
+  const relayGet = (i) => api.getChunk({ transferId, downloadId: prelude.downloadId, index: i })
+  const unpackSlice = (index, slice) =>
+    kernel.streamUnpackChunk(
+      bytes(kernel.segmenter.buildRecordHeader(index, slice.length - 16, chunkCount), slice),
+    )
+
   let done = 0
-  try {
-    for (let index = 0; index < chunkCount; index++) {
-      if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-      const slice = await api.getChunk({ transferId, downloadId: prelude.downloadId, index })
-      // 收到的切片是 `CHUNK_CT‖TAG`（pt+16）：按契约 §6.3 重建 16B 块记录头再喂内核
-      const record = bytes(
-        kernel.segmenter.buildRecordHeader(index, slice.length - 16, chunkCount),
-        slice,
-      )
-      const plain = kernel.streamUnpackChunk(record)
-      await sink.write(plain)
-      done += plain.length
-      report({ phase: 'downloading', done, total: totalSize, message: `解密块 ${index + 1}/${chunkCount}` })
+  for (let index = 0; index < chunkCount; index++) {
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+    const picked = directBuffer
+      ? await takeChunkBytes({ directBuffer, index, getChunk: relayGet })
+      : { bytes: await relayGet(index), source: 'relay' }
+    let plain
+    try {
+      plain = unpackSlice(index, picked.bytes)
+    } catch (err) {
+      if (picked.source !== 'direct') throw err
+      // 直连块不可信 → 当块回落中转补齐（不交残缺文件）
+      plain = unpackSlice(index, await relayGet(index))
     }
-    kernel.streamUnpackEnd()
-  } finally {
-    /* 会话由内核在 end/下次 begin 时重置 */
+    await sink.write(plain)
+    done += plain.length
+    report({ phase: 'downloading', done, total: totalSize, message: `解密块 ${index + 1}/${chunkCount}` })
   }
+  kernel.streamUnpackEnd()
 
   await sink.close()
   if (ack) {
@@ -119,10 +126,22 @@ async function receiveStreaming({
     await api.ack({ transferId, downloadId: prelude.downloadId })
   }
   info('接收完成（流式）', { bytes: done, chunks: chunkCount })
-  return { name: sink.name, size: done, transferId }
+  return { name: sink.name, size: done, transferId, dataVerified: true }
 }
 
-async function receiveOnce({ api, kernel, session, transferId, senderPublic, onProgress, signal, save, ack = true, attempt }) {
+async function receiveOnce({
+  api,
+  kernel,
+  session,
+  transferId,
+  senderPublic,
+  onProgress,
+  signal,
+  save,
+  ack = true,
+  attempt,
+  directBuffer,
+}) {
   void attempt
   const report = (patch) => onProgress?.(patch)
 
@@ -172,8 +191,22 @@ async function receiveOnce({ api, kernel, session, transferId, senderPublic, onP
       [...Array(chunkCount).keys()],
       async (index) => {
         if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-        const bytes = await api.getChunk({ transferId, downloadId: prelude.downloadId, index })
-        unpack.feed(index, bytes)
+        // 直连收到的块优先（`directBuffer` 由直连通道灌入）；没有就走中转，行为与原来一致
+        const relayGet = (i) => api.getChunk({ transferId, downloadId: prelude.downloadId, index: i })
+        const picked = await takeChunkBytes({ directBuffer, index, getChunk: relayGet })
+        let bytes = picked.bytes
+        if (picked.source === 'direct') {
+          // 直连块不可信：喂不进内核（长度/序号不对）就当这块没收到，改走中转补齐，
+          // 绝不因为"直连半途失败"交出残缺文件。
+          try {
+            unpack.feed(index, bytes)
+          } catch {
+            bytes = await relayGet(index)
+            unpack.feed(index, bytes)
+          }
+        } else {
+          unpack.feed(index, bytes)
+        }
         done += bytes.length
         report({ phase: 'downloading', done, total: meta.total_ciphertext_bytes || done, message: `下载块 ${index + 1}/${chunkCount}` })
       },

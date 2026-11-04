@@ -1,8 +1,9 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { decode as b64uDecode } from '../lib/base64url.js'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent, clock } from '../lib/format.js'
+import { createSignaler } from '../net/signal.js'
 import { config } from '../config.js'
 
 const props = defineProps({
@@ -12,6 +13,8 @@ const props = defineProps({
   sendFile: { type: Function, required: true },
   resumeSend: { type: Function, required: true },
   pendingBackend: { type: Object, default: null },
+  /** 服务端下发的直连配置：{ wsUrl, stunUrls }；ws_url 为空则不尝试打洞 */
+  p2pConfig: { type: Object, default: null },
 })
 
 const emit = defineEmits(['log'])
@@ -28,15 +31,29 @@ const busy = ref(false)
 const abort = ref(null)
 const pending = ref([])
 
+/**
+ * 直连状态：默认中转（体验不变）；打洞只在后台静默尝试，打通后由用户点一下才切。
+ * 失败/超时一律回到 idle，不弹错——中转本来就是默认路径。
+ */
+const direct = reactive({ status: 'idle', enable: null, notice: '' })
+const canSwitchDirect = computed(() => direct.status === 'ready' && typeof direct.enable === 'function')
+
+function switchDirect() {
+  if (!canSwitchDirect.value) return
+  direct.enable()
+  direct.status = 'direct'
+  direct.notice = '已切换直连，剩余块走点对点'
+}
+
 /** 进度格：按"计划块数"画（服务端块 1 MiB），最多 12 格，避免长文件画几百个方块 */
 const chunkTotal = computed(() => {
   if (!file.value) return 0
   return Math.min(12, Math.max(1, Math.ceil(file.value.size / config.chunkSize)))
 })
 const chunkDone = computed(() => {
-  const pct = percent(progress.value.done, progress.value.total)
+  const pctv = percent(progress.value.done, progress.value.total)
   if (phase.value === 'done') return chunkTotal.value
-  return Math.floor((pct / 100) * chunkTotal.value)
+  return Math.floor((pctv / 100) * chunkTotal.value)
 })
 const pct = computed(() => percent(progress.value.done, progress.value.total))
 
@@ -84,6 +101,25 @@ async function send() {
   lastTransfer.value = null
   phase.value = 'packing'
   abort.value = new AbortController()
+  let signaler = null
+  const wsUrl = props.p2pConfig?.wsUrl || ''
+  const stunUrls = props.p2pConfig?.stunUrls || []
+  if (wsUrl && stunUrls.length) {
+    // 打洞是"锦上添花"：连不上信令也照常走中转
+    try {
+      signaler = createSignaler({
+        wsUrl,
+        client: props.api.client,
+        kernel: props.kernel,
+        session: props.session,
+      })
+      direct.status = 'trying'
+      await signaler.open()
+    } catch {
+      signaler = null
+      direct.status = 'idle'
+    }
+  }
   try {
     const result = await props.sendFile({
       file: file.value,
@@ -93,6 +129,23 @@ async function send() {
         progress.value = { done: p.done, total: p.total, message: p.message }
       },
       signal: abort.value.signal,
+      p2p: signaler
+        ? {
+            signaler,
+            stunUrls,
+            onStatus: (status) => {
+              if (status === 'direct') direct.status = 'direct'
+              else if (status === 'fallback') {
+                direct.status = 'fallback'
+                direct.notice = '直连已断开，已回到中转继续'
+              } else direct.status = 'idle'
+            },
+            onCandidate: ({ enable }) => {
+              direct.enable = enable
+              direct.status = 'ready'
+            },
+          }
+        : null,
     })
     lastTransfer.value = result
     phase.value = 'done'
@@ -104,6 +157,7 @@ async function send() {
     emit('log', d.title)
   } finally {
     busy.value = false
+    signaler?.close()
   }
 }
 
@@ -216,6 +270,14 @@ loadPending()
             :key="n"
             :class="{ done: n <= chunkDone, busy: n === chunkDone + 1 }"
           />
+        </div>
+      </div>
+
+      <div v-if="canSwitchDirect || direct.notice" class="banner info">
+        <span v-if="direct.notice">{{ direct.notice }}</span>
+        <span v-else>当前链路已可直连，切换后剩余块不再经过中转。</span>
+        <div v-if="canSwitchDirect" class="row" style="margin-top: 6px">
+          <button type="button" class="sm" @click="switchDirect">改用直连，速度更快</button>
         </div>
       </div>
 
