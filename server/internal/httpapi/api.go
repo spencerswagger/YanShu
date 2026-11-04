@@ -16,6 +16,7 @@ import (
 	"github.com/spencerswagger/YanShu/server/internal/blob"
 	"github.com/spencerswagger/YanShu/server/internal/config"
 	"github.com/spencerswagger/YanShu/server/internal/ratelimit"
+	"github.com/spencerswagger/YanShu/server/internal/signal"
 	"github.com/spencerswagger/YanShu/server/internal/spec"
 	"github.com/spencerswagger/YanShu/server/internal/store"
 )
@@ -31,6 +32,7 @@ type API struct {
 	locks    ratelimit.Lockout
 	log      *slog.Logger
 	now      func() time.Time
+	hub      *signal.Hub
 }
 
 // New 组装 API。
@@ -48,6 +50,7 @@ func New(cfg config.Config, st *store.Store, blobs blob.Store, v auth.Verifier, 
 		locks:    locks,
 		log:      log,
 		now:      func() time.Time { return time.Now().UTC() },
+		hub:      signal.New(),
 	}
 }
 

@@ -68,8 +68,3 @@ func (a *API) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		Contract:   "v1",
 	})
 }
-
-// handleWS 目前未实现（契约见 API.md §9）。见 docs/DRAFT-FIELDS.md 的偏离清单。
-func (a *API) handleWS(w http.ResponseWriter, r *http.Request) {
-	writeError(w, r, apiError{code: spec.ErrServiceUnavailable})
-}

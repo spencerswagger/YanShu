@@ -885,23 +885,21 @@ func TestAuditPathIsRouteTemplate(t *testing.T) {
 	}
 }
 
-// 裁决 D1：WS 端点必须明确返回 503（不挂起），inbox 轮询可用且不被限速误伤。
-func TestWSUnavailableAndInboxPolling(t *testing.T) {
+// WS 已从 503 占位升级为真信令：普通 GET（非升级请求）必须快速返回 426，
+// 且 inbox 轮询仍可用、不被限速误伤（§9.6 的降级路径保持有效）。
+func TestWSRequiresUpgradeAndInboxPolling(t *testing.T) {
 	e := newEnv(t, "")
 	code, _ := e.register("poller")
 
 	start := time.Now()
 	resp := e.do(http.MethodGet, spec.PathWS, nil, nil)
-	if resp.status != http.StatusServiceUnavailable {
-		t.Fatalf("ws status = %d", resp.status)
+	if resp.status != http.StatusUpgradeRequired {
+		t.Fatalf("ws status = %d, want 426", resp.status)
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Fatal("ws endpoint must fail fast, not hang")
 	}
-	var er spec.ErrorResponse
-	if err := json.Unmarshal(resp.body, &er); err != nil || er.Error.Code != string(spec.ErrServiceUnavailable) {
-		t.Fatalf("ws body = %s", resp.body)
-	}
+	// 非升级请求由 WebSocket 库拒绝，正文不是我们的 JSON 信封；只断言状态码与快速失败。
 
 	// 30 秒轮询 ≈ 2 次/分钟；这里连拉 6 次，必须全部 200。
 	for i := 0; i < 6; i++ {
