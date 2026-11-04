@@ -31,23 +31,34 @@ RUN npm config set registry https://repo.huaweicloud.com/repository/npm/ \
 # 源码（web/ 全部内容，含 public/_headers、scripts/）
 COPY web/ ./
 
-# 冻结内核：从仓库里已提交的 server/kernel/yanshu_sm.wasm 取，校验 sha256 后落成 web 产物
+# 冻结内核：内核由 server/kernel/ 决定，**勿写死 sha / 导出数**（历史值见 v0.1.1）。
+# 下面从实际 COPY 进来的字节现算 sha256 / 导出数 / 版本 / 头长；`YS_KERNEL_SHA` 只作**可选断言**
+# （CI 想固定值时可 --build-arg 传入，传入就必须一致，否则构建失败）。
 ARG YS_KERNEL_COMMIT=unknown
-ARG YS_KERNEL_SHA=c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f
+ARG YS_KERNEL_SHA=""
 COPY server/kernel/yanshu_sm.wasm ./public/ys_kernel.wasm
 RUN node -e "\
 const fs=require('fs'),crypto=require('crypto');\
 const buf=fs.readFileSync('public/ys_kernel.wasm');\
 const sha=crypto.createHash('sha256').update(buf).digest('hex');\
-const want=process.env.YS_KERNEL_SHA;\
-if(sha!==want){console.error('[kernel] sha256 不匹配：实际 '+sha+'，期望 '+want+'（内核升级请同步更新 YS_KERNEL_SHA）');process.exit(1);}\
+const want=(process.env.YS_KERNEL_SHA||'').trim();\
+if(want && sha!==want){console.error('[kernel] sha256 与传入的 YS_KERNEL_SHA 不一致：实际 '+sha+'，期望 '+want);process.exit(1);}\
+const mod=new WebAssembly.Module(buf);\
+const inst=new WebAssembly.Instance(mod,{});\
+const ex=inst.exports||{};\
+const fnNames=Object.keys(ex).filter(function(k){return typeof ex[k]==='function';});\
+const ver=fnNames.indexOf('ys_version')>=0?(ex.ys_version()>>>0):0;\
+const hdr=fnNames.indexOf('ys_header_len')>=0?ex.ys_header_len():0;\
 const commit=process.env.YS_KERNEL_COMMIT||'unknown';\
 fs.writeFileSync('public/ys_kernel.build.json',JSON.stringify({\
 commit,ref:commit.slice(0,7),builtAt:new Date().toISOString(),\
-sha256:sha,bytes:buf.length,imports:0,exports:34,\
-ysVersion:'0x10000',headerLen:112,unpackV1Arity:6,hasSignDer:true,hasPackV1:true\
-},null,2)+'\n');\
-console.log('[kernel] frozen sha256='+sha+' bytes='+buf.length);" \
+sha256:sha,bytes:buf.length,imports:WebAssembly.Module.imports(mod).length,\
+exports:fnNames.length,hasMemory:!!ex.memory,\
+ysVersion:'0x'+ver.toString(16),headerLen:hdr,\
+unpackV1Arity:(fnNames.indexOf('ys_unpack_v1')>=0?ex.ys_unpack_v1.length:0),\
+hasSignDer:fnNames.indexOf('ys_sm2_sign_der')>=0,hasPackV1:fnNames.indexOf('ys_pack_v1')>=0\
+},null,2)+'\\n');\
+console.log('[kernel] sha256='+sha+' bytes='+buf.length+' exports='+fnNames.length+' version=0x'+ver.toString(16)+' header='+hdr);" \
  && node scripts/ensure-wasm.mjs
 
 # 构建期环境变量（默认同源反代 /v1，通常无需覆盖；只有前端直连外部 API 时才传）
