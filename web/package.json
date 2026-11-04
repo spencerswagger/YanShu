@@ -18,7 +18,8 @@
     "siginput:dump": "node scripts/dump-siginput.mjs",
     "siginput:check": "node scripts/check-siginput.mjs",
     "pretest": "node scripts/ensure-wasm.mjs",
-    "prebuild": "node scripts/ensure-wasm.mjs"
+    "prebuild": "node scripts/ensure-wasm.mjs",
+    "evidence:ui": "node scripts/v4-evidence.mjs"
   },
   "dependencies": {
     "vue": "^3.5.0"
