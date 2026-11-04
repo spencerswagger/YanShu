@@ -150,8 +150,9 @@ SIG_INPUT_LEN = 7（"YSAUTH1"） + 1（PURPOSE） + 32（NONCE） + len(字段�
 | `0x06` | `WS_HELLO` | `CODE(4 ASCII)` | 4 | **44** |
 | `0x07` | `TRANSFER_ACK` | `RECEIVER_CODE(4) ‖ TRANSFER_ID(32)` | 36 | **76** |
 | `0x08` | `UPLOAD_TOKEN_ISSUE` | `SENDER_CODE(4) ‖ TRANSFER_ID(32)` | 36 | **76** |
+| `0x09` | `ABUSE_REPORT` | `REPORTER_CODE(4 ASCII) ‖ TRANSFER_ID(32 ASCII 小写 hex)` | 36 | **76** |
 
-共 **8 个** `PURPOSE`（`0x01`–`0x08`）；上表总长 = `7 + 1 + 32 + 字段串` = 40 + 字段串，与实测一致，最长仍是 `REGISTER` 的 **109**。
+共 **9 个** `PURPOSE`（`0x01`–`0x09`）；上表总长 = `7 + 1 + 32 + 字段串` = 40 + 字段串，与实测一致，最长仍是 `REGISTER` 的 **109**。
 
 **`0x08 UPLOAD_TOKEN_ISSUE` 的逐字节定义**（重签发端点 §1.7.5 用）：
 
@@ -388,6 +389,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 块 | `transfer_id`、`index`、`length`、`ciphertext_sm3`（幂等比对用）、`stored_at` |
 | 挑战 | `challenge_id`、`purpose`、`nonce`（协议数据，过期即删）、`expires_at`、`used` |
 | 派生状态（服务端内部，无业务内容） | `prelude_received`、`received_chunks`（位图或行集）、`upload_token_sm3`、`uploaded_bytes`、下载租约与取件记录（`download_id`、`lease_expires_at`、`acked_at`）、幂等键映射（`idempotency_key → transfer_id`，≤600 秒） |
+| 举报 | `transfer_id`、`reporter_code`、`reason`、`note`（举报人自填，≤200 字节，服务端可见）、`created_at`、`distinct_reports`（计数） |
 | 审计 | `ip`、`method`、`route_template`（**路由模板，如 `/v1/transfers/{id}/chunks/{index}`，不含实际路径参数**）、`status`、`bytes`、`ts`、`request_id` |
 
 白名单的两条硬规矩：
@@ -433,6 +435,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 17 | POST | `/v1/transfers/{id}/revoke` | 签名 `TRANSFER_REVOKE` | 发送方主动撤回 |
 | 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`。**v1 定义并实现**；部署方可配置关闭（关闭返回 `501 FEATURE_DISABLED`，代价是吊销后需重建传输并重传）。细则见 §1.7.5 |
 | 19 | WS | `/v1/ws` | 首帧签名 `WS_HELLO` | 在线状态、收件通知、直传信令。**v1 已实现**：连接后 10 秒内必须发 `HELLO`（`WS_HELLO` 签名）进入已认证态；握手、帧类型与限速见 §9 |
+| 20 | POST | `/v1/transfers/{id}/report` | 签名 `ABUSE_REPORT` | 举报一条传输。**v1 定义并实现**：只记录、不改变传输状态，下架由运维执行（§11.5） |
 
 ---
 
@@ -873,6 +876,7 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
 | `POST /complete` | 是（重复 → 200） | — |
 | `POST /ack` | 是（重复 → 200） | — |
 | `POST /revoke` | 是（重复 → 200） | 终态非 REVOKED → `409` |
+| `POST /report` | 是（同人同包重复 → `202` + 同一 `report_id`，不重复计数） | — |
 
 ### 8.3 切换传输路径（中转 ↔ 直传）时的续传
 
@@ -1073,6 +1077,8 @@ WS 层 `ERROR` 帧里的 `code` 复用 §10.1/§10.2 的同一套常量（如 `S
 | 按传输 | `GET /prelude` + `GET /chunks/{i}` | 600 次/分钟 | `429` |
 | 按传输 / 按码 | `POST /transfers/{id}/token` | 10 次/分钟 / 30 次/分钟 | `429`（`scope: "transfer"` / `"code"`，§1.7.5②） |
 | 按 IP | 新建 WS 连接 | 10 次/分钟 | 连接被拒（HTTP 429 或 close `4429`） |
+| 按码 | `POST /transfers/{id}/report` | 5 次/小时 | `429`（`scope: "code"`） |
+| 按 IP | `POST /transfers/{id}/report` | 20 次/小时 | `429`（`scope: "ip"`） |
 
 ### 11.2 `429` 响应语义
 
@@ -1109,7 +1115,54 @@ Content-Type: application/json
 
 - 单码并发未终结传输上限 20；超出 → `429`（`scope: "code"`）。
 - 单 IP 未取走密文总量上限（默认 8 GiB）→ 统一 `507 INSUFFICIENT_STORAGE`（配额类，不是速率类；`429` 只用于 §11.1 的时间窗限速）。
-- 举报下架：**v1 不提供公开举报入口**，只保留内部 `REVOKED` 终结态（运营手动撤回），语义与用户撤回完全一致。排期统一记在 §15，本节不重复列排期。
+- 举报与下架：v1 提供**举报记录**接口（`POST /v1/transfers/{id}/report`，§11.5），**举报不改变传输状态**；下架由运维在服务端执行（`state → REVOKED` + 删密文 + 保留墓碑），对外表现与用户撤回一致。人工审核、申诉、自动内容识别不在 v1（排期见 §15）。
+
+### 11.5 举报与下架（v1 最小定义）
+
+**端点**：`POST /v1/transfers/{id}/report`
+
+**鉴权**：走 §1.2 的挑战/签名，新增用途 **`0x09 ABUSE_REPORT`**（§1.3）：
+`SIG_INPUT = "YSAUTH1"(7) ‖ 0x09(1) ‖ NONCE(32) ‖ REPORTER_CODE(4 ASCII) ‖ TRANSFER_ID(32 ASCII 小写 hex)` = **76 字节**，两字段定长、不加长度前缀。
+*为什么不复用现有用途*：举报既不是撤回（`0x04`，仅发送方）也不是取件确认（`0x07`，仅接收方），复用会让"同一 nonce 换用途"无法被检测——§1.3 要求 `purpose` 必须参与签名，用途即权限。
+
+**请求体**：
+
+```json
+{ "reason": "ABUSE", "note": "冒充登录页" }
+```
+
+- `reason`：必填，枚举 `ABUSE` / `CSAM` / `MALWARE` / `OTHER`（大小写敏感）；其它值 → `400 BAD_REQUEST`。
+- `note`：可选，UTF-8，**≤ 200 字节**；含控制字符 → `400 BAD_REQUEST`。`note` 服务端可见并原样入库，**MUST NOT** 放文件名、明文内容、身份信息。
+- 未知字段 → `400 FIELD_NOT_ALLOWED`（§0.3 全局约定）。
+
+**响应 `202`**：
+
+```json
+{ "report_id": "r_7f3a1c9e", "state": "RECORDED", "distinct_reports": 3 }
+```
+
+- `state` 在 v1 **只有** `RECORDED` 一个值（不返回 `TAKEDOWN`）。
+- `distinct_reports`：该传输被多少个不同码举报过（同一码重复举报不累加）。
+
+**幂等**：同一 `reporter_code` + 同一 `transfer_id` 只记一条；重复举报 → `202` + **同一个** `report_id`，`distinct_reports` 不变（§8.2）。
+
+**下架语义（写死）**：**举报不改变传输状态**。服务端收到举报只做三件事：写一条举报记录、维护 `distinct_reports` 计数、记审计（只记 `route_template`，**不记** `note` 正文）。
+**不做**：不改 `state`、不删密文、不通知上传者、不解析传输内容、不做人工审核。
+
+**谁有权下架**：v1 **不提供**管理 HTTP 端点。下架由运维在服务端执行，走与用户撤回**完全相同**的终结路径——`state → REVOKED`、删除该传输的密文目录、保留墓碑行；此后任何取件/状态查询一律 `410 TRANSFER_REVOKED`（§5.2）。
+*理由*：`transfer_id` 是随链接/二维码扩散的能力凭证，"任何持 id 的已认证用户举报即下架"等于给所有人一条删他人文件的路径（恶意删档 + DoS）；CSAM 这类需要即时处置的场景在 v1 走运维介入，用延迟换"不可被滥用"。运维操作本身不进契约的 HTTP 面，避免多一套管理员鉴权与凭据。
+
+**错误与限速**：
+
+| 情形 | 响应 |
+|---|---|
+| 传输不存在 / `transfer_id` 格式错 | `404 TRANSFER_NOT_FOUND` |
+| 传输已终结（`REVOKED` / `EXPIRED` / `CONSUMED`） | `410` + 对应 `TRANSFER_*`（§5.2） |
+| 举报自己发出的传输 | `202` 照常记录（不做特殊处理，避免泄露"请求者是不是发送方"） |
+| `reason` 非法 / `note` 超长或含控制字符 / 未知字段 | `400 BAD_REQUEST` / `400 FIELD_NOT_ALLOWED` |
+| 同一码 > 5 次/小时、同一 IP > 20 次/小时 | `429 RATE_LIMITED`（`scope: "code"` / `"ip"`，§11.1） |
+
+**不新增错误码**：全部复用 §10.1 现有码，两侧 parity 仍是 14 码。新增码必须实现侧同步落地，否则 parity 会判"契约有、实现无"。
 
 ---
 
@@ -1168,7 +1221,7 @@ Content-Type: application/json
 | 项 | v1 口径 | 排期 |
 |---|---|---|
 | **1GB 级流式分块 API** | v1 只有既有的分块上传/下载：`PUT /chunks/{index}`（§6.4）、`GET /chunks/{index}`（§7.4）、`prelude` 一次性进出（§6.3 / §7.3）。服务端按块存、按块发，端侧逐块解密落盘，但**接口层不做流式端点**。上限口径看两处：单包 = `plaintext_size ≤ 4 GiB`，单块 = `chunk_size ≤ 1 MiB`，块数 = `chunk_count ≤ 1048576`（字段约束见 §6.1，包级限值见 `CRYPTO-PACK.md` §14） | 下一轮：边传边解（请求/响应体流式，无整包落内存或落盘）。只加端点与传输方式，**不改块格式与 AAD** |
-| 公开举报入口 | 无公开入口；只保留内部 `REVOKED` 终结态（运营手动撤回），语义与用户撤回一致（§11.4） | v2（职责见需求基线 §6） |
+| 举报的处理流程 | v1 只提供**举报记录**接口（§11.5，`202 RECORDED`）与运维下架；**不含**人工审核队列、申诉通道、自动内容识别（哈希库/模型扫描）。下架动作与用户撤回同一终结路径（§5.2） | 审核与申诉排期 v2 |
 | 用户码校验字符 | 码固定 **4 位**，v1 不启用校验字符；实现可本地计算 `check_symbol()` 作输入框前置防误输提示，不上行、不改变码长度（`CRYPTO-PACK.md` §3.4） | 需要时升 5 位展示，属契约变更，需 ADR |
 | WS 帧 `INBOX_SYNC` / `INBOX_SNAPSHOT` / `TRANSFER_STATE`（§9.3） | 信令与在线表已实现（§9.1–§9.5），但这三种帧**未实现**：服务端不发送、也不接受。收件方靠 §7.1 `inbox` 拉取；传输状态变化靠轮询 `GET /transfers/{id}/status` | 下一轮；帧格式已在 §9.3 定死，实现时**不需要**再改契约 |
 | TURN / UDP 中继（§9.5） | **明确不做**：不部署 TURN、不签发凭据、不提供 relay 候选、不转发媒体或数据；直传只走 STUN 打洞，失败即回中转 | 无排期（产品与安全决策，见需求基线） |
