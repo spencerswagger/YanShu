@@ -48,7 +48,7 @@ async function take(item) {
         }
       },
     })
-    notice.value = `已取回并落盘：${result.name}（${fmtBytes(result.size)}）`
+    notice.value = `已保存至本机：${result.name}（${fmtBytes(result.size)}）`
     items.value = items.value.filter((i) => i.transfer_id !== item.transfer_id)
   } catch (err) {
     const d = describeError(err)
@@ -67,10 +67,13 @@ refresh()
 <template>
   <section class="card">
     <div class="row" style="justify-content: space-between">
-      <h2 style="margin: 0">待收</h2>
-      <button type="button" :disabled="loading" @click="refresh">{{ loading ? '刷新中…' : '刷新' }}</button>
+      <h2 style="margin: 0">
+        {{ items.length ? `${items.length} 个文件待接收` : '暂无待接收文件' }}
+      </h2>
+      <button type="button" class="sm" :disabled="loading" @click="refresh">
+        {{ loading ? '刷新中…' : '刷新' }}
+      </button>
     </div>
-    <p class="hint">列表里只有发送方码与大小；文件名与类型要解清单后才看得到，中转看不到。</p>
 
     <p v-if="notice" class="banner info">{{ notice }}</p>
     <p v-if="errorText" class="banner warn">{{ errorText }}</p>
@@ -93,7 +96,7 @@ refresh()
             :disabled="activeId === item.transfer_id"
             @click="take(item)"
           >
-            {{ activeId === item.transfer_id ? '取回中…' : '取回并解密' }}
+            {{ activeId === item.transfer_id ? '解密中…' : '下载并解密' }}
           </button>
           <ReportSheet :api="api" :transfer-id="item.transfer_id" />
         </div>
@@ -110,6 +113,6 @@ refresh()
         </div>
       </li>
     </ul>
-    <p v-else-if="!loading" class="meta">没有待收文件。有人给你发时，这里会出现（刷新或重进页面即可）。</p>
+    <p v-else-if="!loading" class="hint">暂无待接收文件</p>
   </section>
 </template>

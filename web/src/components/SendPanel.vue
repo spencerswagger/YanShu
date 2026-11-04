@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { decode as b64uDecode } from '../lib/base64url.js'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent, clock } from '../lib/format.js'
+import { config } from '../config.js'
 
 const props = defineProps({
   api: { type: Object, default: null },
@@ -26,6 +27,18 @@ const lastTransfer = ref(null)
 const busy = ref(false)
 const abort = ref(null)
 const pending = ref([])
+
+/** 进度格：按"计划块数"画（服务端块 1 MiB），最多 12 格，避免长文件画几百个方块 */
+const chunkTotal = computed(() => {
+  if (!file.value) return 0
+  return Math.min(12, Math.max(1, Math.ceil(file.value.size / config.chunkSize)))
+})
+const chunkDone = computed(() => {
+  const pct = percent(progress.value.done, progress.value.total)
+  if (phase.value === 'done') return chunkTotal.value
+  return Math.floor((pct / 100) * chunkTotal.value)
+})
+const pct = computed(() => percent(progress.value.done, progress.value.total))
 
 /** 码的归一化口径由内核给（`ys_normalize_code`），前端不自己实现 Crockford。 */
 const normalized = computed(() => {
@@ -135,17 +148,12 @@ loadPending()
 
 <template>
   <section class="card">
-    <h2>发文件</h2>
+    <h2>{{ phase === 'done' ? '已发送，等待对方接收' : phase === 'packing' || phase === 'uploading' ? '加密并上传中' : '发送文件' }}</h2>
+
     <div class="stack">
       <div>
-        <label for="file">选择文件</label>
-        <input id="file" type="file" :disabled="busy" @change="pickFile" />
-        <p v-if="file" class="meta">{{ file.name }} · {{ fmtBytes(file.size) }}</p>
-      </div>
-
-      <div>
-        <label for="peer">对方 4 位码</label>
-        <div class="row">
+        <label for="peer">输入对方接收码</label>
+        <div class="row" style="flex-wrap: nowrap">
           <input
             id="peer"
             v-model="codeInput"
@@ -154,39 +162,80 @@ loadPending()
             autocapitalize="characters"
             autocomplete="off"
             placeholder="如 AWQW"
-            style="flex: 1"
             :disabled="busy"
             @blur="lookup"
           />
-          <button type="button" :disabled="!normalized || busy" @click="lookup">查昵称</button>
+          <button type="button" class="sm" :disabled="!normalized || busy" @click="lookup">
+            查询接收方
+          </button>
         </div>
-        <p v-if="codeHint" class="hint">{{ codeHint }}</p>
-        <p v-if="recipient" class="meta">
-          将发给：<strong>{{ recipient.nickname }}</strong>（{{ recipient.code }}）
-        </p>
+        <p v-if="codeHint" class="hint" style="text-align: left">{{ codeHint }}</p>
         <p v-if="lookupError" class="meta" style="color: var(--warn-ink)">{{ lookupError }}</p>
       </div>
 
-      <div class="row">
-        <button type="button" class="primary" :disabled="!file || !recipient || busy" @click="send">
-          加密并发送
-        </button>
-        <button v-if="busy" type="button" @click="cancel">取消</button>
+      <div v-if="recipient" class="confirm">
+        <div class="avatar">{{ (recipient.nickname || recipient.code).slice(0, 1) }}</div>
+        <div>
+          <b>{{ recipient.nickname }}</b>
+          <div class="meta" style="font-family: ui-monospace, monospace">{{ recipient.code }}</div>
+        </div>
       </div>
 
-      <div v-if="phase !== 'idle'">
-        <div class="progress"><span :style="{ width: percent(progress.done, progress.total) + '%' }" /></div>
-        <p class="meta">
-          {{ progress.message }}
-          <span v-if="progress.total">（{{ percent(progress.done, progress.total) }}%）</span>
-        </p>
+      <div>
+        <label for="file">选择文件</label>
+        <input id="file" type="file" :disabled="busy" @change="pickFile" />
+        <div v-if="file" class="file" style="margin-top: 8px">
+          <div class="meta">
+            <b>{{ file.name }}</b>
+            <div class="meta">{{ fmtBytes(file.size) }} · {{ chunkTotal }} 块</div>
+          </div>
+        </div>
       </div>
 
-      <div v-if="phase === 'done' && lastTransfer" class="banner info">
-        已发送：{{ lastTransfer.fileName }} → {{ lastTransfer.recipientCode }}
-        <span class="tag ok">{{ lastTransfer.state || 'READY' }}</span>
-        <div class="row" style="margin-top: 6px">
-          <button type="button" @click="revoke">撤回（让对方取不到）</button>
+      <button
+        type="button"
+        class="primary block lg"
+        :disabled="!file || !recipient || busy"
+        @click="send"
+      >
+        {{ busy ? '发送中…' : '发送文件' }}
+      </button>
+      <button v-if="busy" type="button" class="block" style="min-height: 44px" @click="cancel">
+        取消
+      </button>
+
+      <div v-if="phase !== 'idle' && phase !== 'done'">
+        <div class="progress"><span :style="{ width: pct + '%' }" /></div>
+        <div class="spread">
+          <div class="pct">{{ pct }}%</div>
+          <div class="meta">{{ progress.message }}</div>
+        </div>
+        <div v-if="chunkTotal" class="chunks">
+          <i
+            v-for="n in chunkTotal"
+            :key="n"
+            :class="{ done: n <= chunkDone, busy: n === chunkDone + 1 }"
+          />
+        </div>
+      </div>
+
+      <div v-if="phase === 'done' && lastTransfer" class="done">
+        <svg class="seal" viewBox="0 0 64 64" aria-hidden="true" fill="none">
+          <circle cx="32" cy="32" r="27" stroke-width="2.5" />
+          <path
+            d="M20 33.5 28.5 42 45 24"
+            stroke-width="3.4"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <div style="font-weight: 700">已发送，等待对方接收</div>
+        <div class="meta" style="margin-top: 2px">
+          码 <b style="font-family: ui-monospace, monospace">{{ lastTransfer.recipientCode }}</b> ·
+          24 小时后自动删除
+        </div>
+        <div class="row" style="margin-top: 10px; justify-content: center">
+          <button type="button" class="sm" @click="revoke">撤回传输</button>
         </div>
       </div>
 
@@ -194,10 +243,7 @@ loadPending()
 
       <div v-if="pending.length" class="stack">
         <hr />
-        <h2 style="margin: 0">未完成的上传</h2>
-        <p class="hint">
-          刷新后能续传的前提是本机还留着会话快照（≤8 MiB 的密文包）；超过这个大小只能在当前页面里续。
-        </p>
+        <h2 style="margin: 0">未完成的上传 {{ pending.length }} 个</h2>
         <ul class="list">
           <li v-for="record in pending" :key="record.transferId">
             <div class="meta">
@@ -206,20 +252,18 @@ loadPending()
               <span class="tag">{{ clock(new Date(record.createdAt).toISOString()) }}</span>
             </div>
             <div class="row" style="margin-top: 8px">
-              <button type="button" :disabled="busy || !record.session" @click="resume(record)">
+              <button
+                type="button"
+                class="sm"
+                :disabled="busy || !record.session"
+                @click="resume(record)"
+              >
                 {{ record.session ? '继续上传' : '本机无会话快照，请重发' }}
               </button>
             </div>
           </li>
         </ul>
       </div>
-
-      <hr />
-      <div class="row" style="justify-content: space-between">
-        <label style="margin: 0">直传（WebRTC）</label>
-        <span class="tag">待第二晚</span>
-      </div>
-      <p class="hint">本轮只做中转：打洞开关与提示留位，不做真实直连，也不会自动切换路径。</p>
     </div>
   </section>
 </template>

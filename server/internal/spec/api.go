@@ -36,6 +36,8 @@ const (
 	PathRevoke     = Prefix + "/transfers/{transferId}/revoke"
 	PathInbox      = Prefix + "/inbox"
 	PathWS         = Prefix + "/ws"
+	// PathTransferReport 是举报端点（API.md §11.5）。
+	PathTransferReport = Prefix + "/transfers/{transferId}/report"
 
 	// PathHealthz 是运维探活，不在 API 契约内。
 	PathHealthz = "/healthz"
@@ -87,6 +89,8 @@ const (
 	PurposeInboxList      = "INBOX_LIST"
 	PurposeWSHello        = "WS_HELLO"
 	PurposeTransferAck    = "TRANSFER_ACK"
+	// PurposeAbuseReport 举报（§1.3 0x09）；不复用撤回/取件确认，用途即权限。
+	PurposeAbuseReport = "ABUSE_REPORT"
 )
 
 // PURPOSE 的 1 字节编码（SIG_INPUT 第二个字段）。
@@ -98,6 +102,7 @@ const (
 	PurposeCodeInboxList      byte = 0x05
 	PurposeCodeWSHello        byte = 0x06
 	PurposeCodeTransferAck    byte = 0x07
+	PurposeCodeAbuseReport    byte = 0x09
 )
 
 // PurposeCode 把 PURPOSE 名称映射到字节码；未知返回 0。
@@ -117,6 +122,8 @@ func PurposeCode(purpose string) byte {
 		return PurposeCodeWSHello
 	case PurposeTransferAck:
 		return PurposeCodeTransferAck
+	case PurposeAbuseReport:
+		return PurposeCodeAbuseReport
 	}
 	return 0
 }

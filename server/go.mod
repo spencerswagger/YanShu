@@ -3,6 +3,7 @@ module github.com/spencerswagger/YanShu/server
 go 1.27
 
 require (
+	github.com/coder/websocket v1.8.13
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/tetratelabs/wazero v1.9.0
 )
