@@ -81,6 +81,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST "+spec.PathRevoke, a.handleRevoke)
 
 	mux.HandleFunc("GET "+spec.PathWS, a.handleWS)
+	mux.HandleFunc("POST "+spec.PathTransferReport, a.handleAbuseReport)
 
 	return a.withMiddleware(mux)
 }
