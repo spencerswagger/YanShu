@@ -1,7 +1,10 @@
 package httpapi
 
 import (
+	"bufio"
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"time"
@@ -64,6 +67,22 @@ type statusRecorder struct {
 	http.ResponseWriter
 	status int
 	bytes  int64
+}
+
+// Hijack 透传给底层 writer：WebSocket 升级需要接管连接。
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := s.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("httpapi: underlying writer does not support hijacking")
+	}
+	return h.Hijack()
+}
+
+// Flush 透传，避免流式响应被缓冲。
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (s *statusRecorder) WriteHeader(code int) {

@@ -253,3 +253,22 @@ sh -c 'set -e; python3 -c "import sys; sys.exit(7)" | tail -1; echo $?'   # → 
 
 **回归钉子**：`sh qa/evidence/check_all.sh --selftest` 有一条「`run_step` 取命令自身 rc=7（不被 tail 吞）」，
 外加「单步 FAIL → 聚合 exit 1」；真实跑批三态（`0` 全过 / `1` 某步 FAIL / `2` 某步未跑）已在交付说明里贴出。
+
+### 零配置部署验收（`check_compose_zero_config.sh`）
+
+验的是最终形态：用户只下载 `docker-compose.yml` 就 `docker compose up -d`，**不写 `.env`、不填密钥**；
+首次启动在 `./secrets/` 自动生成 `token_secret`（≥32B）与 `pg_password`，`down && up` 复用、`down -v` 重生成。
+
+```sh
+sh qa/evidence/check_compose_zero_config.sh --image-tag <tag> --json-out /tmp/compose.json
+# 接进全链路（默认 n/a，不启用不影响判定）：
+sh qa/evidence/check_all.sh <rune-crate> /tmp/ys-checkall --with-compose
+```
+
+**14 条断言**：无 `.env` / `config -q` 可解析 / `up -d --wait` 成功 / 容器数 2 / 两容器 healthy /
+`/healthz` 200 且 `status=ok` / 日志含 `sm2 verifier loaded` / `secrets/` 存在 / 两文件 `0600` /
+`token_secret ≥ 32B` / `down && up` 后 sha256 不变（复用）/ `down -v && up` 后 sha256 变化（重生成）/
+新库仍 `/healthz` 200。
+
+**三态**：无 docker CLI / 无 compose 插件 / 取不到 compose 文件 → **`2`（INCONCLUSIVE）并点名缺什么**；
+任一断言真实失败 → **`1`**；全过 → **`0`**。结果文件按镜像 tag 命名（`--image-tag`），并注明“在目标环境实测”。

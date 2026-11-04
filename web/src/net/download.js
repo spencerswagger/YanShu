@@ -12,6 +12,7 @@ import { runPool } from '../lib/pool.js'
 import { takeChunkBytes } from './p2pChunks.js'
 import { info } from '../lib/log.js'
 import { config } from '../config.js'
+import { bytes } from '../lib/bytes.js'
 
 const TERMINAL_CODES = {
   REVOKED: 'TRANSFER_REVOKED',
@@ -30,6 +31,17 @@ export function terminalError(state, terminalReason) {
  * @param {(code:string)=>Promise<Uint8Array>} p.senderPublic 由发送方码取 65 字节公钥（服务端可信）
  */
 export async function receiveTransfer(params) {
+  const canStream = Boolean(params.kernel?.supportsStreaming && (params.sinkFactory || params.sink))
+  if (canStream) {
+    try {
+      return await receiveStreaming({ ...params, attempt: 1 })
+    } catch (err) {
+      const leaseLost = err?.status === 401 || err?.code === 'DOWNLOAD_NOT_STARTED'
+      if (!leaseLost || params.signal?.aborted) throw err
+      info('下载租约失效，重新开租约取一次（流式）')
+      return receiveStreaming({ ...params, attempt: 2 })
+    }
+  }
   try {
     return await receiveOnce({ ...params, attempt: 1 })
   } catch (err) {
@@ -39,6 +51,82 @@ export async function receiveTransfer(params) {
     params.onProgress?.({ phase: 'prelude', done: 0, total: 0, message: '租约失效，重新取包头…' })
     return receiveOnce({ ...params, attempt: 2 })
   }
+}
+
+const reportStream = (onProgress) => (patch) => onProgress?.(patch)
+
+/**
+ * 真流式接收（**默认路径**，常量内存）：
+ *   ① prelude → `ys_unpack_stream_begin`（验签 + 清单校验，拿到 meta）；
+ *   ② 逐块取切片 → 按 §6.3 重建 16B 记录头 → `ys_unpack_stream_chunk` → **立即交给 sink 写出**；
+ *   ③ `ys_unpack_stream_end()` 全部到齐才算成功（缺块/摘要不符 → 报错，不会交出残缺文件）。
+ *
+ * 直连（P2P）与中转**共用同一个 sink**：`directBuffer` 里有这块就用它，没有就 `GET`；
+ * 直连块喂不进内核（长度/序号不对）时当块改走中转补齐 —— 直连只是快路，不影响完整性。
+ */
+async function receiveStreaming({
+  api,
+  kernel,
+  session,
+  transferId,
+  onProgress,
+  signal,
+  sinkFactory,
+  ack = true,
+  directBuffer,
+}) {
+  const prelude = await api.getPrelude(transferId)
+  const report = reportStream(onProgress)
+  if (!prelude.downloadId) {
+    throw new CryptoError('DOWNLOAD_NOT_STARTED', '取包头未拿到 download_id（无法下载块）')
+  }
+  report({ phase: 'prelude', done: 0, total: 0, message: '取回包头并验签…', verified: false })
+  const meta = kernel.streamUnpackBegin(prelude.bytes, session.privateKey)
+  const chunkCount = Number(meta.chunk_count)
+  const totalSize = Number(meta.size)
+  report({
+    phase: 'prelude',
+    done: 0,
+    total: totalSize,
+    message: `来自 ${meta.sender_code || ''}：${meta.name || '未命名'} · ${totalSize} 字节 · ${chunkCount} 块`,
+    meta: { name: meta.name || '未命名', size: totalSize, senderCode: meta.sender_code, chunkCount },
+    verified: false,
+  })
+
+  const sink = await (sinkFactory ? sinkFactory(meta) : createMemorySink())
+  const relayGet = (i) => api.getChunk({ transferId, downloadId: prelude.downloadId, index: i })
+  const unpackSlice = (index, slice) =>
+    kernel.streamUnpackChunk(
+      bytes(kernel.segmenter.buildRecordHeader(index, slice.length - 16, chunkCount), slice),
+    )
+
+  let done = 0
+  for (let index = 0; index < chunkCount; index++) {
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+    const picked = directBuffer
+      ? await takeChunkBytes({ directBuffer, index, getChunk: relayGet })
+      : { bytes: await relayGet(index), source: 'relay' }
+    let plain
+    try {
+      plain = unpackSlice(index, picked.bytes)
+    } catch (err) {
+      if (picked.source !== 'direct') throw err
+      // 直连块不可信 → 当块回落中转补齐（不交残缺文件）
+      plain = unpackSlice(index, await relayGet(index))
+    }
+    await sink.write(plain)
+    done += plain.length
+    report({ phase: 'downloading', done, total: totalSize, message: `解密块 ${index + 1}/${chunkCount}` })
+  }
+  kernel.streamUnpackEnd()
+
+  await sink.close()
+  if (ack) {
+    // ack 必须带租约 id（契约 §8.5）：不带会被判 409 DOWNLOAD_NOT_STARTED
+    await api.ack({ transferId, downloadId: prelude.downloadId })
+  }
+  info('接收完成（流式）', { bytes: done, chunks: chunkCount })
+  return { name: sink.name, size: done, transferId, dataVerified: true }
 }
 
 async function receiveOnce({

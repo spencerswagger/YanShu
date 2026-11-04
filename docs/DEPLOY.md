@@ -79,6 +79,8 @@ docker compose exec postgres psql -U yanshu -d yanshu \
 
 ## 4.1 STUN 与网络
 
+- `YANSHU_WS_URL`：直传信令地址（`wss://<你的域名>/v1/ws`）。**不设则 `config.ws_url` 为 null**，
+  客户端按契约 §9.6 直接走中转（功能不受影响，只是没有直传与在线通知）。
 - 默认 STUN 是公共服务器，**部分地区不可用**。替换方式：设置 `YANSHU_STUN_URLS`（逗号分隔，
   只支持 STUN，本项目**没有 TURN**），例如 compose 里加 `YANSHU_STUN_URLS=stun:stun.example.net:3478`。
 - 该值只影响 `/v1/config` 下发给客户端的 ICE 配置，不影响服务端连通性。
@@ -98,3 +100,49 @@ curl -sf http://127.0.0.1:18080/healthz
 docker compose logs --tail=20 yanshu-server | grep "sm2 verifier loaded"   # 期望含 version=0x00010000
 curl -s http://127.0.0.1:18080/v1/config | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["token_epoch"], d["verifier"], d["kernel_sha256"][:16])'
 ```
+
+## 7. 前置反向代理（CDN → 外层 nginx → 容器）
+
+线上拓扑：**客户端 → CDN（终止 TLS）→ 本机 nginx(:80) → web 容器(:18080) → 服务端**。
+示例配置见 `deploy/nginx-front.conf.example`。
+
+① **端口只绑本机**：`YANSHU_PORT=127.0.0.1:18080 docker compose up -d`。开启
+   `YANSHU_TRUST_PROXY=true` 后服务端采信 `X-Forwarded-For`，公网直暴露等于把限速/配额交给客户端伪造。
+
+② **对外只听 80**：TLS 由 CDN 终止，机器上不放证书。只有「客户端直连本机、不经 CDN」时才需要
+   自己起 443（示例里那段是注释掉的）。
+
+③ **`client_max_body_size`**：内层 32m，外层不得小于它（nginx 默认 1m → 分块上传 413）。
+   **CDN 侧同样要放大**（例：Cloudflare 免费版单请求 100 MB），否则大文件在 CDN 就被拒。
+
+④ **CDN 缓存规则必须排除 `/v1/` 与 `/healthz`**：前者被缓存会拿到过期响应（撤回/取件/ack 全错），
+   后者被缓存会让健康检查假活。
+
+⑤ **缓冲与超时**：外层 `proxy_request_buffering off; proxy_buffering off;`，
+   `proxy_send_timeout`/`proxy_read_timeout` 放大到 300s。
+
+⑥ **Range 透传**：分段下载依赖 `Range`/`If-Range`，不要在外层做响应缓存或改写这两个头。
+
+⑦ **WebSocket**：v1 **未启用**（`/v1/ws` 只是 503 占位），示例里的 `Upgrade`/`Connection` 三行是注释；
+   真启用时再加 `map $http_upgrade …`（`map` 必须在 `http {}` 层）。
+
+⑧ **CSP**：内层下发 `connect-src 'self'` 与 `frame-ancestors 'none'`；跨域或被 iframe 嵌入会被浏览器拦，
+   这类场景要改 `web/nginx.conf`，而不是只改外层。
+
+### 7.1 X-Forwarded-For 取值链
+
+服务端 `clientIP()`（`server/internal/httpapi/api.go:86`）在 `YANSHU_TRUST_PROXY=true` 时取
+**第一跳（最左）**，遇第一个 `,` 截断。拓扑里有两层代理，取值必须按 CDN 行为二选一：
+
+- **方案 A（推荐）**：CDN 提供专用客户端 IP 头（Cloudflare `CF-Connecting-IP`、阿里云 `Ali-CDN-Real-IP`）
+  → 外层用该头赋值 `X-Forwarded-For`（无该头时回落 `$remote_addr`）。示例里用 `map` 实现。
+- **方案 B**：CDN 只写/覆盖 `X-Forwarded-For` → 外层原样透传（`$http_x_forwarded_for`，空则 `$remote_addr`）。
+
+无论哪种，**不要在 CDN 已给出真实 IP 的情况下再用 `$remote_addr` 覆盖**——那会写成 CDN 节点 IP，
+限速与审计就全按 CDN 节点记。内层（`web/nginx.conf`）保持「有上游 XFF 就透传」即可。
+
+校验：`go test ./internal/httpapi -run TestClientIPUsesFirstHop`。
+
+> 注意：`map` 只能写在 `http {}` 层；`deploy/nginx-front.conf.example` 由 `conf.d` 的 http 上下文 include，
+> 因此顶层的 `map` 合法，塞进 `server {}` 会导致 nginx 起不来。
+

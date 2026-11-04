@@ -124,6 +124,20 @@ export function createApi({ client, kernel, session }) {
       return res.json
     },
 
+    /**
+     * 举报某笔传输（契约 §11.5）：`POST /v1/transfers/{id}/report`，鉴权用 `ABUSE_REPORT`(0x09)。
+     * 幂等：同一 (举报人, 传输) 重复提交返回**同一个** `report_id`。
+     */
+    reportTransfer: async ({ transferId, reason, note }) => {
+      const headers = await signed('ABUSE_REPORT', (s) => fields.ABUSE_REPORT({ code: s.code, transferId }), {
+        'Content-Type': 'application/json',
+      })
+      const body = { reason }
+      if (note) body.note = note
+      const res = await client.post(`/transfers/${transferId}/report`, { json: body, headers })
+      return res.json
+    },
+
     // ------------------------------------------------------------ 接收方
     inbox: async ({ state = 'ready', limit = 20, cursor } = {}) => {
       const headers = await signed('INBOX_LIST', (s) => fields.INBOX_LIST({ code: s.code }))

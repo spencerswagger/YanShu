@@ -58,6 +58,19 @@ type ConfigLimits struct {
 
 // ---------- /v1/challenges ----------
 
+// AbuseReportRequest 是 POST /v1/transfers/{id}/report 的请求体（API.md §11.5）。
+type AbuseReportRequest struct {
+	Reason string `json:"reason"`
+	Note   string `json:"note,omitempty"`
+}
+
+// AbuseReportResponse 是举报的 202 响应。
+type AbuseReportResponse struct {
+	ReportID        string `json:"report_id"`
+	State           string `json:"state"`
+	DistinctReports int    `json:"distinct_reports"`
+}
+
 // ChallengeRequest 只有 purpose（API.md §4.2：没有 code 字段）。
 type ChallengeRequest struct {
 	Purpose string `json:"purpose"`

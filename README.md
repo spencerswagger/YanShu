@@ -120,6 +120,7 @@ TEST_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu_test?sslmode=disable" 
 | `YANSHU_ADDR` | 否 | `:8080` | 监听地址；容器内需 `0.0.0.0:8080` 才能映射端口 |
 | `YANSHU_ENV` | 否 | 空 | 部署环境标识；`stub-allow` 需 `local\|test` |
 | `YANSHU_STUN_URLS` | 否 | `stun:stun.l.google.com:19302` | 下发给客户端的 STUN 列表（逗号分隔）；**不支持 TURN** |
+| `YANSHU_WS_URL` | 否 | 空（`ws_url: null`） | 直传信令地址，如 `wss://host/v1/ws`；为空时客户端按契约 §9.6 直接走中转 |
 | `YANSHU_STORAGE_QUOTA_BYTES` | 否 | `8589934592`（8 GiB） | 单 IP 未取走密文总量上限 |
 | `YANSHU_SWEEP_INTERVAL` | 否 | `30s` | 过期清理扫描间隔 |
 

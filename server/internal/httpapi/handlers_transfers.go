@@ -215,7 +215,27 @@ func (a *API) handleCreateTransfer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 收件人在线则推一条 TRANSFER_NOTICE（§9.3）；离线不发，客户端靠轮询 inbox。
+	a.notifyTransfer(created)
+
 	writeJSON(w, http.StatusCreated, createTransferResponse(created, token))
+}
+
+// notifyTransfer 给收件人推送 TRANSFER_NOTICE；不在线时静默跳过。
+func (a *API) notifyTransfer(t store.Transfer) {
+	if a.hub == nil || !a.hub.Online(t.RecipientCode) {
+		return
+	}
+	a.hub.Deliver(t.RecipientCode, map[string]any{
+		"type": "TRANSFER_NOTICE",
+		"payload": map[string]any{
+			"transfer_id":    t.ID,
+			"sender_code":    t.SenderCode,
+			"plaintext_size": t.PlaintextSize,
+			"chunk_count":    t.ChunkCount,
+			"expires_at":     t.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"),
+		},
+	})
 }
 
 // handleGetTransfer 是 GET /v1/transfers/{id}（API.md §7.2）。

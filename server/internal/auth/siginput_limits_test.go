@@ -89,3 +89,21 @@ func TestRegisterSIGInputVerifies(t *testing.T) {
 
 func bytes32() []byte { return make([]byte, 32) }
 func hex32() string   { return strings.Repeat("0", 32) }
+
+// 举报用途（0x09）的 SIG_INPUT 必须是 76 字节：7+1+32+4+32，定长无前缀。
+func TestAbuseReportSIGInputLength(t *testing.T) {
+	fields, err := AbuseReportFields("AWQW", "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 36 {
+		t.Fatalf("fields = %d, want 36 (4+32)", len(fields))
+	}
+	in := BuildSignInput(spec.PurposeCodeAbuseReport, make([]byte, 32), fields)
+	if len(in) != 76 {
+		t.Fatalf("SIG_INPUT = %d, want 76", len(in))
+	}
+	if in[7] != 0x09 {
+		t.Fatalf("purpose byte = 0x%02x, want 0x09", in[7])
+	}
+}

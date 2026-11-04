@@ -9,7 +9,9 @@ import { config } from './config.js'
 import { sendFile, resumeSend } from './net/upload.js'
 import { receiveTransfer } from './net/download.js'
 import { describeError } from './net/errors.js'
+import { updateNickname } from './net/nickname.js'
 import { saveBlob } from './lib/save.js'
+import { defaultSinkFactory } from './lib/saveStream.js'
 import { decode as b64uDecode } from './lib/base64url.js'
 import { info } from './lib/log.js'
 import { createSignaler } from './net/signal.js'
@@ -38,6 +40,8 @@ const kernelSelfTest = ref(null)
 const kernelInfo = ref(describeKernel(null))
 const manualAttempts = ref(0)
 const inboxRef = ref(null)
+/** 本次会话的真实计数（不做假数字）：成功发送 / 成功接收 / 失败 */
+const counts = reactive({ sent: 0, received: 0, failed: 0 })
 
 /** 模板用的会话镜像（身份对象在 identityManager 里是活的，撞码重生成时会换） */
 const session = reactive({
@@ -164,17 +168,40 @@ async function ensureRegistered({ manual = false } = {}) {
   }
 }
 
-async function doSend({ file, recipient, onProgress, signal }) {
-  return sendFile({
+/**
+ * 保存昵称：`PATCH /v1/codes/{code}`（内部走签名挑战）。
+ * 挑战过期（AUTH_CHALLENGE_INVALID）自动重取一次再试，仍失败就把错误交给界面显示原因。
+ */
+async function saveNickname(nickname) {
+  if (!api.value || !identityManager.value) throw new Error('中转未连接')
+  const result = await updateNickname({
     api: api.value,
-    kernel: kernel.value,
-    session: identityManager.value.session,
-    file,
-    recipient,
-    onProgress,
-    signal,
-    pendingStore: pendingBackend.value,
+    identity: identityManager.value,
+    nickname,
   })
+  syncSession()
+  info('昵称已更新', { code: identityManager.value.session.code, retried: result.retried })
+  return result
+}
+
+async function doSend({ file, recipient, onProgress, signal }) {
+  try {
+    const r = await sendFile({
+      api: api.value,
+      kernel: kernel.value,
+      session: identityManager.value.session,
+      file,
+      recipient,
+      onProgress,
+      signal,
+      pendingStore: pendingBackend.value,
+    })
+    counts.sent += 1
+    return r
+  } catch (err) {
+    counts.failed += 1
+    throw err
+  }
 }
 
 async function doResume({ record }) {
@@ -229,7 +256,7 @@ async function doReceive({ transferId, onProgress }) {
     }
   }
   try {
-    return await receiveTransfer({
+    const r = await receiveTransfer({
       api: api.value,
       kernel: kernel.value,
       session: identityManager.value.session,
@@ -237,8 +264,15 @@ async function doReceive({ transferId, onProgress }) {
       senderPublic: fetchSenderPublic,
       onProgress,
       save: saveBlob,
+      // 默认路径：流式边解边写（常量内存）；直连块也灌进同一个 sink
+      sinkFactory: defaultSinkFactory,
       directBuffer,
     })
+    counts.received += 1
+    return r
+  } catch (err) {
+    counts.failed += 1
+    throw err
   } finally {
     responder?.close()
     signaler?.close()
@@ -248,28 +282,37 @@ async function doReceive({ transferId, onProgress }) {
 </script>
 
 <template>
-  <header>
-    <h1>雁书</h1>
-    <p class="hint">
-      一次性加密文件互传：端侧加密 → 中转只存密文 → 对方端侧解密。
-      <span class="tag">{{ kernelLabel }}</span>
-    </p>
-  </header>
+  <div class="app-top">
+    <h1 class="brand">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path
+          d="M3 13c4.5 0 6-1.5 7.5-4C12 6 13 4 15 4c3 0 6 3 6 7s-3 7-6 7c-2 0-3-1-4.5-2.5"
+          stroke="currentColor"
+          stroke-width="1.6"
+          stroke-linecap="round"
+        />
+        <circle cx="16.4" cy="9.4" r="1.1" fill="var(--accent)" />
+      </svg>
+      雁书
+    </h1>
+    <span class="tag">{{ kernelLabel }}</span>
+  </div>
+
+  <p class="lede">你的接收码，告知对方即可收文件。<em>私钥不出本机</em></p>
 
   <div v-if="booting" class="banner info">正在准备本机密钥与中转连接…</div>
 
   <div v-if="bootError" class="banner warn">
     {{ bootError }}
-    <div class="hint" style="margin-top: 6px">
-      加密内核没到位时，页面不会伪造"加密成功"：所有加密操作都会如实报错。
+    <div class="hint" style="margin-top: 6px; text-align: left">
+      加密内核未到位时不会伪造“加密成功”，所有加密操作都会如实报错。
     </div>
   </div>
 
   <div v-if="layoutWarning" class="banner warn">{{ layoutWarning }}</div>
 
   <div v-if="kernelMode === 'stub-fake'" class="banner warn">
-    开发桩模式：<strong>数据没有加密</strong>（可逆异或 + 明文密钥），只用于打通 UI 与传输流程，
-    禁止传真实文件。生产构建里这个模式会被拒绝。
+    开发桩模式：<strong>数据没有加密</strong>，只用于打通界面与传输流程，禁止传真实文件。
   </div>
 
   <div v-if="regNotice" class="banner info">{{ regNotice }}</div>
@@ -278,7 +321,7 @@ async function doReceive({ transferId, onProgress }) {
     {{ regError }}
     <div class="row" style="margin-top: 8px">
       <button type="button" :disabled="regBusy" @click="ensureRegistered({ manual: true })">
-        {{ regBusy ? '重试中…' : '再试一次' }}
+        {{ regBusy ? '重试中…' : '重试' }}
       </button>
     </div>
   </div>
@@ -290,32 +333,71 @@ async function doReceive({ transferId, onProgress }) {
     :real-crypto="realCrypto"
     :kernel-mode="kernelMode"
     :kernel-layout="kernelLayout"
+    :save-nickname="saveNickname"
   />
 
-  <div class="tabs" role="tablist">
-    <button type="button" role="tab" :aria-selected="tab === 'send'" @click="tab = 'send'">发文件</button>
-    <button type="button" role="tab" :aria-selected="tab === 'inbox'" @click="tab = 'inbox'">待收</button>
-  </div>
+  <section class="card">
+    <h2>选择操作</h2>
+    <button type="button" class="primary block lg" @click="tab = 'send'">发送文件</button>
+    <button
+      type="button"
+      class="block"
+      style="margin-top: 8px; min-height: 44px"
+      @click="tab = 'inbox'"
+    >
+      接收文件
+    </button>
+  </section>
 
-  <SendPanel
-    v-show="tab === 'send'"
-    ref="sendRef"
-    :api="api"
-    :kernel="kernel"
-    :session="session"
-    :send-file="doSend"
-    :resume-send="doResume"
-    :pending-backend="pendingBackend"
-    :p2p-config="{ wsUrl: serverConfig?.ws_url || '', stunUrls: serverConfig?.stun_urls || [] }"
-  />
+  <section v-show="tab === 'send'" class="screen" :class="{ on: tab === 'send' }">
+    <SendPanel
+      ref="sendRef"
+      :api="api"
+      :kernel="kernel"
+      :session="session"
+      :send-file="doSend"
+      :resume-send="doResume"
+      :pending-backend="pendingBackend"
+      :p2p-config="{ wsUrl: serverConfig?.ws_url || '', stunUrls: serverConfig?.stun_urls || [] }"
+    />
+  </section>
 
-  <InboxPanel v-show="tab === 'inbox'" ref="inboxRef" :api="api" :receive="doReceive" />
+  <section v-show="tab === 'inbox'" class="screen" :class="{ on: tab === 'inbox' }">
+    <InboxPanel ref="inboxRef" :api="api" :receive="doReceive" />
+  </section>
+
+  <section class="card">
+    <h2>今日已完成 {{ counts.sent + counts.received }} 次</h2>
+    <div class="stats">
+      <div class="stat"><b>{{ counts.sent }}</b><span>已发送</span></div>
+      <div class="stat"><b>{{ counts.received }}</b><span>已接收</span></div>
+      <div class="stat"><b>{{ counts.failed }}</b><span>失败</span></div>
+    </div>
+    <p class="hint">仅统计本次打开页面的真实操作</p>
+  </section>
 
   <LogPanel />
 
-  <footer class="hint" style="margin-top: 18px">
+  <details class="safety">
+    <summary><span class="ug"></span>端到端加密，私钥仅存于本机浏览器 · 安全说明</summary>
+    <div class="body">
+      <dl>
+        <dt>威胁模型</dt>
+        <dd>防范传输途中被窃取与服务器留底；不防范接收方主动截图或转发。</dd>
+        <dt>信任边界</dt>
+        <dd>服务器仅见密文与 4 位码，但未做指纹核对，理论上可被替换代码。</dd>
+        <dt>私钥不备份</dt>
+        <dd>私钥仅存本机（IndexedDB），清除浏览器数据即等同于更换身份，无法找回。</dd>
+        <dt>码不是密码</dt>
+        <dd>4 位码仅用于寻址，先到先得；敏感文件请另行约定。</dd>
+      </dl>
+    </div>
+  </details>
+
+  <details class="footer">
+    <summary>内核与中转信息</summary>
     <p v-if="kernelSelfTest">
-      内核自检（契约 §2.3 四条）：{{ kernelSelfTest.ok ? '版本 / 包头 / V1 样例解包 / 版本闸门 全过' : '未通过 → ' + Object.entries(kernelSelfTest.checks).filter(([,v]) => !v).map(([k]) => k).join('、') }}
+      内核自检（契约 §2.3 四条）：{{ kernelSelfTest.ok ? '版本 / 包头 / V1 样例解包 / 版本闸门 全过' : '未通过 → ' + Object.entries(kernelSelfTest.checks).filter(([, v]) => !v).map(([k]) => k).join('、') }}
     </p>
     <p v-if="kernelBuild">
       端侧内核：commit {{ kernelBuild.commit.slice(0, 7) }} · {{ kernelBuild.ysVersion }} · HEADER
@@ -327,9 +409,5 @@ async function doReceive({ transferId, onProgress }) {
       中转：{{ config.apiBase }} · 包版本 {{ serverConfig.crypto_pack_version }} · 块
       {{ serverConfig.chunk_size }} 字节
     </p>
-    <p>
-      私钥只在本机浏览器（IndexedDB），不上传、不备份；清缓存等于换人。
-      服务器可信，但它看不到文件名与明文。
-    </p>
-  </footer>
+  </details>
 </template>
