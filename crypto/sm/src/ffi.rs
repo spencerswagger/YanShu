@@ -128,23 +128,55 @@ fn to_pub65(pub64: &[u8; 64]) -> [u8; 65] {
 
 // ---------------------------------------------------------------- 内存 / 元信息 / 布局
 
+/// 分配头：8 字节长度 + 8 字节对齐填充。释放时不依赖调用方传的 `len`。
+const ALLOC_HDR: usize = 16;
+const ALLOC_ALIGN: usize = 16;
+
+/// 分配 `len` 字节。返回的指针已跳过 16 字节头。
+///
+/// **不依赖 `Vec` 的容量**：用精确 `Layout` 分配，`ys_free` 用同一 `Layout` 释放，
+/// 避免 `Vec::with_capacity` 的容量取整与调用方传入长度不一致导致的堆损坏。
 #[no_mangle]
 pub extern "C" fn ys_alloc(len: usize) -> *mut u8 {
     if len == 0 {
         return core::ptr::null_mut();
     }
-    let mut v: Vec<u8> = Vec::with_capacity(len);
-    let ptr = v.as_mut_ptr();
-    core::mem::forget(v);
-    ptr
+    let total = match len.checked_add(ALLOC_HDR) {
+        Some(v) => v,
+        None => return core::ptr::null_mut(),
+    };
+    let layout = match std::alloc::Layout::from_size_align(total, ALLOC_ALIGN) {
+        Ok(l) => l,
+        Err(_) => return core::ptr::null_mut(),
+    };
+    unsafe {
+        let base = std::alloc::alloc(layout);
+        if base.is_null() {
+            return core::ptr::null_mut();
+        }
+        // 头里记长度，释放时用它（调用方传错 len 也不会破坏堆）
+        core::ptr::write(base as *mut u64, len as u64);
+        base.add(ALLOC_HDR)
+    }
 }
 
+/// 释放 `ys_alloc` 的指针。`len` 仅作兼容保留——真实长度取自分配头。
 #[no_mangle]
-pub unsafe extern "C" fn ys_free(ptr: *mut u8, len: usize) {
-    if ptr.is_null() || len == 0 {
+pub unsafe extern "C" fn ys_free(ptr: *mut u8, _len: usize) {
+    if ptr.is_null() {
         return;
     }
-    drop(Vec::from_raw_parts(ptr, 0, len));
+    let base = ptr.sub(ALLOC_HDR);
+    let len = core::ptr::read(base as *const u64) as usize;
+    let total = match len.checked_add(ALLOC_HDR) {
+        Some(v) => v,
+        None => return,
+    };
+    let layout = match std::alloc::Layout::from_size_align(total, ALLOC_ALIGN) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    std::alloc::dealloc(base, layout);
 }
 
 #[no_mangle]
@@ -911,4 +943,203 @@ fn meta_json(
         hex(&header.kdf_salt),
         scope,
     )
+}
+
+// ============================================================================
+// 流式打包 / 解包（常量内存；产出与整包接口逐字节相同）
+// ============================================================================
+
+static mut PACK_STREAM: Option<pack::PackStream> = None;
+static mut UNPACK_STREAM: Option<pack::UnpackStream> = None;
+
+fn pack_stream_slot() -> &'static mut Option<pack::PackStream> {
+    // wasm 单线程；用 addr_of_mut 避免 static_mut_refs
+    unsafe { &mut *core::ptr::addr_of_mut!(PACK_STREAM) }
+}
+
+fn unpack_stream_slot() -> &'static mut Option<pack::UnpackStream> {
+    unsafe { &mut *core::ptr::addr_of_mut!(UNPACK_STREAM) }
+}
+
+/// 开始流式打包。`total_size` 必须等于后续 `ys_pack_hash_update` 的字节总数。
+///
+/// 随机数消耗顺序与 `ys_pack_v1` 完全一致（dk → salt → k_enc → k_sig），
+/// 因此同一 seed 下流式产出与整包产出**逐字节相同**。
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn ys_pack_stream_begin(
+    recipient_public: *const u8,
+    sender_private: *const u8,
+    name: *const u8,
+    name_len: usize,
+    mime: *const u8,
+    mime_len: usize,
+    ext: *const u8,
+    ext_len: usize,
+    created_at_ms: u64,
+    chunk_size: u32,
+    total_size: u64,
+    seed: *const u8,
+    seed_len: usize,
+) -> i32 {
+    rc((|| {
+        let recipient = fixed::<64>(recipient_public)?;
+        let sender = fixed::<32>(sender_private)?;
+        let name =
+            core::str::from_utf8(as_slice(name, name_len)?).map_err(|_| Error::BadArgument)?;
+        let mime =
+            core::str::from_utf8(as_slice(mime, mime_len)?).map_err(|_| Error::BadArgument)?;
+        let ext = core::str::from_utf8(as_slice(ext, ext_len)?).map_err(|_| Error::BadArgument)?;
+        let mut rng = seeded_rng(as_slice(seed, seed_len)?)?;
+        let s = pack::PackStream::begin(
+            &recipient,
+            &sender,
+            name,
+            mime,
+            ext,
+            created_at_ms,
+            if chunk_size == 0 {
+                pack::v1::DEFAULT_CHUNK_SIZE
+            } else {
+                chunk_size
+            },
+            total_size,
+            &mut rng,
+        )?;
+        *pack_stream_slot() = Some(s);
+        Ok(())
+    })())
+}
+
+/// 顺序喂入明文（只做分块 SM3；内存增量 = 一个块缓冲 + 每块 32B 摘要）。
+#[no_mangle]
+pub unsafe extern "C" fn ys_pack_hash_update(data: *const u8, data_len: usize) -> i32 {
+    rc((|| {
+        let slot = pack_stream_slot();
+        let s = slot.as_mut().ok_or(Error::BadArgument)?;
+        s.hash_update(as_slice(data, data_len)?)
+    })())
+}
+
+/// 生成 prelude（清单 + 签名），之后才能逐块取记录。`*out_len` 给所需长度。
+#[no_mangle]
+pub unsafe extern "C" fn ys_pack_stream_prelude(
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    rc((|| {
+        let slot = pack_stream_slot();
+        let s = slot.as_mut().ok_or(Error::BadArgument)?;
+        let n = s.make_prelude()?;
+        let prelude = s.prelude();
+        let _ = n;
+        write_out(prelude, out, out_cap, out_len)
+    })())
+}
+
+/// 出一块记录（16B 头 + 密文 + 16B tag）。`plaintext` 长度必须是 `chunk_len(index)`。
+#[no_mangle]
+pub unsafe extern "C" fn ys_pack_stream_chunk(
+    index: u32,
+    plaintext: *const u8,
+    plaintext_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    rc((|| {
+        let slot = pack_stream_slot();
+        let s = slot.as_ref().ok_or(Error::BadArgument)?;
+        let pt = as_slice(plaintext, plaintext_len)?;
+        let need = 16 + pt.len() + 16;
+        if out_cap < need {
+            if out_len.is_null() {
+                return Err(Error::BadArgument);
+            }
+            core::ptr::write(out_len, need);
+            return Err(Error::BufferTooSmall);
+        }
+        let mut rec = Vec::new();
+        s.chunk(index, pt, &mut rec)?;
+        write_out(&rec, out, out_cap, out_len)
+    })())
+}
+
+/// 第 `index` 块的明文长度（调用方据此切数据）。
+#[no_mangle]
+pub unsafe extern "C" fn ys_pack_stream_chunk_len(index: u32) -> i32 {
+    let slot = pack_stream_slot();
+    match slot.as_ref() {
+        Some(s) if index < s.chunk_count() => s.chunk_len(index) as i32,
+        _ => Error::BadArgument.code(),
+    }
+}
+
+/// 结束（丢弃）打包会话。
+#[no_mangle]
+pub unsafe extern "C" fn ys_pack_stream_end() -> i32 {
+    *pack_stream_slot() = None;
+    0
+}
+
+/// 用 **prelude** 打开流式解包会话（要求 prelude 完整；元信息可用
+/// `ys_unpack_meta_prelude` 取）。
+#[no_mangle]
+pub unsafe extern "C" fn ys_unpack_stream_begin(
+    prelude: *const u8,
+    prelude_len: usize,
+    recipient_private: *const u8,
+) -> i32 {
+    rc((|| {
+        let s = pack::open_stream(
+            as_slice(prelude, prelude_len)?,
+            &fixed::<32>(recipient_private)?,
+        )?;
+        *unpack_stream_slot() = Some(s);
+        Ok(())
+    })())
+}
+
+/// 喂一条块记录，解出该块明文（顺序必须严格递增）。
+#[no_mangle]
+pub unsafe extern "C" fn ys_unpack_stream_chunk(
+    record: *const u8,
+    record_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> i32 {
+    rc((|| {
+        let slot = unpack_stream_slot();
+        let s = slot.as_mut().ok_or(Error::BadArgument)?;
+        let record = as_slice(record, record_len)?;
+        let need = s.peek_plain_len(record)?;
+        if out_cap < need {
+            if out_len.is_null() {
+                return Err(Error::BadArgument);
+            }
+            core::ptr::write(out_len, need);
+            return Err(Error::BufferTooSmall);
+        }
+        let mut pt = Vec::new();
+        s.chunk(record, &mut pt)?;
+        write_out(&pt, out, out_cap, out_len)
+    })())
+}
+
+/// 结束解包会话：所有块都到齐返回 0，否则 `CRYPTO_CHUNK_MISSING`。
+#[no_mangle]
+pub unsafe extern "C" fn ys_unpack_stream_end() -> i32 {
+    let slot = unpack_stream_slot();
+    let done = match slot.as_ref() {
+        Some(s) => s.done(),
+        None => false,
+    };
+    *slot = None;
+    if done {
+        0
+    } else {
+        Error::ChunkMissing.code()
+    }
 }

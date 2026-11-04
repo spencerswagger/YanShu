@@ -1077,3 +1077,457 @@ fn finish_unpack(pack: &[u8], opened: Opened) -> Result<Unpacked> {
 pub fn read_header(pack: &[u8]) -> Result<Header> {
     Header::decode(pack)
 }
+
+// ============================================================================
+// 流式打包 / 解包（常量内存；产出与整包接口**逐字节相同**）
+//
+// 设计：包结构是 prelude（含全部块摘要）在前、块记录在后，所以打包必然两遍：
+//   ① `PackStream::hash_update` 顺序喂明文 → 只留每块 SM3（32B/块，1 GiB/1 MiB ≈ 32 KiB）
+//   ② `PackStream::prelude` 出 prelude（清单+签名，可先上传）
+//   ③ `PackStream::chunk(i, ...)` 逐块出记录（一次一块明文，可边读边传）
+// 解包同理：`open_stream(prelude)` 后逐块 `chunk()`。
+// ============================================================================
+
+/// 流式打包会话。
+pub struct PackStream {
+    sender_private: [u8; 32],
+    sender_pub: [u8; SENDER_PUB_LEN],
+    wrapped: [u8; WRAPPED_KEY_LEN],
+    dk: [u8; 32],
+    kdf_salt: [u8; KDF_SALT_LEN],
+    chunk_size: u32,
+    chunk_count: u32,
+    total: u64,
+    created_at_ms: u64,
+    name: String,
+    mime: String,
+    ext: String,
+    digests: Vec<[u8; 32]>,
+    cur: Vec<u8>,
+    hashed: u64,
+    sig_k: U256,
+    header: Option<Header>,
+    prelude: Vec<u8>,
+}
+
+impl PackStream {
+    /// 开始一次流式打包。`total_size` 必须等于后续 `hash_update` 的字节总数。
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin(
+        recipient_public: &[u8; 64],
+        sender_private: &[u8; 32],
+        name: &str,
+        mime: &str,
+        ext: &str,
+        created_at_ms: u64,
+        chunk_size: u32,
+        total_size: u64,
+        rng: &mut impl Rng,
+    ) -> Result<Self> {
+        if !(MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&chunk_size) {
+            return Err(Error::BadArgument);
+        }
+        if total_size > MAX_PLAINTEXT_SIZE {
+            return Err(Error::BadArgument);
+        }
+        let chunk_count64 = expected_chunk_count(total_size, chunk_size);
+        if chunk_count64 > MAX_CHUNK_COUNT as u64 {
+            return Err(Error::BadArgument);
+        }
+        // 随机数消耗顺序必须与 `pack()` 完全一致：dk → salt → k_enc → k_sig
+        let mut dk = [0u8; 32];
+        rng.fill(&mut dk);
+        let mut kdf_salt = [0u8; KDF_SALT_LEN];
+        rng.fill(&mut kdf_salt);
+        let k_enc = random_scalar(rng)?;
+        let sig_k = random_scalar(rng)?;
+        Self::begin_with_params(
+            recipient_public,
+            sender_private,
+            name,
+            mime,
+            ext,
+            created_at_ms,
+            chunk_size,
+            total_size,
+            &PackParams {
+                dk,
+                kdf_salt,
+                k_enc,
+                k_sig: sig_k,
+            },
+        )
+    }
+
+    /// 固定参数的流式打包（测试/复现用；与 `pack_with_params` 同一套字节）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_with_params(
+        recipient_public: &[u8; 64],
+        sender_private: &[u8; 32],
+        name: &str,
+        mime: &str,
+        ext: &str,
+        created_at_ms: u64,
+        chunk_size: u32,
+        total_size: u64,
+        params: &PackParams,
+    ) -> Result<Self> {
+        if !(MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&chunk_size) {
+            return Err(Error::BadArgument);
+        }
+        if total_size > MAX_PLAINTEXT_SIZE {
+            return Err(Error::BadArgument);
+        }
+        let chunk_count64 = expected_chunk_count(total_size, chunk_size);
+        if chunk_count64 > MAX_CHUNK_COUNT as u64 {
+            return Err(Error::BadArgument);
+        }
+        let chunk_count = chunk_count64 as u32;
+        let dk = params.dk;
+        let kdf_salt = params.kdf_salt;
+        let k_enc = params.k_enc;
+        let sig_k = params.k_sig;
+
+        let sender_pub64 = sm2::public_from_private(sender_private)?;
+        let mut sender_pub = [0u8; SENDER_PUB_LEN];
+        sender_pub[0] = 0x04;
+        sender_pub[1..].copy_from_slice(&sender_pub64);
+
+        let wrapped64 = sm2::encrypt(recipient_public, &dk, &k_enc)?;
+        if wrapped64.len() != WRAPPED_KEY_LEN - 1 {
+            return Err(Error::Internal);
+        }
+        let mut wrapped = [0u8; WRAPPED_KEY_LEN];
+        wrapped[0] = 0x04;
+        wrapped[1..].copy_from_slice(&wrapped64);
+
+        Ok(PackStream {
+            sender_private: *sender_private,
+            sender_pub,
+            wrapped,
+            dk,
+            kdf_salt,
+            chunk_size,
+            chunk_count,
+            total: total_size,
+            created_at_ms,
+            name: name.to_string(),
+            mime: mime.to_string(),
+            ext: ext.to_string(),
+            digests: Vec::with_capacity(chunk_count as usize),
+            cur: Vec::with_capacity(chunk_size as usize),
+            hashed: 0,
+            sig_k,
+            header: None,
+            prelude: Vec::new(),
+        })
+    }
+
+    /// 顺序喂入明文（只做分块 SM3，不保留明文）。
+    pub fn hash_update(&mut self, data: &[u8]) -> Result<()> {
+        if self.header.is_some() {
+            return Err(Error::BadArgument);
+        }
+        self.hashed += data.len() as u64;
+        if self.hashed > self.total {
+            return Err(Error::BadArgument);
+        }
+        let mut rest = data;
+        while !rest.is_empty() {
+            let room = self.chunk_size as usize - self.cur.len();
+            let take = core::cmp::min(room, rest.len());
+            self.cur.extend_from_slice(&rest[..take]);
+            rest = &rest[take..];
+            // 满一块且后面还有块 → 落摘要
+            if self.cur.len() == self.chunk_size as usize
+                && (self.digests.len() + 1) < self.chunk_count as usize
+            {
+                self.digests.push(sm3(&self.cur));
+                self.cur.clear();
+            }
+        }
+        Ok(())
+    }
+
+    /// 生成 prelude（清单 + 签名），之后才能逐块出记录。返回 prelude 长度。
+    pub fn make_prelude(&mut self) -> Result<usize> {
+        // 幂等：调用方常用"先问长度再分配"的模式，重复调用不能改变状态
+        if self.header.is_some() {
+            return Ok(self.prelude.len());
+        }
+        if self.hashed != self.total {
+            return Err(Error::LengthInconsistent);
+        }
+        if self.digests.len() + 1 != self.chunk_count as usize {
+            return Err(Error::LengthInconsistent);
+        }
+        // 最后一块（可能为空文件 → SM3("")）
+        self.digests.push(sm3(&self.cur));
+        self.cur.clear();
+
+        let manifest = Manifest {
+            name_mode: NAME_MODE_REAL,
+            file_size: self.total,
+            chunk_size: self.chunk_size,
+            chunk_count: self.chunk_count,
+            created_at_ms: self.created_at_ms,
+            name: self.name.clone(),
+            mime: self.mime.clone(),
+            ext: self.ext.clone(),
+            digests: self.digests.clone(),
+        };
+        let manifest_pt = manifest.encode()?;
+
+        let mut header = Header {
+            flags: FLAG_SENDER_SIGNED,
+            chunk_size: self.chunk_size,
+            chunk_count: self.chunk_count,
+            plaintext_size: self.total,
+            wrapped_key_len: WRAPPED_KEY_LEN as u64,
+            manifest_len: manifest_pt.len() as u64 + TAG_LEN as u64,
+            manifest_pt_len: manifest_pt.len() as u32,
+            sender_pub_len: SENDER_PUB_LEN as u32,
+            kdf_salt: self.kdf_salt,
+            sig_len: MIN_SIG_LEN as u64,
+        };
+
+        let km = kek_manifest(&self.dk, &self.kdf_salt);
+        let aad_m = aad_manifest(&header);
+        let mut manifest_ct = vec![0u8; manifest_pt.len()];
+        let mut manifest_tag = [0u8; TAG_LEN];
+        gcm::encrypt(
+            &km,
+            &MANIFEST_NONCE,
+            &aad_m,
+            &manifest_pt,
+            &mut manifest_ct,
+            &mut manifest_tag,
+        );
+        let mut manifest_sec = manifest_ct;
+        manifest_sec.extend_from_slice(&manifest_tag);
+
+        let header_bytes = header.encode();
+        let mut sig_input =
+            Vec::with_capacity(8 + HDR_CORE_LEN + SENDER_PUB_LEN + manifest_sec.len());
+        sig_input.extend_from_slice(&SIG_PREFIX);
+        sig_input.push(VERSION_MAJOR);
+        sig_input.push(VERSION_MINOR);
+        sig_input.extend_from_slice(&header_bytes[..HDR_CORE_LEN]);
+        sig_input.extend_from_slice(&self.sender_pub);
+        sig_input.extend_from_slice(&manifest_sec);
+
+        let raw = sm2::sign_with_k(
+            &self.sender_private,
+            &sig_input,
+            sm2::DEFAULT_ID,
+            &self.sig_k,
+        )?
+        .ok_or(Error::Internal)?;
+        let mut r = [0u8; 32];
+        let mut s = [0u8; 32];
+        r.copy_from_slice(&raw[..32]);
+        s.copy_from_slice(&raw[32..]);
+        let sig_der = der::encode_signature(&r, &s);
+        if sig_der.len() < MIN_SIG_LEN || sig_der.len() > MAX_SIG_LEN {
+            return Err(Error::Internal);
+        }
+        header.sig_len = sig_der.len() as u64;
+
+        let header_bytes = header.encode();
+        self.prelude = Vec::with_capacity(
+            HEADER_LEN + SENDER_PUB_LEN + WRAPPED_KEY_LEN + manifest_sec.len() + sig_der.len(),
+        );
+        self.prelude.extend_from_slice(&header_bytes);
+        self.prelude.extend_from_slice(&self.sender_pub);
+        self.prelude.extend_from_slice(&self.wrapped);
+        self.prelude.extend_from_slice(&manifest_sec);
+        self.prelude.extend_from_slice(&sig_der);
+        self.header = Some(header);
+        Ok(self.prelude.len())
+    }
+
+    /// prelude 字节（调用 `make_prelude` 之后可用）。
+    pub fn prelude(&self) -> &[u8] {
+        &self.prelude
+    }
+
+    /// 出一块记录（16B 头 + 密文 + 16B tag），与整包产出逐字节相同。
+    pub fn chunk(&self, index: u32, plaintext: &[u8], out: &mut Vec<u8>) -> Result<()> {
+        let header = self.header.as_ref().ok_or(Error::BadArgument)?;
+        if index >= self.chunk_count {
+            return Err(Error::ChunkOrder);
+        }
+        let pt_len = chunk_plain_len(self.total, self.chunk_size, self.chunk_count, index);
+        if plaintext.len() != pt_len as usize {
+            return Err(Error::LengthInconsistent);
+        }
+        let last = index + 1 == self.chunk_count;
+        let kc = kek_chunk(&self.dk, &self.kdf_salt);
+        let aad = aad_chunk(header, index, last, pt_len);
+        let nonce = chunk_nonce(index, last);
+        let mut ct = vec![0u8; plaintext.len()];
+        let mut tag = [0u8; TAG_LEN];
+        gcm::encrypt(&kc, &nonce, &aad, plaintext, &mut ct, &mut tag);
+
+        out.clear();
+        out.extend_from_slice(&index.to_be_bytes());
+        out.extend_from_slice(&pt_len.to_be_bytes());
+        out.extend_from_slice(&(plaintext.len() as u32).to_be_bytes());
+        out.push(if last { 1 } else { 0 });
+        out.push(0);
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&ct);
+        out.extend_from_slice(&tag);
+        Ok(())
+    }
+
+    /// 记录块数（便于调用方分配）。
+    pub fn chunk_count(&self) -> u32 {
+        self.chunk_count
+    }
+
+    /// 某块的明文长度。
+    pub fn chunk_len(&self, index: u32) -> u32 {
+        chunk_plain_len(self.total, self.chunk_size, self.chunk_count, index)
+    }
+}
+
+/// 流式解包会话（先喂 prelude，再逐块喂记录）。
+pub struct UnpackStream {
+    header: Header,
+    manifest: Manifest,
+    sender_public: [u8; SENDER_PUB_LEN],
+    sender_code: String,
+    dk: [u8; 32],
+    next: u32,
+}
+
+impl UnpackStream {
+    pub fn sender_code(&self) -> &str {
+        &self.sender_code
+    }
+    pub fn sender_public(&self) -> &[u8; SENDER_PUB_LEN] {
+        &self.sender_public
+    }
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+    pub fn chunk_count(&self) -> u32 {
+        self.header.chunk_count
+    }
+    /// 第 `index` 块的明文长度（调用方据此切记录）。
+    pub fn chunk_len(&self, index: u32) -> u32 {
+        chunk_plain_len(
+            self.header.plaintext_size,
+            self.header.chunk_size,
+            self.header.chunk_count,
+            index,
+        )
+    }
+    pub fn done(&self) -> bool {
+        self.next == self.header.chunk_count
+    }
+
+    /// 只校验记录头并返回该块明文长度（**不消耗状态**，用于"先问大小再分配"）。
+    pub fn peek_plain_len(&self, record: &[u8]) -> Result<usize> {
+        if self.next >= self.header.chunk_count {
+            return Err(Error::ChunkOrder);
+        }
+        if record.len() < CHUNK_HEADER_LEN + TAG_LEN {
+            return Err(Error::Truncated);
+        }
+        let hdr = &record[..CHUNK_HEADER_LEN];
+        let index = u32::from_be_bytes(hdr[0..4].try_into().expect("4"));
+        if index != self.next {
+            return Err(Error::ChunkOrder);
+        }
+        let last = index + 1 == self.header.chunk_count;
+        if (hdr[12] == 1) != last {
+            return Err(Error::ChunkOrder);
+        }
+        let pt_len = u32::from_be_bytes(hdr[4..8].try_into().expect("4"));
+        let ct_len = u32::from_be_bytes(hdr[8..12].try_into().expect("4"));
+        let expected = chunk_plain_len(
+            self.header.plaintext_size,
+            self.header.chunk_size,
+            self.header.chunk_count,
+            index,
+        );
+        if pt_len != expected || ct_len != pt_len {
+            return Err(Error::LengthInconsistent);
+        }
+        if record.len() != CHUNK_HEADER_LEN + ct_len as usize + TAG_LEN {
+            return Err(Error::LengthInconsistent);
+        }
+        Ok(pt_len as usize)
+    }
+
+    /// 逐块解密：记录必须是**下一块**（乱序/重复/跨包 → `CRYPTO_CHUNK_ORDER`）。
+    pub fn chunk(&mut self, record: &[u8], out: &mut Vec<u8>) -> Result<()> {
+        if self.next >= self.header.chunk_count {
+            return Err(Error::ChunkOrder);
+        }
+        if record.len() < CHUNK_HEADER_LEN + TAG_LEN {
+            return Err(Error::Truncated);
+        }
+        let hdr = &record[..CHUNK_HEADER_LEN];
+        let index = u32::from_be_bytes(hdr[0..4].try_into().expect("4"));
+        let pt_len = u32::from_be_bytes(hdr[4..8].try_into().expect("4"));
+        let ct_len = u32::from_be_bytes(hdr[8..12].try_into().expect("4"));
+        let last_flag = hdr[12];
+        let expected_index = self.next;
+        if index != expected_index {
+            return Err(Error::ChunkOrder);
+        }
+        let last = index + 1 == self.header.chunk_count;
+        if (last_flag == 1) != last {
+            return Err(Error::ChunkOrder);
+        }
+        let expected_pt = chunk_plain_len(
+            self.header.plaintext_size,
+            self.header.chunk_size,
+            self.header.chunk_count,
+            index,
+        );
+        if pt_len != expected_pt || ct_len != pt_len {
+            return Err(Error::LengthInconsistent);
+        }
+        let end = CHUNK_HEADER_LEN + ct_len as usize + TAG_LEN;
+        if record.len() != end {
+            return Err(Error::LengthInconsistent);
+        }
+        let ct = &record[CHUNK_HEADER_LEN..CHUNK_HEADER_LEN + ct_len as usize];
+        let mut tag = [0u8; TAG_LEN];
+        tag.copy_from_slice(&record[CHUNK_HEADER_LEN + ct_len as usize..end]);
+        let kc = kek_chunk(&self.dk, &self.header.kdf_salt);
+        let aad = aad_chunk(&self.header, index, last, pt_len);
+        let nonce = chunk_nonce(index, last);
+        let pt = gcm::decrypt(&kc, &nonce, &aad, ct, &tag).ok_or(Error::ChunkAuthFailed)?;
+        out.clear();
+        out.extend_from_slice(&pt);
+        // 明文摘要必须与清单一致
+        let want = self
+            .manifest
+            .digests
+            .get(index as usize)
+            .ok_or(Error::LengthInconsistent)?;
+        if sm3(out) != *want {
+            return Err(Error::DigestMismatch);
+        }
+        self.next += 1;
+        Ok(())
+    }
+}
+
+/// 打开流式解包会话：只要求 **prelude 完整**。
+pub fn open_stream(prelude: &[u8], recipient_private: &[u8; 32]) -> Result<UnpackStream> {
+    let o = open_from_prelude(prelude, recipient_private)?;
+    Ok(UnpackStream {
+        header: o.header,
+        manifest: o.manifest,
+        sender_public: o.sender_public,
+        sender_code: o.sender_code,
+        dk: o.dk,
+        next: 0,
+    })
+}
