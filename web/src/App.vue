@@ -10,6 +10,7 @@ import { sendFile, resumeSend } from './net/upload.js'
 import { receiveTransfer } from './net/download.js'
 import { describeError } from './net/errors.js'
 import { saveBlob } from './lib/save.js'
+import { defaultSinkFactory } from './lib/saveStream.js'
 import { decode as b64uDecode } from './lib/base64url.js'
 import { info } from './lib/log.js'
 import MyCodeCard from './components/MyCodeCard.vue'
@@ -203,6 +204,7 @@ async function doReceive({ transferId, onProgress }) {
     senderPublic: fetchSenderPublic,
     onProgress,
     save: saveBlob,
+    sinkFactory: defaultSinkFactory,
   })
 }
 </script>

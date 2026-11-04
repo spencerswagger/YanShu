@@ -3,7 +3,11 @@
 #
 # 用法：
 #   ./check_all.sh <rune-crate-dir> [workdir] [--base-url http://127.0.0.1:18080]
+#   ./check_all.sh <rune-crate-dir> [workdir] --with-compose [--compose-dir DIR]
 #   ./check_all.sh --selftest          # 只验聚合逻辑（不需要 crate）
+#
+# 可选步骤「零配置部署（docker compose）」默认记 n/a 且**不参与判定**——没有 docker 的环境
+# 不该因此把整体判成 2。启用方式：`--with-compose`，或设 `YS_WITH_COMPOSE=1` / `YS_COMPOSE_DIR`。
 #
 # 设计意图：把"靠人记得去比"换成"一条命令"。head 前进后重跑本脚本，
 # 三份结果都带 head 线索（wasm 字节数 + sha256），不会出现"结果对、产物旧"。
@@ -133,9 +137,46 @@ if [ "${1:-}" = "--selftest" ]; then
         echo "  PASS 单步 FAIL → exit 1：$(grep '结论：FAIL' /tmp/ca-6.txt)"
     fi
 
+    # 可选步骤（零配置部署）未启用时不得影响判定：8 项全 0 仍应 0
+    not_run=""; verdict=-1
+    aggregate "selftest-scan:0" "selftest-tamper:0" "selftest-all:0" \
+              "code:0" "parity:0" "kernel:0" "upgrade:0" "prelude:0" "ev2:0" >/tmp/ca-7.txt 2>&1
+    if [ "$verdict" -ne 0 ]; then
+        echo "  FAIL 可选步骤未启用时应不影响判定（应 0，实得 $verdict）"; rc_all=1
+    else
+        echo "  PASS 可选步骤（compose）未启用不影响判定 → 0"
+    fi
+    # 可选步骤启用且缺 docker → 2（INCONCLUSIVE），并点名 compose
+    not_run=""; verdict=-1
+    aggregate "selftest-all:0" "code:0" "parity:0" "kernel:0" "upgrade:0" "prelude:0" "ev2:0" "compose:2" >/tmp/ca-8.txt 2>&1
+    if [ "$verdict" -eq 2 ] && grep -q compose /tmp/ca-8.txt; then
+        echo "  PASS 启用 compose 但缺依赖 → 2 且点名 compose"
+    else
+        echo "  FAIL compose 缺依赖应 2 并点名（实得 $verdict）"; rc_all=1
+    fi
+
     echo "自测：$([ "$rc_all" -eq 0 ] && echo PASS || echo FAIL)"
     exit "$rc_all"
 fi
+
+with_compose=0
+compose_dir="${YS_COMPOSE_DIR:-}"
+newargs=""
+skip_next=0
+for a in "$@"; do
+    if [ "$skip_next" -eq 1 ]; then compose_dir="$a"; skip_next=0; continue; fi
+    case "$a" in
+        --with-compose) with_compose=1 ;;
+        --compose-dir) skip_next=1 ;;
+        *) newargs="$newargs
+$a" ;;
+    esac
+done
+if [ -n "$compose_dir" ]; then with_compose=1; fi
+if [ "${YS_WITH_COMPOSE:-}" = "1" ]; then with_compose=1; fi
+# 重新排布位置参数（保持 crate/work/base-url 老三样的顺序）
+# shellcheck disable=SC2086
+set -- $newargs
 
 crate="${1:-}"
 work="${2:-/tmp/ys-checkall}"
@@ -225,6 +266,19 @@ run_step 6 "$work/ev2.log" "$here/run_evidence2_wasm.sh" "$crate" "$work/ev2"
 rc_ev2=$?
 set -e
 
+rc_compose=""
+if [ "$with_compose" -eq 1 ]; then
+    echo "== 6/6 零配置部署（docker compose：不写 .env、不填密钥）=="
+    set +e
+    run_step 10 "$work/compose.log" sh "$here/check_compose_zero_config.sh" \
+        --image-tag "${YS_IMAGE_TAG:-local}" ${compose_dir:+--compose-url "$compose_dir"} \
+        --json-out "$work/compose-zero-config.json"
+    rc_compose=$?
+    set -e
+else
+    echo "== 6/6 零配置部署（docker compose）：n/a（未启用：加 --with-compose 或设 YS_COMPOSE_DIR）=="
+fi
+
 echo "== 汇总 =="
 echo "  head 产物：$BYTES 字节  sha256=$SHA  ys_version=$VER"
 echo "  脚本自测：scan=$rc_st1 tamper=$rc_st2 check_all=$rc_st3"
@@ -234,10 +288,17 @@ echo "  服务端内嵌内核 sha：exit=$rc_kernel${YS_SERVER_DIR:+（$YS_SERVE
 echo "  升级路径：exit=$rc_upgrade"
 echo "  prelude-only 元数据：exit=$rc_prelude"
 echo "  证据二：exit=$rc_ev2"
+if [ -n "$rc_compose" ]; then echo "  零配置部署：exit=$rc_compose"; else echo "  零配置部署：n/a（未启用，不参与判定）"; fi
 if [ "$ci_mode" -eq 1 ]; then echo "  （CI 模式：任何未跑/未判定都非 0）"; fi
 
 verdict=$EXIT_PASS
-aggregate "selftest-scan:$rc_st1" "selftest-tamper:$rc_st2" "selftest-all:$rc_st3" \
-          "code:$rc_code" "parity:$rc_parity" "kernel:$rc_kernel" \
-          "upgrade:$rc_upgrade" "prelude:$rc_prelude" "ev2:$rc_ev2"
+if [ -n "$rc_compose" ]; then
+    aggregate "selftest-scan:$rc_st1" "selftest-tamper:$rc_st2" "selftest-all:$rc_st3" \
+              "code:$rc_code" "parity:$rc_parity" "kernel:$rc_kernel" \
+              "upgrade:$rc_upgrade" "prelude:$rc_prelude" "ev2:$rc_ev2" "compose:$rc_compose"
+else
+    aggregate "selftest-scan:$rc_st1" "selftest-tamper:$rc_st2" "selftest-all:$rc_st3" \
+              "code:$rc_code" "parity:$rc_parity" "kernel:$rc_kernel" \
+              "upgrade:$rc_upgrade" "prelude:$rc_prelude" "ev2:$rc_ev2"
+fi
 exit "$verdict"

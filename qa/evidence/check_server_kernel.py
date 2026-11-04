@@ -16,6 +16,10 @@
    34 个函数 + `memory`（0 import）—— 万一将来允许不同构建，也不能连版本/导出都对不上；
 3. 文件不存在 → BLOCKED（说明拿不到可核对的产物，不能当作通过）。
 
+**内核升级时改这里的字节数与导出数，sha 从白名单推导**（`FROZEN_BYTES` / `FROZEN_FUNCS`），
+期望 sha 由 `server/internal/auth/verifier.go` 白名单**首条**自动推导（首条 = 当前冻结产物），
+不再在脚本里另写一份——避免"脚本写的和线上白名单不是同一份"这种过期问题。
+
 用法：
     python3 qa/evidence/check_server_kernel.py --server-dir <含 server/kernel 的源码根> \
         [--expect-sha <hex>] [--json-out out.json]
@@ -28,6 +32,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -43,10 +48,35 @@ WHITELIST = {
     "c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f": 127313,
     "8b89dd7fc033b9f4b316238d1d7507b161bbc74ff3547643d00981ed8da154f9": 130653,
 }
-FROZEN_SHA = "c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f"
-FROZEN_BYTES = 127313
+# 当前冻结（v0.1.2）：140,762 B / 43 函数 + memory / 0 import；sha 从 verifier.go 白名单首条推导
+FROZEN_BYTES = 140762
 FROZEN_VERSION = "0x00010000"
-FROZEN_FUNCS = 34
+FROZEN_FUNCS = 43
+
+# 历史（v0.1.1 的冻结内核，回滚时对照用；v0.1.2 起不再作为期望值）：
+#   FROZEN_SHA   = c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f
+#   FROZEN_BYTES = 127313
+#   FROZEN_FUNCS = 34
+
+# 兜底：白名单解析失败时才用它（正常路径不读这个常量）
+FROZEN_SHA_FALLBACK = "daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de"
+
+
+def frozen_sha_from_whitelist(server_dir: Path) -> tuple[str, list[str]]:
+    """从 server/internal/auth/verifier.go 的 sha256 白名单推导期望 sha（首条 = 当前）。
+
+    返回 (期望 sha, 白名单全部条目)。解析不到就返回 ("", [])，由调用方报歧义。
+    """
+    src = server_dir / "server" / "internal" / "auth" / "verifier.go"
+    if not src.is_file():
+        return "", []
+    text = src.read_text(encoding="utf-8", errors="replace")
+    shas: list[str] = []
+    for line in text.splitlines():
+        m = re.search(r'"([0-9a-f]{64})"\s*:\s*true', line)
+        if m:
+            shas.append(m.group(1))
+    return (shas[0] if shas else ""), shas
 
 
 def sha256_of(path: Path) -> str:
@@ -182,10 +212,16 @@ def main(argv=None) -> int:
 
     got_sha = sha256_of(wasm)
     got_bytes = wasm.stat().st_size
+    derived, all_shas = frozen_sha_from_whitelist(Path(args.server_dir))
+    expect = args.expect_sha or derived or FROZEN_SHA_FALLBACK
+    if not derived and not args.expect_sha:
+        print(f"[warn] 未能从 verifier.go 推导白名单，回落到兜底常量 {FROZEN_SHA_FALLBACK[:12]}…")
+    if len(all_shas) > 1:
+        print(f"[note] verifier.go 白名单共 {len(all_shas)} 条，取**首条**为当前期望：{expect[:12]}…")
     if args.expect_sha:
         ok_sha = got_sha == args.expect_sha
     else:
-        ok_sha = got_sha in WHITELIST
+        ok_sha = got_sha == expect
     if not ok_sha:
         print(f"[note] 白名单里的 sha：")
         for k, v in WHITELIST.items():
@@ -196,7 +232,7 @@ def main(argv=None) -> int:
     print("=" * 88)
     print(f"文件     ：{wasm}")
     print(f"实际     ：{got_bytes:,} 字节  sha256={got_sha}")
-    print(f"冻结期望 ：{FROZEN_BYTES:,} 字节  sha256={args.expect_sha}")
+    print(f"冻结期望 ：{FROZEN_BYTES:,} 字节  sha256={expect}  （来自 verifier.go 白名单首条）")
     print(f"{'PASS' if ok_sha else 'FAIL'}  内核 sha256 {'一致' if ok_sha else '不一致——服务端验的不是验收过的那份产物'}")
 
     ok_meta = True
@@ -219,7 +255,7 @@ def main(argv=None) -> int:
 
     ok_git = True
     if args.repo:
-        ok_git = check_git_tracking(Path(args.repo), args.expect_sha or FROZEN_SHA, args.git_ref)
+        ok_git = check_git_tracking(Path(args.repo), expect, args.git_ref)
     else:
         print("SKIP  git 跟踪/blob sha（未给 --repo）")
 
@@ -237,7 +273,7 @@ def main(argv=None) -> int:
     if args.json_out:
         Path(args.json_out).write_text(json.dumps({
             "ok": ok, "path": str(wasm), "bytes": got_bytes, "sha256": got_sha,
-            "expect_sha256": args.expect_sha, "expect_bytes": FROZEN_BYTES,
+            "expect_sha256": expect, "expect_bytes": FROZEN_BYTES,
             "version": ver.stdout.strip(), "exports": json.loads(p.stdout) if p.returncode == 0 else None,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
     return 0 if ok else 1
