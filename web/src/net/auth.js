@@ -16,6 +16,7 @@ export const PURPOSES = {
   INBOX_LIST: 0x05,
   WS_HELLO: 0x06,
   TRANSFER_ACK: 0x07,
+  ABUSE_REPORT: 0x09,
 }
 
 const SIGN_PREFIX = 'YSAUTH1'
@@ -56,6 +57,12 @@ export const fields = {
   INBOX_LIST: ({ code }) => ascii(code),
   WS_HELLO: ({ code }) => ascii(code),
   TRANSFER_ACK: ({ receiverCode, transferId }) => bytes(ascii(receiverCode), ascii(transferId)),
+  /**
+   * 举报（契约 §11.5）：`SIG_INPUT` **定长 76 字节**，无前缀、KID 不参与：
+   *   `YSAUTH1`(7) ‖ PURPOSE 0x09(1) ‖ NONCE(32) ‖ REPORTER_CODE(4) ‖ TRANSFER_ID(32)
+   * `TRANSFER_ID` 是服务端那串 32 字符 id 的 **ASCII**（不是 hex 解码后的 16 字节）。
+   */
+  ABUSE_REPORT: ({ code, transferId }) => bytes(ascii(code), ascii(transferId)),
 }
 
 /**
