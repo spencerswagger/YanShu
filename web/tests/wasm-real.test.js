@@ -64,6 +64,11 @@ test('真内核：0 import、导出齐全、版本/包头/块大小可读', asyn
   // 6 参自证原型：不同轮次叫过 _v1 / _v2，按 arity 探测
   assert.ok(['ys_unpack_v1', 'ys_unpack_v2'].some((n) => kernel.exports[n]?.length === 6))
   assert.equal(kernel.capabilities.selfUnpack, true)
+  // PR #33 流式内核：43 个函数导出 + memory = 44 项；流式入口齐全
+  const fnExports = Object.keys(kernel.exports).filter((n) => n !== 'memory')
+  assert.equal(fnExports.length, 43, `函数导出应为 43，实际 ${fnExports.length}`)
+  assert.ok(kernel.exports.memory instanceof WebAssembly.Memory, 'memory 必须存在（共 44 项导出）')
+  assert.equal(kernel.supportsStreaming, true, '流式入口必须齐全（9 个新导出）')
   const selfTest = kernel.selfTest()
   assert.equal(selfTest.ok, true, `自检失败：${JSON.stringify(selfTest.checks)}`)
   // 契约 §2.3 四条判据：版本 / HEADER / V1 样例真解 / 改版本字节必拒

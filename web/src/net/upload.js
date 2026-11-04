@@ -35,12 +35,155 @@ const report = (onProgress, patch) => onProgress?.(patch)
  * @param {File|Blob} p.file        要发的文件
  * @param {{code:string, nickname:string, publicKey:Uint8Array}} p.recipient
  */
+/**
+ * 真流式发送（内核 PR #33 的增量接口，常量内存）：
+ *   ① 第一遍：`file.slice` 逐块读 → `ys_pack_hash_update`（只留每块 32B 摘要，不攒整包）；
+ *   ② 出 prelude（幂等）→ 建传输 → 传 prelude；
+ *   ③ 第二遍：逐块 `slice` → `ys_pack_stream_chunk` → 立即 PUT → 释放该块引用。
+ * 内存只跟块大小有关（1 MiB），与文件大小无关。
+ */
+async function sendFileStreaming({
+  api,
+  kernel,
+  session,
+  file,
+  recipient,
+  onProgress,
+  signal,
+  pendingStore,
+  ttlSeconds,
+  maxDownloads,
+}) {
+  const name = file.name || 'file'
+  const mime = file.type || 'application/octet-stream'
+  const chunkSize = kernel.blockSize || config.chunkSize
+  const total = file.size
+  const chunkCount = Math.max(1, Math.ceil(total / chunkSize))
+  const readSlice = async (i) => {
+    const start = i * chunkSize
+    const end = Math.min(start + chunkSize, total)
+    return new Uint8Array(await file.slice(start, end).arrayBuffer())
+  }
+
+  report(onProgress, { phase: 'packing', done: 0, total, message: '读取文件（流式）' })
+  kernel.streamPackBegin({
+    recipientPublic: recipient.publicKey,
+    senderPrivate: session.privateKey,
+    name,
+    mime,
+    chunkSize,
+    totalSize: total,
+    createdAt: Date.now(),
+  })
+
+  // 第一遍：只算摘要，不保留任何块
+  for (let i = 0; i < chunkCount; i++) {
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+    kernel.streamHashUpdate(await readSlice(i))
+    report(onProgress, { phase: 'packing', done: Math.min(total, (i + 1) * chunkSize), total, message: `摘要 ${i + 1}/${chunkCount}` })
+  }
+
+  const prelude = kernel.streamPrelude()
+  const preludeSm3 = kernel.sm3(prelude)
+  report(onProgress, { phase: 'creating', done: 0, total, message: '创建传输' })
+  const created = await api.createTransfer({
+    recipient_code: recipient.code,
+    plaintext_size: total,
+    chunk_size: chunkSize,
+    chunk_count: chunkCount,
+    prelude_len: prelude.length,
+    prelude_sm3: b64uEncode(preludeSm3),
+    ttl_seconds: ttlSeconds ?? config.defaultTtlSeconds,
+    max_downloads: maxDownloads ?? config.defaultMaxDownloads,
+    idempotency_key: idempotencyKey(),
+  })
+  const transferId = created.transfer_id
+  const uploadToken = created.upload_token
+
+  await pendingStore?.put(transferId, {
+    kind: 'send',
+    transferId,
+    uploadToken,
+    recipientCode: recipient.code,
+    recipientNickname: recipient.nickname,
+    fileName: name,
+    fileSize: total,
+    chunkSize,
+    chunkCount,
+    preludeLen: prelude.length,
+    preludeSm3: b64uEncode(preludeSm3),
+    session: null, // 流式不落会话快照（本来也不攒整包）
+    createdAt: Date.now(),
+    state: 'UPLOADING',
+    streaming: true,
+  })
+
+  await api.putPrelude({ transferId, uploadToken, prelude })
+
+  const missing = await fetchMissing(api, transferId, uploadToken, chunkCount)
+  let sent = 0
+  const totalBytes = missing.reduce(
+    (n, i) => n + Math.min(chunkSize, total - i * chunkSize),
+    0,
+  )
+  await runPool(
+    missing,
+    async (index) => {
+      if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+      const pt = await readSlice(index)
+      const record = kernel.streamChunk(index, pt)
+      // 传输切片 = `CHUNK_CT‖TAG`（pt+16）：块记录头 16B **不上传**，接收侧按 §6.3 重建
+      const headerLen = kernel.segmenter.recordHeaderLen
+      const slice = record.subarray(headerLen)
+      await api.putChunk({ transferId, uploadToken, index, bytes: slice })
+      sent += pt.length
+      report(onProgress, { phase: 'uploading', done: sent, total: totalBytes, message: `上传块 ${index + 1}/${chunkCount}` })
+    },
+    { concurrency: config.uploadConcurrency, signal },
+  )
+
+  kernel.streamPackEnd()
+  report(onProgress, { phase: 'completing', done: total, total, message: '标记完成' })
+  const done = await api.complete({ transferId, uploadToken })
+  report(onProgress, { phase: 'done', done: total, total, message: '已发送' })
+  info('发送完成（流式）', { bytes: total, chunks: chunkCount })
+  return {
+    transferId,
+    uploadToken,
+    recipientCode: recipient.code,
+    fileName: name,
+    fileSize: total,
+    chunkCount,
+    preludeLen: prelude.length,
+    state: done?.json?.state,
+  }
+}
+
 export async function sendFile({ api, kernel, session, file, recipient, onProgress, signal, pendingStore, ttlSeconds, maxDownloads }) {
   const name = file.name || 'file'
   const mime = file.type || 'application/octet-stream'
 
+  const canStream = Boolean(kernel?.supportsStreaming)
+  if (canStream && file.size > config.streamThresholdBytes) {
+    return sendFileStreaming({
+      api,
+      kernel,
+      session,
+      file,
+      recipient,
+      onProgress,
+      signal,
+      pendingStore,
+      ttlSeconds,
+      maxDownloads,
+    })
+  }
   if (file.size > config.maxPackSize) {
-    const err = new Error(`文件 ${file.size} 字节超过当前内核上限 ${config.maxPackSize} 字节（整包接口）`)
+    const err = new Error(
+      canStream
+        ? `文件 ${file.size} 字节超过上限 ${config.maxPackSize} 字节`
+        : `文件 ${file.size} 字节超过当前内核上限 ${config.maxPackSize} 字节（整包接口）`,
+    )
     err.code = 'FILE_TOO_LARGE'
     throw err
   }

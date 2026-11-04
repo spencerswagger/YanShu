@@ -234,6 +234,26 @@ const isContract = ys_version() === 0x00010000 && ys_header_len() === 112
 > 这条错误**无法在库内检测**（没有长度入参）；`crypto/sm/tests/ffi_user_code.rs`
 > 的 `wrong_width_is_detectable_and_documented` 固化了"传 65 会得到不同码"这一事实。
 
+## 5.45 流式接口（常量内存，字节兼容）
+
+整包接口要一次性持有整包，1 GiB 文件会吃 ~7 GB。流式接口把内存压到常量：
+
+| 函数 | 作用 |
+|---|---|
+| `ys_pack_stream_begin(pub64, priv32, name, mime, ext, created_at_ms, chunk_size, total_size, seed)` | 开打包会话（随机数顺序与 `ys_pack_v1` 一致） |
+| `ys_pack_hash_update(data, len)` | 顺序喂明文，只留每块 SM3（32B/块） |
+| `ys_pack_stream_prelude(out, cap, &n)` | 出 prelude（清单+签名），**幂等**，可先上传 |
+| `ys_pack_stream_chunk(index, pt, pt_len, out, cap, &n)` | 出一块记录（16B 头+ct+tag） |
+| `ys_pack_stream_chunk_len(index)` / `ys_pack_stream_end()` | 取某块明文长度 / 丢弃会话 |
+| `ys_unpack_stream_begin(prelude, len, priv32)` | 用 prelude 开解包会话（验签+清单校验） |
+| `ys_unpack_stream_chunk(record, len, out, cap, &n)` | 顺序解一块（tag+摘要都校验） |
+| `ys_unpack_stream_end()` | 全部到齐 → 0，否则 `CRYPTO_CHUNK_MISSING` |
+
+**字节兼容**：流式产出与 `ys_pack_v1` 整包产出**逐字节相同**（`tests/streaming.rs` 用
+契约 §15 的 V1 522B / V2 743B 断言 `流式 == 整包`），不抬版本号。
+**内存实测**（1 MiB 块，独立进程）：64 MiB 与 256 MiB 文件的 wasm 线性内存峰值都是
+**8.5 MiB**（基线 2.19 MiB，增量 6.31 MiB），与文件大小无关。
+
 ## 5.4 入参/出参字节数表与两个 pack 函数的关系
 
 | 函数 | 入参关键长度 | 出参 |

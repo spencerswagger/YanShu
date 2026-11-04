@@ -227,6 +227,151 @@ export class WasmKernel {
     return seed
   }
 
+  // ---------------------------------------------------------------- 流式（常量内存）
+  //
+  // 内核 PR #33 新增 9 个导出（`docs/ABI.md §5.45`），字节与整包接口完全兼容
+  // （V1 522B / V2 743B 的「流式 ≡ 整包」由内核测试断言，不抬版本号）。
+  // 顺序约束：必须先把**全部明文**按顺序喂给 `streamHashUpdate`（清单摘要要用），
+  // 再出 prelude；之后逐块 `streamChunk`。内存只跟块大小有关，与文件大小无关。
+
+  get supportsStreaming() {
+    return [
+      'ys_pack_stream_begin',
+      'ys_pack_hash_update',
+      'ys_pack_stream_prelude',
+      'ys_pack_stream_chunk',
+      'ys_unpack_stream_begin',
+      'ys_unpack_stream_chunk',
+      'ys_unpack_stream_end',
+    ].every((n) => typeof this.exports[n] === 'function')
+  }
+
+  /** 开打包会话（9 个逻辑参数，wasm 侧 13 个：字符串要 ptr+len） */
+  streamPackBegin({
+    recipientPublic,
+    senderPrivate,
+    name = 'file',
+    mime = 'application/octet-stream',
+    ext = '',
+    createdAt = Date.now(),
+    chunkSize,
+    totalSize,
+    seed,
+  }) {
+    // 入参公钥统一 64 字节 `X‖Y`：上层（身份/服务端）给的是 65 字节 wire 形态，这里按内核口径去掉 0x04
+    const pub = this.#write(WasmKernel.toKernel(recipientPublic))
+    const priv = this.#write(senderPrivate)
+    const n = this.#write(name)
+    const m = this.#write(mime)
+    const e = this.#write(ext)
+    const sd = this.#write(seed || this.#seed())
+    try {
+      this.#check(
+        this.exports.ys_pack_stream_begin(
+          pub.ptr,
+          priv.ptr,
+          n.ptr,
+          n.len,
+          m.ptr,
+          m.len,
+          e.ptr,
+          e.len,
+          BigInt(createdAt),
+          chunkSize,
+          BigInt(totalSize),
+          sd.ptr,
+          sd.len,
+        ),
+        'ys_pack_stream_begin',
+      )
+    } finally {
+      pub.release()
+      priv.release()
+      n.release()
+      m.release()
+      e.release()
+      sd.release()
+    }
+  }
+
+  /** 顺序喂明文（只保留每块 32B 摘要） */
+  streamHashUpdate(bytes) {
+    const b = this.#write(bytes)
+    try {
+      this.#check(this.exports.ys_pack_hash_update(b.ptr, b.len), 'ys_pack_hash_update')
+    } finally {
+      b.release()
+    }
+  }
+
+  /** 出 prelude（清单+签名）；幂等，可以先上传再逐块传 */
+  streamPrelude() {
+    return this.#outCall('ys_pack_stream_prelude', (out, cap, n) =>
+      this.exports.ys_pack_stream_prelude(out, cap, n),
+    )
+  }
+
+  /** 出一块记录：16B 块头 + 密文 + tag（可直接 PUT 到 /chunks/{index}） */
+  streamChunk(index, plaintext) {
+    const pt = this.#write(plaintext)
+    try {
+      return this.#outCall(
+        'ys_pack_stream_chunk',
+        (out, cap, n) => this.exports.ys_pack_stream_chunk(index, pt.ptr, pt.len, out, cap, n),
+        pt.len + 128,
+      )
+    } finally {
+      pt.release()
+    }
+  }
+
+  /** 某块的明文长度（末块不是整块） */
+  streamChunkLen(index) {
+    const rc = this.exports.ys_pack_stream_chunk_len(index)
+    this.#check(rc < 0 ? rc : 0, 'ys_pack_stream_chunk_len')
+    return rc
+  }
+
+  /** 丢弃打包会话 */
+  streamPackEnd() {
+    this.#check(this.exports.ys_pack_stream_end(), 'ys_pack_stream_end')
+  }
+
+  /** 用 prelude 开解包会话（验签 + 清单校验），返回 meta */
+  streamUnpackBegin(prelude, recipientPrivate) {
+    const p = this.#write(prelude)
+    const priv = this.#write(recipientPrivate)
+    try {
+      this.#check(
+        this.exports.ys_unpack_stream_begin(p.ptr, p.len, priv.ptr),
+        'ys_unpack_stream_begin',
+      )
+    } finally {
+      p.release()
+      priv.release()
+    }
+    return this.unpackMetaPrelude({ prelude, recipientPrivate })
+  }
+
+  /** 顺序解一块（tag 与摘要都校验），返回该块明文 */
+  streamUnpackChunk(record) {
+    const r = this.#write(record)
+    try {
+      return this.#outCall(
+        'ys_unpack_stream_chunk',
+        (out, cap, n) => this.exports.ys_unpack_stream_chunk(r.ptr, r.len, out, cap, n),
+        Math.max(4096, r.len),
+      )
+    } finally {
+      r.release()
+    }
+  }
+
+  /** 全部到齐才算成功（缺块 → CRYPTO_CHUNK_MISSING） */
+  streamUnpackEnd() {
+    this.#check(this.exports.ys_unpack_stream_end(), 'ys_unpack_stream_end')
+  }
+
   // ---------------------------------------------------------------- 公钥（64 ↔ 65）
 
   /** 内核 64 字节 X‖Y → wire 65 字节未压缩点。 */

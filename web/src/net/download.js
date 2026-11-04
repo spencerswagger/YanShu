@@ -11,6 +11,7 @@ import { ApiError } from './client.js'
 import { runPool } from '../lib/pool.js'
 import { info } from '../lib/log.js'
 import { config } from '../config.js'
+import { bytes } from '../lib/bytes.js'
 
 const TERMINAL_CODES = {
   REVOKED: 'TRANSFER_REVOKED',
@@ -29,6 +30,17 @@ export function terminalError(state, terminalReason) {
  * @param {(code:string)=>Promise<Uint8Array>} p.senderPublic 由发送方码取 65 字节公钥（服务端可信）
  */
 export async function receiveTransfer(params) {
+  const canStream = Boolean(params.kernel?.supportsStreaming && (params.sinkFactory || params.sink))
+  if (canStream) {
+    try {
+      return await receiveStreaming({ ...params, attempt: 1 })
+    } catch (err) {
+      const leaseLost = err?.status === 401 || err?.code === 'DOWNLOAD_NOT_STARTED'
+      if (!leaseLost || params.signal?.aborted) throw err
+      info('下载租约失效，重新开租约取一次（流式）')
+      return receiveStreaming({ ...params, attempt: 2 })
+    }
+  }
   try {
     return await receiveOnce({ ...params, attempt: 1 })
   } catch (err) {
@@ -38,6 +50,76 @@ export async function receiveTransfer(params) {
     params.onProgress?.({ phase: 'prelude', done: 0, total: 0, message: '租约失效，重新取包头…' })
     return receiveOnce({ ...params, attempt: 2 })
   }
+}
+
+/**
+ * 真流式接收（常量内存）：
+ *   ① prelude → `ys_unpack_stream_begin`（验签 + 清单校验，拿到 meta）；
+ *   ② 逐块 `GET /chunks/{i}` → `ys_unpack_stream_chunk` → **立即交给 sink 写出**（不攒明文）；
+ *   ③ `ys_unpack_stream_end()` 全部到齐才算成功（缺块/摘要不符 → 报错，不会交出残缺文件）。
+ *
+ * `sink` 由调用方给：浏览器用 File System Access（`showSaveFilePicker`）流式写盘，
+ * 没有该 API 时退回"分块 Blob 累积"（此时明文仍会驻留内存，见 README 的兼容性说明）。
+ */
+const reportStream = (onProgress) => (patch) => onProgress?.(patch)
+
+async function receiveStreaming({
+  api,
+  kernel,
+  session,
+  transferId,
+  onProgress,
+  signal,
+  sinkFactory,
+  ack = true,
+  directBuffer,
+}) {
+  const prelude = await api.getPrelude(transferId)
+  const report = reportStream(onProgress)
+  if (!prelude.downloadId) {
+    throw new CryptoError('DOWNLOAD_NOT_STARTED', '取包头未拿到 download_id（无法下载块）')
+  }
+  report({ phase: 'prelude', done: 0, total: 0, message: '取回包头并验签…', verified: false })
+  const meta = kernel.streamUnpackBegin(prelude.bytes, session.privateKey)
+  const chunkCount = Number(meta.chunk_count)
+  const totalSize = Number(meta.size)
+  report({
+    phase: 'prelude',
+    done: 0,
+    total: totalSize,
+    message: `来自 ${meta.sender_code || ''}：${meta.name || '未命名'} · ${totalSize} 字节 · ${chunkCount} 块`,
+    meta: { name: meta.name || '未命名', size: totalSize, senderCode: meta.sender_code, chunkCount },
+    verified: false,
+  })
+
+  const sink = await (sinkFactory ? sinkFactory(meta) : createMemorySink())
+  let done = 0
+  try {
+    for (let index = 0; index < chunkCount; index++) {
+      if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+      const slice = await api.getChunk({ transferId, downloadId: prelude.downloadId, index })
+      // 收到的切片是 `CHUNK_CT‖TAG`（pt+16）：按契约 §6.3 重建 16B 块记录头再喂内核
+      const record = bytes(
+        kernel.segmenter.buildRecordHeader(index, slice.length - 16, chunkCount),
+        slice,
+      )
+      const plain = kernel.streamUnpackChunk(record)
+      await sink.write(plain)
+      done += plain.length
+      report({ phase: 'downloading', done, total: totalSize, message: `解密块 ${index + 1}/${chunkCount}` })
+    }
+    kernel.streamUnpackEnd()
+  } finally {
+    /* 会话由内核在 end/下次 begin 时重置 */
+  }
+
+  await sink.close()
+  if (ack) {
+    // ack 必须带租约 id（契约 §8.5）：不带会被判 409 DOWNLOAD_NOT_STARTED
+    await api.ack({ transferId, downloadId: prelude.downloadId })
+  }
+  info('接收完成（流式）', { bytes: done, chunks: chunkCount })
+  return { name: sink.name, size: done, transferId }
 }
 
 async function receiveOnce({ api, kernel, session, transferId, senderPublic, onProgress, signal, save, ack = true, attempt }) {
