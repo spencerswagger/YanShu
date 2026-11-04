@@ -60,59 +60,63 @@ async function take(item) {
   }
 }
 
+function focusDrop() {
+  document.querySelector('.col-main .drop')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
 defineExpose({ refresh })
 refresh()
 </script>
 
 <template>
   <section class="card">
-    <div class="row" style="justify-content: space-between">
-      <h2 style="margin: 0">
-        {{ items.length ? `${items.length} 个文件待接收` : '暂无待接收文件' }}
-      </h2>
-      <button type="button" class="sm" :disabled="loading" @click="refresh">
-        {{ loading ? '刷新中…' : '刷新' }}
+    <div class="spread" style="margin-bottom: 10px">
+      <div class="card-title">{{ items.length ? `${items.length} 个文件待接收` : '暂无待接收文件' }}</div>
+      <button type="button" class="icon-btn" :disabled="loading" aria-label="刷新" @click="refresh">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
       </button>
     </div>
 
     <p v-if="notice" class="banner info">{{ notice }}</p>
     <p v-if="errorText" class="banner warn">{{ errorText }}</p>
 
-    <ul v-if="items.length" class="list">
-      <li v-for="item in items" :key="item.transfer_id">
-        <div>
-          <strong>{{ item.sender_nickname || item.sender_code }}</strong>
-          <span class="meta">（{{ item.sender_code }}）</span>
-          <span class="tag">{{ item.state }}</span>
-        </div>
-        <div class="meta">
-          {{ fmtBytes(item.plaintext_size) }} · {{ item.chunk_count }} 块 · 到期
-          {{ clock(item.expires_at) }}
-        </div>
-        <div class="row" style="margin-top: 8px; justify-content: space-between">
-          <button
-            type="button"
-            class="primary"
-            :disabled="activeId === item.transfer_id"
-            @click="take(item)"
-          >
-            {{ activeId === item.transfer_id ? '解密中…' : '下载并解密' }}
-          </button>
-          <ReportSheet :api="api" :transfer-id="item.transfer_id" />
-        </div>
-        <div v-if="activeId === item.transfer_id">
-          <div class="progress">
-            <span :style="{ width: percent(progress.done, progress.total) + '%' }" />
+    <ul v-if="items.length" class="rlist">
+      <li v-for="item in items" :key="item.transfer_id" class="ritem row-72">
+        <div class="who">
+          <div class="avatar">{{ (item.sender_nickname || item.sender_code || '?').slice(0, 1) }}</div>
+          <div>
+            <div class="rname">{{ item.sender_nickname || item.sender_code }}</div>
+            <div class="meta">{{ fmtBytes(item.plaintext_size) }} · {{ item.chunk_count }} 块</div>
           </div>
-          <p class="meta">
-            {{ progress.message }}
-            <span v-if="progress.meta" class="tag" :class="progress.verified ? 'ok' : ''">
-              {{ progress.verified ? '已校验' : '未校验' }}
-            </span>
-          </p>
+        </div>
+        <button
+          type="button"
+          class="icon-btn lg"
+          :disabled="activeId === item.transfer_id"
+          :aria-label="activeId === item.transfer_id ? '解密中' : '下载并解密'"
+          @click="take(item)"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+        <ReportSheet :api="api" :transfer-id="item.transfer_id" icon-only />
+        <div v-if="activeId === item.transfer_id" class="row-progress">
+          <div class="progress"><span :style="{ width: percent(progress.done, progress.total) + '%' }" /></div>
         </div>
       </li>
     </ul>
-    <p v-else-if="!loading" class="hint">暂无待接收文件</p>
+
+    <div v-else class="empty-state">
+      <svg width="96" height="96" viewBox="0 0 24 24" fill="none" aria-hidden="true" class="empty-art">
+        <path d="M4 7h16v12H4z" stroke="currentColor" stroke-width="1.1" />
+        <path d="M4 7l8 6 8-6" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" />
+        <circle cx="18" cy="6" r="2.2" fill="var(--tint)" stroke="var(--accent)" stroke-width="1" />
+      </svg>
+      <div class="empty-title">暂无待接收文件</div>
+      <button type="button" class="primary block lg" @click="focusDrop">发送文件</button>
+    </div>
   </section>
 </template>

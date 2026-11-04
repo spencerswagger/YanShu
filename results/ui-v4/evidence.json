@@ -1,0 +1,381 @@
+{
+  "app": "http://127.0.0.1:5173/",
+  "shots": [
+    "/worktrees/YS-WEB/results/ui-v4/first-1440x900.png",
+    "/worktrees/YS-WEB/results/ui-v4/empty-1440x900.png",
+    "/worktrees/YS-WEB/results/ui-v4/first-390x844.png",
+    "/worktrees/YS-WEB/results/ui-v4/empty-390x844.png",
+    "/worktrees/YS-WEB/results/ui-v4/transferring-1440x900.png",
+    "/worktrees/YS-WEB/results/ui-v4/transferring-390x844.png"
+  ],
+  "measures": [
+    {
+      "view": "1440x900",
+      "phase": "first",
+      "count": 10,
+      "minW": 48,
+      "minH": 48,
+      "items": [
+        {
+          "tag": "BUTTON",
+          "label": "安全说明",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "复制码",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "雁ZRQK",
+          "w": 99,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "端到端加密 · 私钥仅存本机",
+          "w": 162,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "INPUT",
+          "label": "",
+          "w": 451,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "查询接收方",
+          "w": 76,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "DIV",
+          "label": "选择或拖入文件",
+          "w": 537,
+          "h": 162,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "发送文件",
+          "w": 537,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "刷新",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "发送文件",
+          "w": 302,
+          "h": 48,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "view": "390x844",
+      "phase": "first",
+      "count": 12,
+      "minW": 48,
+      "minH": 48,
+      "items": [
+        {
+          "tag": "BUTTON",
+          "label": "安全说明",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "复制码",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "雁ZRQK",
+          "w": 99,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "端到端加密 · 私钥仅存本机",
+          "w": 162,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "INPUT",
+          "label": "",
+          "w": 222,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "查询接收方",
+          "w": 68,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "DIV",
+          "label": "选择或拖入文件",
+          "w": 300,
+          "h": 162,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "发送文件",
+          "w": 300,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "刷新",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "发送文件",
+          "w": 276,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "发送文件",
+          "w": 176,
+          "h": 56,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "接收文件",
+          "w": 176,
+          "h": 56,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "view": "1440x900",
+      "phase": "transferring",
+      "count": 11,
+      "minW": 48,
+      "minH": 48,
+      "items": [
+        {
+          "tag": "BUTTON",
+          "label": "安全说明",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "复制码",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "雁ZRQK",
+          "w": 99,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "端到端加密 · 私钥仅存本机",
+          "w": 162,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "INPUT",
+          "label": "",
+          "w": 451,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "查询接收方",
+          "w": 76,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "发送文件",
+          "w": 537,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "撤回传输",
+          "w": 74,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "本机无会话快照，请重发",
+          "w": 165,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "刷新",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "发送文件",
+          "w": 302,
+          "h": 48,
+          "hidden": false
+        }
+      ]
+    },
+    {
+      "view": "390x844",
+      "phase": "transferring",
+      "count": 13,
+      "minW": 48,
+      "minH": 48,
+      "items": [
+        {
+          "tag": "BUTTON",
+          "label": "安全说明",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "复制码",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "雁ZRQK",
+          "w": 99,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "端到端加密 · 私钥仅存本机",
+          "w": 162,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "INPUT",
+          "label": "",
+          "w": 222,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "查询接收方",
+          "w": 68,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "发送文件",
+          "w": 300,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "撤回传输",
+          "w": 74,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "本机无会话快照，请重发",
+          "w": 165,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "刷新",
+          "w": 48,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "发送文件",
+          "w": 276,
+          "h": 48,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "发送文件",
+          "w": 176,
+          "h": 56,
+          "hidden": false
+        },
+        {
+          "tag": "BUTTON",
+          "label": "接收文件",
+          "w": 176,
+          "h": 56,
+          "hidden": false
+        }
+      ]
+    }
+  ],
+  "matrix": {
+    "cells": 96,
+    "cols": 32,
+    "rate": "0.0"
+  },
+  "peerCode": "EPB3",
+  "sendStarted": {
+    "ok": true,
+    "size": 100663296
+  }
+}

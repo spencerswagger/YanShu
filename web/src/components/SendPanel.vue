@@ -4,6 +4,8 @@ import { decode as b64uDecode } from '../lib/base64url.js'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent, clock } from '../lib/format.js'
 import { createSignaler } from '../net/signal.js'
+import DropZone from './DropZone.vue'
+import BlockMatrix from './BlockMatrix.vue'
 import { config } from '../config.js'
 
 const props = defineProps({
@@ -35,6 +37,7 @@ const pending = ref([])
  * 直连状态：默认中转（体验不变）；打洞只在后台静默尝试，打通后由用户点一下才切。
  * 失败/超时一律回到 idle，不弹错——中转本来就是默认路径。
  */
+const startedAt = ref(Date.now())
 const direct = reactive({ status: 'idle', enable: null, notice: '' })
 const canSwitchDirect = computed(() => direct.status === 'ready' && typeof direct.enable === 'function')
 
@@ -56,6 +59,42 @@ const chunkDone = computed(() => {
   return Math.floor((pctv / 100) * chunkTotal.value)
 })
 const pct = computed(() => percent(progress.value.done, progress.value.total))
+
+/** 块矩阵：用真实块数（服务端块 1 MiB）与按比例推导的块状态 */
+const matrixChunks = computed(() => {
+  if (!file.value) return 1
+  return Math.max(1, Math.ceil(file.value.size / config.chunkSize))
+})
+const matrixVariant = computed(() =>
+  typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches ? 'mobile' : 'pc',
+)
+const matrixStates = computed(() => {
+  const n = matrixChunks.value
+  const done = Math.floor((pct.value / 100) * n)
+  const out = new Array(n).fill('wait')
+  for (let i = 0; i < done; i++) out[i] = 'done'
+  if (phase.value === 'uploading' || phase.value === 'packing') {
+    for (let i = done; i < Math.min(n, done + 3); i++) out[i] = 'run'
+  }
+  if (phase.value === 'done') out.fill('done')
+  return out
+})
+const rateText = computed(() => {
+  const d = progress.value.done || 0
+  const elapsed = (Date.now() - startedAt.value) / 1000
+  if (!elapsed || !d) return '0.0'
+  return ((d / 1048576) / elapsed).toFixed(1)
+})
+const etaText = computed(() => {
+  const total = progress.value.total || 0
+  const d = progress.value.done || 0
+  const r = Number(rateText.value)
+  if (!r || !total) return '—'
+  const left = Math.max(0, (total - d) / 1048576 / r)
+  return left > 60 ? `${Math.round(left / 60)} 分` : `${Math.max(1, Math.round(left))} 秒`
+})
+const doneText = computed(() => `${((progress.value.done || 0) / 1048576).toFixed(1)} MB`)
+const totalText = computed(() => `${((progress.value.total || file.value?.size || 0) / 1048576).toFixed(1)} MB`)
 
 /** 码的归一化口径由内核给（`ys_normalize_code`），前端不自己实现 Crockford。 */
 const normalized = computed(() => {
@@ -87,7 +126,7 @@ async function lookup() {
 }
 
 function pickFile(event) {
-  file.value = event.target.files?.[0] || null
+  file.value = event?.target?.files?.[0] || (event instanceof File ? event : null)
   lastTransfer.value = null
   errorText.value = ''
   phase.value = 'idle'
@@ -101,6 +140,7 @@ async function send() {
   lastTransfer.value = null
   phase.value = 'packing'
   abort.value = new AbortController()
+  startedAt.value = Date.now()
   let signaler = null
   const wsUrl = props.p2pConfig?.wsUrl || ''
   const stunUrls = props.p2pConfig?.stunUrls || []
@@ -196,7 +236,10 @@ async function resume(record) {
   }
 }
 
-defineExpose({ loadPending })
+function focusDrop() {
+  document.querySelector('.col-main .drop')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+defineExpose({ loadPending, focusDrop })
 loadPending()
 </script>
 
@@ -219,7 +262,7 @@ loadPending()
             :disabled="busy"
             @blur="lookup"
           />
-          <button type="button" class="sm" :disabled="!normalized || busy" @click="lookup">
+          <button type="button" class="sm btn-48" :disabled="!normalized || busy" @click="lookup">
             查询接收方
           </button>
         </div>
@@ -235,9 +278,8 @@ loadPending()
         </div>
       </div>
 
-      <div>
-        <label for="file">选择文件</label>
-        <input id="file" type="file" :disabled="busy" @change="pickFile" />
+      <div v-if="!file" class="drop-wrap">
+        <DropZone @pick="pickFile" />
         <div v-if="file" class="file" style="margin-top: 8px">
           <div class="meta">
             <b>{{ file.name }}</b>
@@ -258,26 +300,26 @@ loadPending()
         取消
       </button>
 
-      <div v-if="phase !== 'idle' && phase !== 'done'">
-        <div class="progress"><span :style="{ width: pct + '%' }" /></div>
-        <div class="spread">
-          <div class="pct">{{ pct }}%</div>
-          <div class="meta">{{ progress.message }}</div>
+      <div v-if="phase !== 'idle' && phase !== 'done'" class="progress-block">
+        <div class="bigrate">
+          <span class="rate">{{ rateText }}</span>
+          <span class="unit">MB/s</span>
+          <span class="grow"></span>
+          <span class="meta">剩余 {{ etaText }}</span>
         </div>
-        <div v-if="chunkTotal" class="chunks">
-          <i
-            v-for="n in chunkTotal"
-            :key="n"
-            :class="{ done: n <= chunkDone, busy: n === chunkDone + 1 }"
-          />
-        </div>
+        <BlockMatrix
+          :chunk-count="matrixChunks"
+          :states="matrixStates"
+          :variant="matrixVariant"
+        />
+        <div class="meta">{{ doneText }} / {{ totalText }} · {{ pct }}%</div>
       </div>
 
       <div v-if="canSwitchDirect || direct.notice" class="banner info">
         <span v-if="direct.notice">{{ direct.notice }}</span>
         <span v-else>当前链路已可直连，切换后剩余块不再经过中转。</span>
         <div v-if="canSwitchDirect" class="row" style="margin-top: 6px">
-          <button type="button" class="sm" @click="switchDirect">改用直连，速度更快</button>
+          <button type="button" class="sm btn-48" @click="switchDirect">改用直连，速度更快</button>
         </div>
       </div>
 
@@ -297,7 +339,7 @@ loadPending()
           24 小时后自动删除
         </div>
         <div class="row" style="margin-top: 10px; justify-content: center">
-          <button type="button" class="sm" @click="revoke">撤回传输</button>
+          <button type="button" class="sm btn-48" @click="revoke">撤回传输</button>
         </div>
       </div>
 
@@ -316,7 +358,7 @@ loadPending()
             <div class="row" style="margin-top: 8px">
               <button
                 type="button"
-                class="sm"
+                class="sm btn-48"
                 :disabled="busy || !record.session"
                 @click="resume(record)"
               >
