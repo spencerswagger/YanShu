@@ -121,6 +121,7 @@ async function sendFileStreaming({
     preludeSm3: b64uEncode(preludeSm3),
     session: null, // 流式不落会话快照（本来也不攒整包）
     createdAt: Date.now(),
+    expiresAt: Date.now() + (ttlSeconds ?? config.defaultTtlSeconds) * 1000,
     state: 'UPLOADING',
     streaming: true,
   })
