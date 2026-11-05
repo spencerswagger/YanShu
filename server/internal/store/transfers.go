@@ -81,6 +81,9 @@ func (s *Store) CreateTransfer(ctx context.Context, t Transfer) (Transfer, error
 	if err != nil {
 		return Transfer{}, fmt.Errorf("store: create transfer: %w", err)
 	}
+	if err := addCreatedStat(ctx, s.pool, t.CreatedAt); err != nil {
+		return Transfer{}, fmt.Errorf("store: stats created: %w", err)
+	}
 	return out, nil
 }
 
@@ -477,6 +480,11 @@ func (s *Store) AckDownload(ctx context.Context, downloadID string, now time.Tim
 	out, err := scanTransfer(row)
 	if err != nil {
 		return AckResult{}, fmt.Errorf("store: ack transfer: %w", err)
+	}
+	if consumed {
+		if err := addConsumedStat(ctx, tx, now, out.PlaintextSize); err != nil {
+			return AckResult{}, fmt.Errorf("store: stats consumed: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return AckResult{}, err

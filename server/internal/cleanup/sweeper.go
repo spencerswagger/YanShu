@@ -22,8 +22,8 @@ type Sweeper struct {
 	log      *slog.Logger
 	interval time.Duration
 	batch    int
-	// Retention 是终结元数据保留时长（API.md §5.2：7 天）。
-	Retention time.Duration
+	// RedactAfter 是终结元数据**脱敏**时限（v5：30 天）；元数据本身永久保留。
+	RedactAfter time.Duration
 	// ChallengeRetention 是挑战记录保留时长（API.md §1.2：10 分钟）。
 	ChallengeRetention time.Duration
 	// Now 可被测试替换。
@@ -41,7 +41,7 @@ func New(st *store.Store, blobs blob.Store, interval time.Duration, log *slog.Lo
 		log:                log,
 		interval:           interval,
 		batch:              200,
-		Retention:          spec.TombstoneTTL,
+		RedactAfter:        spec.RedactAfter,
 		ChallengeRetention: spec.ChallengeRetention,
 		Now:                func() time.Time { return time.Now().UTC() },
 	}
@@ -54,7 +54,7 @@ type Stats struct {
 	PurgeErrors int
 	Challenges  int64
 	Idempotency int64
-	OldRecords  int64
+	Redacted    int64
 }
 
 // Run 阻塞运行，直到 ctx 取消。
@@ -119,19 +119,19 @@ func (s *Sweeper) Once(ctx context.Context) (Stats, error) {
 		s.log.Warn("delete idempotency failed", "err", err.Error())
 	}
 
-	// 5) 终结元数据保留 7 天后物理删除（墓碑）。
-	if n, err := s.store.DeleteOldTerminal(ctx, now.Add(-s.Retention)); err == nil {
-		stats.OldRecords = n
+	// 5) 终结元数据**永久保留**；终结满 30 天后把三个关联性字段置 NULL（脱敏，幂等分批）。
+	if n, err := s.store.RedactOldTerminal(ctx, now.Add(-s.RedactAfter), s.batch); err == nil {
+		stats.Redacted = n
 	} else {
-		s.log.Warn("delete terminal transfers failed", "err", err.Error())
+		s.log.Warn("redact terminal transfers failed", "err", err.Error())
 	}
 
-	if stats.Expired > 0 || stats.Purged > 0 || stats.OldRecords > 0 {
+	if stats.Expired > 0 || stats.Purged > 0 || stats.Redacted > 0 {
 		s.log.Info("sweep",
 			"expired", stats.Expired,
 			"purged", stats.Purged,
 			"purgeErrors", stats.PurgeErrors,
-			"oldRecords", stats.OldRecords,
+			"redacted", stats.Redacted,
 		)
 	}
 	return stats, nil
