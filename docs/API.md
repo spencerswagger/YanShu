@@ -407,7 +407,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 2. 二进制端点只接受 `application/octet-stream`；`multipart/form-data`、`text/plain` 等一律 `415 CONTENT_TYPE_UNSUPPORTED`（multipart 是历史上最经典的"顺手带文件名"通道）。
 3. 服务端 **MUST NOT** 解析 `prelude` / 块切片的内容（不读头、不解清单），只做长度与 `SM3` 比对。
 4. 请求日志与错误日志 **MUST NOT** 记录请求体前 N 字节、`Query String` 原文（只记白名单参数名）、`Authorization` 类头、SDP 内容。
-5. 删除是物理删除：`ack` / `revoke` / TTL 清理后，密文分块与 `prelude` 必须被删除；元数据可留 tombstone（见 §5.2）。
+5. 删除是物理删除：`ack` / `revoke` / TTL 清理后，密文分块与 `prelude` 必须被删除；元数据留 tombstone 并**永久保留**（终结 +30 天后脱敏三个字段，见 §5.2）。表内**不存在**文件名 / MIME / 明文 / 密钥 / 密文，所以"永久保留"不涉及任何内容留存。
 6. 只记大小、时间、IP、次数（审计白名单，见 §2.1）。
 
 ---
@@ -435,6 +435,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 17 | POST | `/v1/transfers/{id}/revoke` | 签名 `TRANSFER_REVOKE` | 发送方主动撤回 |
 | 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`。**v1 定义并实现**；部署方可配置关闭（关闭返回 `501 FEATURE_DISABLED`，代价是吊销后需重建传输并重传）。细则见 §1.7.5 |
 | 19 | WS | `/v1/ws` | 首帧签名 `WS_HELLO` | 在线状态、收件通知、直传信令。**v1 已实现**：连接后 10 秒内必须发 `HELLO`（`WS_HELLO` 签名）进入已认证态；握手、帧类型与限速见 §9 |
+| 20 | GET | `/v1/stats` | 无 | 全站聚合计数（今日/累计的取走数与字节数、新建数）。**公开无鉴权**，响应禁止缓存（§4.6） |
 | 20 | POST | `/v1/transfers/{id}/report` | 签名 `ABUSE_REPORT` | 举报一条传输。**v1 定义并实现**：只记录、不改变传输状态，下架由运维执行（§11.5） |
 
 ---
@@ -559,6 +560,39 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 
 **失败**：`401 AUTH_SIGNATURE_INVALID`（签名与挑战里的 code 或昵称不匹配时同此码）、`401 AUTH_CHALLENGE_INVALID`、`400 NICKNAME_INVALID`。
 
+### 4.6 `GET /v1/stats` —— 全站聚合计数（无鉴权）
+
+**请求**：无参数、无鉴权头。
+
+**响应 200**（字段名固定，实现按此写）：
+
+```json
+{
+  "today":   { "consumed": 123, "consumed_bytes": 456789, "created": 150 },
+  "total":   { "consumed": 45678, "consumed_bytes": 9876543210, "created": 50000 },
+  "generated_at": "2026-11-04T07:10:00Z"
+}
+```
+
+**口径（写死）**：
+
+| 字段 | 含义 |
+|---|---|
+| `consumed` | 已被取走的传输数，即 `state = CONSUMED` 的记录数 |
+| `consumed_bytes` | 这些被取走传输的**明文**总大小（`plaintext_size` 求和；不是密文、不含 `prelude` 与 tag） |
+| `created` | 新建传输数（`POST /transfers` 成功次数）。**单独字段，不与 `consumed` 相加**——两者是不同口径，不能合成"总计" |
+| `today` | 服务器 **UTC 日界**（当日 `00:00:00Z` 起）的同一口径 |
+| `total` | 自部署以来（全历史）的同一口径 |
+| `generated_at` | 生成本次数值的时间（UTC，RFC 3339） |
+
+**缓存**：响应 MUST 带 `Cache-Control: no-store`、`CDN-Cache-Control: no-store`、`Surrogate-Control: no-store`（避免中间层缓存把数字冻住）。服务端可内部缓存**≤ 60 秒**，因此**数值可能有 ≤60s 延迟**，不保证与同一时刻的 `GET /transfers/{id}` 逐笔吻合。
+
+**隐私**：只返回**聚合数字**，不含任何个例信息（无码、无 `transfer_id`、无昵称、无大小分布）。展示层可做量级化（如"约 45 万次"），服务端返回的是**精确值**。
+
+**失败**：`503 SERVICE_UNAVAILABLE`（统计不可用，如后端查询超时）。**不返回** `401`——该端点无鉴权，也不因缺头而拒绝。
+
+---
+
 ---
 
 ## 5. 传输生命周期与状态机
@@ -597,7 +631,13 @@ ack 后 download_count 达 max_downloads ──► CONSUMED（密文删除）
 | `CONSUMED` | 200（tombstone） | **`410 TRANSFER_CONSUMED`** | 取件完成/次数用尽 |
 | 不存在 | `404 TRANSFER_NOT_FOUND` | 同上 | id 本身无效 |
 
-tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保留 7 天后物理删除；响应里带 `terminal_reason` ∈ `REVOKED | EXPIRED | CONSUMED`。
+tombstone 只保留 §2.1 的元数据字段（**不含任何密文**）；响应里带 `terminal_reason` ∈ `REVOKED | EXPIRED | CONSUMED`。
+
+**保留与脱敏（写死）**：
+
+- **终结记录永久保留**（不再有 7 天清理期）。因此对已终结的 `transfer_id` 查询**恒为 `200` + tombstone**，不会因为时间推移变成 `404`。
+- **终结后 30 天，三个字段置 `NULL` 脱敏**：`uploader_ip`、`prelude_sm3`、`upload_token_sm3`；其余字段（`created_at`、`expires_at`、`terminal_at`、`plaintext_size`、`chunk_count`、`state`、`terminal_reason`、`download_count`）**永久保留**，用于聚合计数与审计。
+- **保留 ≠ 可取件**：`REVOKED`/`EXPIRED`/`CONSUMED` 三种终结态下，`GET /prelude` 与 `GET /chunks/{i}` 一律 `410`（见上表），与保留期无关。
 
 ### 5.3 三种终结态的语义差异（客户端处置）
 
@@ -1171,7 +1211,7 @@ Content-Type: application/json
 1. 服务端 **不落明文**：唯一二进制通道是 `prelude` 与块切片，服务端不解析、不记录内容片段。
 2. 日志字段白名单 = §2.1 的审计字段（含 `route_template`：只记路由模板，不记实际路径参数，避免 `transfer_id` 这类能力凭证落进日志）；`Query String` 只允许记录白名单参数名（`state/limit/cursor`），不记值之外的原文。
 3. 错误响应 **不泄露**：不区分"码不存在"与"码已注销"；不返回占用者信息；不返回服务端路径/栈。
-4. 密文删除是**物理删除**：`ack`、`revoke`、TTL 三条路径都必须删 `prelude` 与所有块；tombstone 只留元数据（7 天）。
+4. 密文删除是**物理删除**：`ack`、`revoke`、TTL 三条路径都必须删 `prelude` 与所有块；tombstone 只留元数据（**永久保留**，终结 +30 天后 `uploader_ip`/`prelude_sm3`/`upload_token_sm3` 置 `NULL`，§5.2）。
 5. 传输加密依赖外层 HTTPS（不做国密 TLS），应用层再叠 SM4 密文；两者互不替代。
 6. CORS：只允许站点自身源；不开放 `*`；不开放 `credentials`。
 7. 前端零第三方脚本 + 严格 CSP（属 Web 交付，此处只作为跨端约束记录）。
