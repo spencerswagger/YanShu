@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, clock, percent } from '../lib/format.js'
 import ReportSheet from './ReportSheet.vue'
+import TtlPill from './TtlPill.vue'
 
 const props = defineProps({
   api: { type: Object, default: null },
@@ -60,6 +61,12 @@ async function take(item) {
   }
 }
 
+/** 过期项：下载置灰（服务端也会 410，前端先拦一层） */
+function isExpiredItem(item) {
+  const t = Date.parse(item.expires_at || 0)
+  return Number.isFinite(t) ? t <= Date.now() : false
+}
+
 function focusDrop() {
   document.querySelector('.col-main .drop')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
@@ -88,13 +95,16 @@ refresh()
           <div class="avatar">{{ (item.sender_nickname || item.sender_code || '?').slice(0, 1) }}</div>
           <div>
             <div class="rname">{{ item.sender_nickname || item.sender_code }}</div>
-            <div class="meta">{{ fmtBytes(item.plaintext_size) }} · {{ item.chunk_count }} 块</div>
+            <div class="meta">
+              {{ fmtBytes(item.plaintext_size) }} · {{ item.chunk_count }} 块
+              <TtlPill v-if="item.expires_at" :expires-at="item.expires_at" />
+            </div>
           </div>
         </div>
         <button
           type="button"
           class="icon-btn lg"
-          :disabled="activeId === item.transfer_id"
+          :disabled="activeId === item.transfer_id || isExpiredItem(item)"
           :aria-label="activeId === item.transfer_id ? '解密中' : '下载并解密'"
           @click="take(item)"
         >
@@ -105,6 +115,7 @@ refresh()
         <ReportSheet :api="api" :transfer-id="item.transfer_id" icon-only />
         <div v-if="activeId === item.transfer_id" class="row-progress">
           <div class="progress"><span :style="{ width: percent(progress.done, progress.total) + '%' }" /></div>
+          <div class="meta">{{ progress.message }}</div>
         </div>
       </li>
     </ul>

@@ -6,6 +6,8 @@ import { bytes as fmtBytes, percent, clock } from '../lib/format.js'
 import { createSignaler } from '../net/signal.js'
 import DropZone from './DropZone.vue'
 import BlockMatrix from './BlockMatrix.vue'
+import SpeedLine from './SpeedLine.vue'
+import { createSpeedMeter } from '../lib/speed.js'
 import { config } from '../config.js'
 
 const props = defineProps({
@@ -38,6 +40,8 @@ const pending = ref([])
  * 失败/超时一律回到 idle，不弹错——中转本来就是默认路径。
  */
 const startedAt = ref(Date.now())
+const speedMeter = createSpeedMeter()
+const speedInfo = ref({ speedBps: 0, etaSec: null, state: 'ok', label: '0 B/s' })
 const direct = reactive({ status: 'idle', enable: null, notice: '' })
 const canSwitchDirect = computed(() => direct.status === 'ready' && typeof direct.enable === 'function')
 
@@ -167,6 +171,7 @@ async function send() {
       onProgress: (p) => {
         phase.value = p.phase
         progress.value = { done: p.done, total: p.total, message: p.message }
+        speedInfo.value = speedMeter.update(p.done || 0, p.total || 0)
       },
       signal: abort.value.signal,
       p2p: signaler
@@ -301,12 +306,13 @@ loadPending()
       </button>
 
       <div v-if="phase !== 'idle' && phase !== 'done'" class="progress-block">
-        <div class="bigrate">
-          <span class="rate">{{ rateText }}</span>
-          <span class="unit">MB/s</span>
-          <span class="grow"></span>
-          <span class="meta">剩余 {{ etaText }}</span>
-        </div>
+        <SpeedLine
+          :speed-bps="speedInfo.speedBps"
+          :eta-sec="speedInfo.etaSec"
+          :state="speedInfo.state"
+          :done="progress.done"
+          :total="progress.total"
+        />
         <BlockMatrix
           :chunk-count="matrixChunks"
           :states="matrixStates"

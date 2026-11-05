@@ -1,5 +1,7 @@
 <script setup>
 /** 最近传输：来自本机真实的发送记录（IndexedDB pending store），不编造数据。 */
+import TtlPill from './TtlPill.vue'
+
 const props = defineProps({ items: { type: Array, default: () => [] } })
 
 const stateText = (s) => (s === 'READY' ? '完成' : s === 'UPLOADING' ? '传输中' : s === 'REVOKED' ? '已撤回' : '失败')
@@ -23,7 +25,10 @@ const when = (t) => {
       <li v-for="it in props.items" :key="it.transferId" class="ritem">
         <div>
           <div class="rname">{{ it.fileName }}</div>
-          <div class="meta">{{ fmt(it.fileSize) }} · {{ when(it.createdAt) }}</div>
+          <div class="meta">
+            {{ fmt(it.fileSize) }} · {{ when(it.createdAt) }}
+            <TtlPill v-if="it.expiresAt" :expires-at="it.expiresAt" />
+          </div>
         </div>
         <span class="pill" :class="stateClass(it.state)">{{ stateText(it.state) }}</span>
       </li>
