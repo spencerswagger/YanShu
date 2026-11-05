@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/spencerswagger/YanShu/server/internal/auth"
@@ -33,6 +34,13 @@ type API struct {
 	log      *slog.Logger
 	now      func() time.Time
 	hub      *signal.Hub
+
+	// /v1/stats 的进程内缓存（60s）。
+	statsMu    sync.Mutex
+	statsCache spec.StatsResponse
+	statsAt    time.Time
+	// statsTTL 默认 60s；测试可置 0 关掉缓存。
+	statsTTL time.Duration
 }
 
 // New 组装 API。
@@ -51,6 +59,7 @@ func New(cfg config.Config, st *store.Store, blobs blob.Store, v auth.Verifier, 
 		log:      log,
 		now:      func() time.Time { return time.Now().UTC() },
 		hub:      signal.New(),
+		statsTTL: 60 * time.Second,
 	}
 }
 
@@ -82,6 +91,7 @@ func (a *API) Handler() http.Handler {
 
 	mux.HandleFunc("GET "+spec.PathWS, a.handleWS)
 	mux.HandleFunc("POST "+spec.PathTransferReport, a.handleAbuseReport)
+	mux.HandleFunc("GET "+spec.PathStats, a.handleStats)
 
 	return a.withMiddleware(mux)
 }

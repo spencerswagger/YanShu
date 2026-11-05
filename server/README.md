@@ -279,6 +279,13 @@ YANSHU_DATABASE_URL="$PG_DSN_WITH_SEARCH_PATH" ./bin/yanshu-server -migrate-only
 （间隔 **≥ 30 秒**，失败退避至 **5 分钟**）。服务端不额外限制 inbox；每次轮询仍需
 一次 `INBOX_LIST` 挑战签名（受 IP 20/min 约束，30 秒一次约 2/min，不会误伤）。
 
+## 元数据保留与统计（v5）
+
+- 终结（CONSUMED/REVOKED/EXPIRED）的传输元数据**永久保留**，不再按 7 天删除；
+  终结满 **30 天**后把 `uploader_ip`、`prelude_sm3`、`upload_token_sm3` 置 NULL（脱敏，幂等分批）。
+- 全平台聚合 `GET /v1/stats`：返回 `today` / `total` 的 `consumed`、`consumed_bytes`、`created`；
+  数据来自 `stats_counters`（按天累加，`ack`/建包同事务写入），**不扫 transfers**；响应 `Cache-Control: no-store`。
+
 ## 库表（表结构变更必须在 PR 描述写一行）
 
 `codes`、`auth_challenges`、`transfers`、`transfer_chunks`、`transfer_downloads`、

@@ -29,6 +29,7 @@ var expectedColumns = map[string][]string{
 	"transfer_downloads": {"acked_at", "created_at", "download_id", "lease_expires_at", "transfer_id"},
 	"idempotency_keys":   {"created_at", "expires_at", "key_hash", "request_fingerprint", "sender_code", "transfer_id"},
 	"audit_events":       {"bytes", "id", "ip", "method", "path", "request_id", "status", "ts"},
+	"stats_counters":     {"consumed", "consumed_bytes", "created", "day"},
 	"abuse_reports":      {"created_at", "note", "reason", "report_id", "reporter_code", "reporter_ip", "transfer_id"},
 	"token_kid_state":    {"id", "kid", "updated_at"},
 }
