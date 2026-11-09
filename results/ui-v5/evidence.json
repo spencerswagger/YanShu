@@ -6,8 +6,9 @@
     "/worktrees/YS-WEB/results/ui-v5/sending-speed-390x844.png",
     "/worktrees/YS-WEB/results/ui-v5/sending-speed-1440x900.png",
     "/worktrees/YS-WEB/results/ui-v5/sent-done-390x844.png",
-    "/worktrees/YS-WEB/results/ui-v5/ttl-four-states-390x844.png",
-    "/worktrees/YS-WEB/results/ui-v5/ttl-four-states-1440x900.png",
+    "/worktrees/YS-WEB/results/ui-v5/inbox-first-screen-390x844.png",
+    "/worktrees/YS-WEB/results/ui-v5/ttl-three-states-390x844.png",
+    "/worktrees/YS-WEB/results/ui-v5/ttl-three-states-1440x900.png",
     "/worktrees/YS-WEB/results/ui-v5/receiving-two-stage-390x844.png",
     "/worktrees/YS-WEB/results/ui-v5/received-done-390x844.png",
     "/worktrees/YS-WEB/results/ui-v5/stats-platform-390x844.png",
@@ -21,7 +22,7 @@
         "speed": "0 B/s",
         "warn": "",
         "eta": "",
-        "pair": "15 MB / 96 MB",
+        "pair": "18 MB / 96 MB",
         "done": false
       }
     },
@@ -29,10 +30,10 @@
       "ok": true,
       "label": "发送 ETA 有真实文案",
       "detail": {
-        "speed": "59.7 MB/s",
+        "speed": "67.1 MB/s",
         "warn": "",
         "eta": "即将完成",
-        "pair": "52 MB / 96 MB",
+        "pair": "57 MB / 96 MB",
         "done": false
       }
     },
@@ -43,7 +44,7 @@
         "speed": "0 B/s",
         "warn": "",
         "eta": "",
-        "pair": "15 MB / 96 MB",
+        "pair": "18 MB / 96 MB",
         "done": false
       }
     },
@@ -51,6 +52,11 @@
       "ok": true,
       "label": "发送完成态显示服务端 TTL",
       "detail": "23 小时后过期"
+    },
+    {
+      "ok": true,
+      "label": "首屏不点刷新就有待收行（api 注入后自动加载）",
+      "detail": 4
     },
     {
       "ok": true,
@@ -159,6 +165,7 @@
         "下载中 20% · 解密中 20%",
         "下载中 23% · 解密中 23%",
         "下载中 24% · 解密中 24%",
+        "下载中 24% · 解密中 24%",
         "下载中 25% · 解密中 25%",
         "下载中 26% · 解密中 26%",
         "下载中 27% · 解密中 27%",
@@ -260,6 +267,7 @@
         "下载中 19% · 解密中 19%",
         "下载中 20% · 解密中 20%",
         "下载中 23% · 解密中 23%",
+        "下载中 24% · 解密中 24%",
         "下载中 24% · 解密中 24%",
         "下载中 25% · 解密中 25%",
         "下载中 26% · 解密中 26%",
@@ -363,6 +371,7 @@
         "解密块 19/96",
         "解密块 22/96",
         "解密块 23/96",
+        "解密块 23/96",
         "解密块 24/96",
         "解密块 25/96",
         "解密块 26/96",
@@ -449,21 +458,59 @@
         "0 B/s",
         "0 B/s",
         "0 B/s",
-        "8.7 MB/s",
-        "8.7 MB/s",
-        "8.7 MB/s",
-        "8.7 MB/s",
-        "8.7 MB/s",
-        "8.7 MB/s",
+        "0 B/s",
+        "0 B/s",
+        "13.3 MB/s",
+        "13.3 MB/s",
+        "13.3 MB/s",
+        "13.3 MB/s",
+        "13.3 MB/s",
+        "13.3 MB/s",
+        "13.3 MB/s",
+        "13.3 MB/s",
+        "14.0 MB/s",
+        "14.0 MB/s",
+        "14.0 MB/s",
+        "14.0 MB/s",
+        "14.0 MB/s",
+        "13.9 MB/s",
+        "13.9 MB/s",
+        "13.9 MB/s",
+        "13.9 MB/s",
+        "11.3 MB/s",
+        "11.3 MB/s",
+        "11.3 MB/s",
+        "11.3 MB/s",
+        "10.2 MB/s",
+        "10.2 MB/s",
+        "10.2 MB/s",
+        "10.2 MB/s",
+        "10.2 MB/s",
+        "9.9 MB/s",
+        "9.9 MB/s",
+        "9.9 MB/s",
+        "9.9 MB/s",
+        "9.9 MB/s",
         "9.6 MB/s",
         "9.6 MB/s",
         "9.6 MB/s",
         "9.6 MB/s",
-        "9.6 MB/s",
-        "9.7 MB/s",
-        "9.7 MB/s",
-        "9.7 MB/s",
-        "9.7 MB/s",
+        "9.0 MB/s",
+        "9.0 MB/s",
+        "9.0 MB/s",
+        "9.0 MB/s",
+        "8.7 MB/s",
+        "8.7 MB/s",
+        "8.7 MB/s",
+        "8.7 MB/s",
+        "8.7 MB/s",
+        "9.0 MB/s",
+        "9.0 MB/s",
+        "9.0 MB/s",
+        "9.0 MB/s",
+        "9.0 MB/s",
+        "9.0 MB/s",
+        "9.0 MB/s",
         "10.4 MB/s",
         "10.4 MB/s",
         "10.4 MB/s",
@@ -472,72 +519,35 @@
         "10.4 MB/s",
         "10.4 MB/s",
         "10.4 MB/s",
-        "11.8 MB/s",
-        "11.8 MB/s",
-        "11.8 MB/s",
-        "11.8 MB/s",
-        "11.8 MB/s",
-        "11.8 MB/s",
-        "11.8 MB/s",
-        "11.8 MB/s",
-        "12.6 MB/s",
-        "12.6 MB/s",
-        "12.6 MB/s",
-        "12.6 MB/s",
-        "12.6 MB/s",
-        "12.6 MB/s",
-        "12.6 MB/s",
-        "12.6 MB/s",
-        "13.4 MB/s",
-        "13.4 MB/s",
-        "13.4 MB/s",
-        "13.4 MB/s",
-        "13.4 MB/s",
-        "13.4 MB/s",
-        "13.4 MB/s",
-        "13.4 MB/s",
-        "13.9 MB/s",
-        "13.9 MB/s",
-        "13.9 MB/s",
-        "13.9 MB/s",
-        "13.9 MB/s",
-        "13.9 MB/s",
-        "13.9 MB/s",
-        "13.9 MB/s",
-        "14.3 MB/s",
-        "14.3 MB/s",
-        "14.3 MB/s",
-        "14.3 MB/s",
-        "14.3 MB/s",
-        "14.3 MB/s",
-        "14.3 MB/s",
-        "14.3 MB/s",
-        "14.6 MB/s",
-        "14.6 MB/s",
-        "14.6 MB/s",
-        "14.6 MB/s",
-        "14.6 MB/s",
+        "12.1 MB/s",
+        "12.1 MB/s",
+        "12.1 MB/s",
+        "12.1 MB/s",
+        "12.1 MB/s",
+        "12.1 MB/s",
+        "12.1 MB/s",
+        "12.4 MB/s",
+        "12.4 MB/s",
+        "12.4 MB/s",
+        "12.4 MB/s",
+        "12.4 MB/s",
+        "12.4 MB/s",
+        "12.4 MB/s",
+        "12.8 MB/s",
+        "12.8 MB/s",
+        "12.8 MB/s",
+        "12.8 MB/s",
+        "12.8 MB/s",
+        "12.8 MB/s",
+        "12.8 MB/s",
+        "12.8 MB/s",
         "13.2 MB/s",
         "13.2 MB/s",
         "13.2 MB/s",
         "13.2 MB/s",
         "13.2 MB/s",
         "13.2 MB/s",
-        "12.5 MB/s",
-        "12.5 MB/s",
-        "12.5 MB/s",
-        "12.5 MB/s",
-        "12.5 MB/s",
-        "12.5 MB/s",
-        "12.5 MB/s",
-        "13.0 MB/s",
-        "13.0 MB/s",
-        "13.0 MB/s",
-        "13.0 MB/s",
-        "13.0 MB/s",
-        "11.9 MB/s",
-        "11.9 MB/s",
-        "11.9 MB/s",
+        "13.2 MB/s",
         ""
       ]
     },
@@ -545,9 +555,9 @@
       "ok": true,
       "label": "API 有真实今日取走/流量",
       "detail": {
-        "consumed": 12,
-        "consumed_bytes": 510656512,
-        "created": 47
+        "consumed": 1,
+        "consumed_bytes": 100663296,
+        "created": 4
       }
     },
     {
@@ -555,23 +565,23 @@
       "label": "界面六项与 /v1/stats 逐项一致",
       "detail": {
         "want": {
-          "今日已取走": "12",
-          "今日流量": "487 MB",
-          "今日新建": "47",
-          "累计已取走": "38",
-          "累计流量": "1.5 GB",
-          "累计新建": "96"
+          "今日已取走": "1",
+          "今日流量": "96 MB",
+          "今日新建": "4",
+          "累计已取走": "1",
+          "累计流量": "96 MB",
+          "累计新建": "4"
         },
         "got": {
           "今日发送": "0",
           "今日接收": "0",
           "成功率": "—",
-          "今日已取走": "12",
-          "今日流量": "487MB",
-          "今日新建": "47",
-          "累计已取走": "38",
-          "累计流量": "1.5GB",
-          "累计新建": "96"
+          "今日已取走": "1",
+          "今日流量": "96MB",
+          "今日新建": "4",
+          "累计已取走": "1",
+          "累计流量": "96MB",
+          "累计新建": "4"
         }
       }
     },
@@ -585,16 +595,16 @@
   "stats": {
     "api": {
       "today": {
-        "consumed": 12,
-        "consumed_bytes": 510656512,
-        "created": 47
+        "consumed": 1,
+        "consumed_bytes": 100663296,
+        "created": 4
       },
       "total": {
-        "consumed": 38,
-        "consumed_bytes": 1575893327,
-        "created": 96
+        "consumed": 1,
+        "consumed_bytes": 100663296,
+        "created": 4
       },
-      "generated_at": "2026-11-09T18:06:30Z"
+      "generated_at": "2026-11-09T18:33:05Z"
     },
     "dom": [
       {
@@ -611,27 +621,27 @@
       },
       {
         "k": "今日已取走",
-        "v": "12"
+        "v": "1"
       },
       {
         "k": "今日流量",
-        "v": "487MB"
+        "v": "96MB"
       },
       {
         "k": "今日新建",
-        "v": "47"
+        "v": "4"
       },
       {
         "k": "累计已取走",
-        "v": "38"
+        "v": "1"
       },
       {
         "k": "累计流量",
-        "v": "1.5GB"
+        "v": "96MB"
       },
       {
         "k": "累计新建",
-        "v": "96"
+        "v": "4"
       }
     ]
   },
@@ -675,84 +685,84 @@
         "speed": "0 B/s",
         "warn": "",
         "eta": "",
-        "pair": "15 MB / 96 MB",
+        "pair": "18 MB / 96 MB",
         "done": false
       },
       {
-        "speed": "59.7 MB/s",
+        "speed": "67.1 MB/s",
         "warn": "",
         "eta": "即将完成",
-        "pair": "52 MB / 96 MB",
+        "pair": "57 MB / 96 MB",
         "done": false
       },
       {
-        "speed": "57.9 MB/s",
+        "speed": "64.0 MB/s",
         "warn": "",
         "eta": "即将完成",
-        "pair": "58 MB / 96 MB",
+        "pair": "63 MB / 96 MB",
         "done": false
       },
       {
-        "speed": "57.9 MB/s",
+        "speed": "64.0 MB/s",
         "warn": "",
         "eta": "即将完成",
-        "pair": "66 MB / 96 MB",
+        "pair": "70 MB / 96 MB",
         "done": false
       },
       {
-        "speed": "57.9 MB/s",
+        "speed": "64.0 MB/s",
         "warn": "",
         "eta": "即将完成",
-        "pair": "76 MB / 96 MB",
+        "pair": "79 MB / 96 MB",
         "done": false
       },
       {
-        "speed": "57.9 MB/s",
+        "speed": "64.0 MB/s",
         "warn": "",
         "eta": "即将完成",
-        "pair": "85 MB / 96 MB",
+        "pair": "86 MB / 96 MB",
         "done": false
       },
       {
-        "speed": "59.7 MB/s",
+        "speed": "61.5 MB/s",
         "warn": "",
         "eta": "即将完成",
-        "pair": "92 MB / 96 MB",
+        "pair": "95 MB / 96 MB",
         "done": false
       },
       {
-        "speed": "59.7 MB/s",
+        "speed": "61.5 MB/s",
         "warn": "",
         "eta": "即将完成",
         "pair": "0 MB / 96 MB",
         "done": false
       },
       {
-        "speed": "41.8 MB/s",
+        "speed": "61.5 MB/s",
         "warn": "",
         "eta": "即将完成",
-        "pair": "2.0 MB / 96 MB",
+        "pair": "4.0 MB / 96 MB",
         "done": false
       },
       {
-        "speed": "41.8 MB/s",
-        "warn": "",
-        "eta": "即将完成",
-        "pair": "5.0 MB / 96 MB",
-        "done": false
-      },
-      {
-        "speed": "33.4 MB/s",
+        "speed": "43.1 MB/s",
         "warn": "",
         "eta": "即将完成",
         "pair": "8.0 MB / 96 MB",
         "done": false
       },
       {
-        "speed": "33.4 MB/s",
+        "speed": "43.1 MB/s",
         "warn": "",
         "eta": "即将完成",
-        "pair": "10 MB / 96 MB",
+        "pair": "12 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "43.1 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "14 MB / 96 MB",
         "done": false
       }
     ],
@@ -829,8 +839,8 @@
       },
       {
         "stage": "下载中 6% · 解密中 6%",
-        "speed": "8.7 MB/s",
-        "eta": "剩 10 秒",
+        "speed": "0 B/s",
+        "eta": "",
         "pair": "6.0 MB / 96 MB",
         "msg": "解密块 6/96",
         "saved": false,
@@ -839,8 +849,8 @@
       },
       {
         "stage": "下载中 7% · 解密中 7%",
-        "speed": "8.7 MB/s",
-        "eta": "剩 10 秒",
+        "speed": "0 B/s",
+        "eta": "",
         "pair": "7.0 MB / 96 MB",
         "msg": "解密块 7/96",
         "saved": false,
@@ -849,8 +859,8 @@
       },
       {
         "stage": "下载中 8% · 解密中 8%",
-        "speed": "8.7 MB/s",
-        "eta": "剩 10 秒",
+        "speed": "13.3 MB/s",
+        "eta": "即将完成",
         "pair": "8.0 MB / 96 MB",
         "msg": "解密块 8/96",
         "saved": false,
@@ -859,8 +869,8 @@
       },
       {
         "stage": "下载中 9% · 解密中 9%",
-        "speed": "8.7 MB/s",
-        "eta": "剩 10 秒",
+        "speed": "13.3 MB/s",
+        "eta": "即将完成",
         "pair": "9.0 MB / 96 MB",
         "msg": "解密块 9/96",
         "saved": false,
@@ -869,7 +879,7 @@
       },
       {
         "stage": "下载中 10% · 解密中 10%",
-        "speed": "8.7 MB/s",
+        "speed": "13.3 MB/s",
         "eta": "即将完成",
         "pair": "10 MB / 96 MB",
         "msg": "解密块 10/96",
@@ -879,7 +889,7 @@
       },
       {
         "stage": "下载中 11% · 解密中 11%",
-        "speed": "8.7 MB/s",
+        "speed": "13.3 MB/s",
         "eta": "即将完成",
         "pair": "11 MB / 96 MB",
         "msg": "解密块 11/96",
@@ -893,10 +903,19 @@
       {
         "m": "Log.entryAdded",
         "t": "The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element."
+      },
+      {
+        "m": "Log.entryAdded",
+        "t": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      },
+      {
+        "m": "Log.entryAdded",
+        "t": "The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element."
       }
     ]
   },
-  "peerCode": "SMN9",
-  "doneDebug": "已发送，等待对方接收\n码 SMN9 · 23 小时后过期\n撤回传输",
+  "peerCode": "62NK",
+  "doneDebug": "已发送，等待对方接收\n码 62NK · 23 小时后过期\n撤回传输",
+  "inboxAuto": 4,
   "pendingHeadings": 0
 }

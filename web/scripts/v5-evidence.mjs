@@ -314,12 +314,22 @@ try {
     .map((l) => l.split('|')[0])
     .filter(Boolean)
   if (ids.length < 3) throw new Error(`库里只有 ${ids.length} 笔可改的 READY 传输`)
-  await psql(`UPDATE transfers SET expires_at = now() + interval '42 minutes 30 seconds' WHERE transfer_id = '${ids[0]}'`)
+  await psql(`UPDATE transfers SET expires_at = now() + interval '43 minutes' WHERE transfer_id = '${ids[0]}'`)
   await psql(`UPDATE transfers SET expires_at = now() + interval '50 hours' WHERE transfer_id = '${ids[1]}'`)
-  await psql(`UPDATE transfers SET expires_at = now() - interval '1 minute' WHERE transfer_id = '${ids[2]}'`)
+  // 第三笔 20 秒后到期：#49 之后「过期即终结」，/v1/inbox 不再返回过期的行，
+  // 所以过期态只能在「已加载的行到点」时看到（这也是用户真实遇到的情形）。
+  await psql(`UPDATE transfers SET expires_at = now() + interval '20 seconds' WHERE transfer_id = '${ids[2]}'`)
 
-  await evalJs(cB, `document.querySelector('button[aria-label="刷新"]')?.click()`)
-  await sleep(1500)
+  // P0 回归：首屏不点刷新就应该有待收行（api 注入完成后自动拉取）
+  await evalJs(cB, `location.reload()`)
+  await sleep(5000)
+  const inboxAuto = await evalJs(cB, `document.querySelectorAll('.rlist .ritem').length`)
+  result.inboxAuto = inboxAuto
+  check(inboxAuto > 0, '首屏不点刷新就有待收行（api 注入后自动加载）', inboxAuto)
+  result.shots.push(await shot(cB, join(OUT, 'inbox-first-screen-390x844.png')))
+
+  // 等 20 秒那笔到点：同一个页面里的行自己翻成「已过期，无法取回」
+  await sleep(36_000) // TtlPill 30s 一 tick，多等一格确认它自己翻成过期
   const ttlRows = await evalJs(
     cB,
     `(() => [...document.querySelectorAll('.rlist .ritem')].map((li) => ({
@@ -341,10 +351,10 @@ try {
   check(expiredRow.btnDisabled, '过期行下载置灰', expiredRow)
   check(expiredRow.rowExpiredClass && expiredRow.rowOpacity < 0.8, '过期行整行灰化', expiredRow)
   check(/line-through/.test(expiredRow.nameDecoration || ''), '过期行文件名删除线', expiredRow)
-  result.shots.push(await shot(cB, join(OUT, 'ttl-four-states-390x844.png')))
+  result.shots.push(await shot(cB, join(OUT, 'ttl-three-states-390x844.png')))
   await setViewport(cB, 1440, 900, false)
   await sleep(400)
-  result.shots.push(await shot(cB, join(OUT, 'ttl-four-states-1440x900.png')))
+  result.shots.push(await shot(cB, join(OUT, 'ttl-three-states-1440x900.png')))
   await setViewport(cB, 390, 844, true)
 
   // ── ② 接收侧：点下载 → 两段进度 + 速度行 ────────────────────
@@ -427,6 +437,8 @@ try {
   result.shots.push(await shot(cB, join(OUT, 'received-done-390x844.png')))
 
   // ── ④ 平台统计：API 真数字 vs 界面翻牌器 ────────────────────
+  // 服务端 /v1/stats 有 60s 进程内缓存，等过缓存窗再取，避免读到取件前的旧值。
+  await sleep(62_000)
   const stats = await (await fetch(`${API}/v1/stats`)).json()
   result.stats = { api: stats }
   await evalJs(cA, `location.reload()`)

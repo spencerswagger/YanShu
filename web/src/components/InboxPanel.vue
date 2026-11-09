@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent } from '../lib/format.js'
 import { createSpeedMeter, stageLabel } from '../lib/speed.js'
@@ -80,8 +80,21 @@ async function take(item) {
   }
 }
 
-/** 过期项：下载置灰（服务端也会 410，前端先拦一层）；用服务端时间基准，不看本机时钟 */
+/** 让「过期」这层跟着时间自己翻（否则行不会重渲染，只有胶囊里的文字会变） */
+const clockTick = ref(0)
+const clockTimer = setInterval(() => (clockTick.value += 1), 30_000)
+const onVisible = () => {
+  if (document.visibilityState === 'visible') clockTick.value += 1
+}
+document.addEventListener('visibilitychange', onVisible)
+onBeforeUnmount(() => {
+  clearInterval(clockTimer)
+  document.removeEventListener('visibilitychange', onVisible)
+})
+
+/** 过期项：整行灰化 + 下载置灰（服务端也会 410，前端先拦一层）；用服务端时间基准，不看本机时钟 */
 function isExpiredItem(item) {
+  void clockTick.value // 依赖 tick：到点后行自己重渲染
   return Boolean(item.expires_at) && isExpired(remainingMs(item.expires_at))
 }
 
@@ -90,7 +103,15 @@ function focusDrop() {
 }
 
 defineExpose({ refresh })
-refresh()
+// api 由父层在内核/身份就绪后才注入：首屏拿不到 api 时必须等它到场再拉列表，
+// 否则「待收列表」首屏永远是空的（点刷新才出现）。
+watch(
+  () => props.api,
+  (api) => {
+    if (api) refresh()
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
