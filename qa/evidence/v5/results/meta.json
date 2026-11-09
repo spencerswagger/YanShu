@@ -1,0 +1,57 @@
+{
+  "title": "v5 ③ 元数据永久保留 · 密文删干净、记录留得住、30 天只脱敏三列",
+  "verdict": 0,
+  "rows": [
+    {
+      "name": "取件完成 → CONSUMED",
+      "kind": "PASS",
+      "evidence": "200 state=CONSUMED 块逐字节一致=True"
+    },
+    {
+      "name": "密文物理删除（blob 无 prelude/块）",
+      "kind": "PASS",
+      "evidence": "残留=无"
+    },
+    {
+      "name": "记录仍在且敏感列有值（未到 30 天）",
+      "kind": "PASS",
+      "evidence": "row=1 uploader_ip=not null"
+    },
+    {
+      "name": "终结 10 天后仍保留（v4 的 7 天删除已取消）",
+      "kind": "PASS",
+      "evidence": "rows=1"
+    },
+    {
+      "name": "未到 30 天不脱敏",
+      "kind": "PASS",
+      "evidence": "uploader_ip/prelude_sm3 仍有值"
+    },
+    {
+      "name": "终结 40 天 → uploader_ip/prelude_sm3/upload_token_sm3 置 NULL",
+      "kind": "PASS",
+      "evidence": "三列均为 NULL"
+    },
+    {
+      "name": "其余 9 个字段逐值不变",
+      "kind": "PASS",
+      "evidence": "before=2097152 1048576 2 CONSUMED CONSUMED 2026-11-09 17:51:48.640738+00 2026-11-10 17: after=2097152 1048576 2 CONSUMED CONSUMED 2026-11-09 17:51:48.640738+00 2026-11-10 17:"
+    },
+    {
+      "name": "GET → 200 tombstone，字段集与契约一致",
+      "kind": "PASS",
+      "evidence": "200 缺=无 多=无 state=CONSUMED"
+    },
+    {
+      "name": "保留 ≠ 可取件（prelude/块均 410 TRANSFER_CONSUMED）",
+      "kind": "PASS",
+      "evidence": "prelude=410 TRANSFER_CONSUMED；chunk=410 TRANSFER_CONSUMED"
+    },
+    {
+      "name": "清道夫幂等（多轮后行数不变、无报错）",
+      "kind": "PASS",
+      "evidence": "rows 1→1 日志报错=False"
+    }
+  ],
+  "notes": []
+}

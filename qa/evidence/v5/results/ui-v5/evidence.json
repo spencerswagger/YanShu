@@ -1,0 +1,97 @@
+{
+  "out": "/worktrees/YS-QA/tmp/v5/results/ui-v5",
+  "shots": [
+    "/worktrees/YS-QA/tmp/v5/results/ui-v5/first-1440x900.png",
+    "/worktrees/YS-QA/tmp/v5/results/ui-v5/inbox-1440x900.png",
+    "/worktrees/YS-QA/tmp/v5/results/ui-v5/inbox-390x844.png"
+  ],
+  "ttl": [
+    {
+      "text": "已过期，无法取回",
+      "soon": false,
+      "expired": true
+    },
+    {
+      "text": "40 分钟后过期",
+      "soon": true,
+      "expired": false
+    },
+    {
+      "text": "22 小时后过期",
+      "soon": false,
+      "expired": false
+    }
+  ],
+  "stats": {
+    "text": "本机发送0本机接收0成功率—今日已取走0今日流量0 MB今日新建3累计已取走0累计流量0 MB累计新建3",
+    "rows": [
+      {
+        "k": "本机发送",
+        "v": "0"
+      },
+      {
+        "k": "本机接收",
+        "v": "0"
+      },
+      {
+        "k": "成功率",
+        "v": "—"
+      },
+      {
+        "k": "今日已取走",
+        "v": "0"
+      },
+      {
+        "k": "今日流量",
+        "v": "0 MB"
+      },
+      {
+        "k": "今日新建",
+        "v": "3"
+      },
+      {
+        "k": "累计已取走",
+        "v": "0"
+      },
+      {
+        "k": "累计流量",
+        "v": "0 MB"
+      },
+      {
+        "k": "累计新建",
+        "v": "3"
+      }
+    ]
+  },
+  "seeds": {
+    "recipient": "GEVX",
+    "seeds": [
+      {
+        "name": "23h",
+        "transfer_id": "e80670d468298d5cbd191cbf49ff467b",
+        "expires_at": "2026-11-10T16:49:24Z"
+      },
+      {
+        "name": "42m",
+        "transfer_id": "042a94e57a8752d6f93cd347376e19e1",
+        "expires_at": "2026-11-09 18:31:24.901518+00"
+      },
+      {
+        "name": "expired",
+        "transfer_id": "edaf4bd9523ec0ef9c30994d11815318",
+        "expires_at": "2026-11-09 17:49:24.256099+00"
+      }
+    ]
+  },
+  "failures": [
+    "首屏未自动加载待收列表（0 行）——点刷新后 3 行；InboxPanel 在 setup 里 refresh() 时 api 还没就绪"
+  ],
+  "code": "GEVX",
+  "inboxAuto": 0,
+  "inboxAfterRefresh": 3,
+  "ttlTexts": [
+    "已过期，无法取回",
+    "40 分钟后过期",
+    "22 小时后过期"
+  ]
+}
