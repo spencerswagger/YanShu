@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -211,5 +213,61 @@ func TestAckAfterExpiryNotCounted(t *testing.T) {
 	e.decode(resp, &meta)
 	if meta.State != spec.StateExpired || meta.DownloadCount != 0 {
 		t.Fatalf("state=%s download_count=%d, want EXPIRED/0", meta.State, meta.DownloadCount)
+	}
+}
+
+// /v1/config 带 server_time（TTL 倒计时的时钟基准），因此**不能被任何中间层缓存**：
+// 一旦缓存，所有客户端的基准整体偏移，倒计时静默算错且不报错。
+func TestConfigNotCached(t *testing.T) {
+	e := newEnv(t, "")
+	resp := e.do(http.MethodGet, spec.PathConfig, nil, nil)
+	if resp.status != http.StatusOK {
+		t.Fatalf("config: %d", resp.status)
+	}
+	if got := resp.header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("config Cache-Control = %q, want no-store", got)
+	}
+	if got := resp.header.Get("CDN-Cache-Control"); got != "no-store" {
+		t.Fatalf("config CDN-Cache-Control = %q, want no-store", got)
+	}
+}
+
+// 惰性终结的竞态分支（P2）：StartLease / AckDownload 在事务里已经把行置 EXPIRED，
+// handler 再调 expireIfNeeded 时 newly=false —— 密文也必须在这里删掉，
+// 不能只等兜底任务（契约要求三条路径都"立刻删除"）。
+func TestExpiredByTransactionStillPurges(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("sender")
+	recipient, _ := e.register("recipient")
+	f := newFixture()
+	tr := e.readyTransfer(sender, recipient, f)
+
+	countFiles := func() int {
+		n := 0
+		_ = filepath.Walk(e.dir, func(_ string, info os.FileInfo, err error) error {
+			if err == nil && info != nil && !info.IsDir() {
+				n++
+			}
+			return nil
+		})
+		return n
+	}
+	if got := countFiles(); got == 0 {
+		t.Fatal("precondition: ciphertext should exist before expiry")
+	}
+
+	// 模拟"事务里已终结"：state/terminal_at 都写好了，密文还在。
+	if _, err := e.st.Pool().Exec(context.Background(), `UPDATE transfers
+		SET state='EXPIRED', terminal_reason='EXPIRED', terminal_at=$2, expires_at=$3, updated_at=$2
+		WHERE transfer_id=$1`, tr.TransferID, e.now, e.now.Add(-time.Second)); err != nil {
+		t.Fatalf("force expired: %v", err)
+	}
+
+	resp := e.do(http.MethodGet, spec.TransferPath(tr.TransferID), nil, nil)
+	if resp.status != http.StatusOK {
+		t.Fatalf("get transfer: %d %s", resp.status, resp.body)
+	}
+	if got := countFiles(); got != 0 {
+		t.Fatalf("newly=false 分支没有删密文：还剩 %d 个文件", got)
 	}
 }

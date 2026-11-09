@@ -252,7 +252,9 @@ func (a *API) expireIfNeeded(w http.ResponseWriter, r *http.Request, id string) 
 		a.internalError(w, r, "terminalize expired", err)
 		return store.Transfer{}, false
 	}
-	if newly {
+	// 已终结的 EXPIRED 也要删一次密文：StartLease / AckDownload 在事务里终结时
+	// newly=false，密文只能靠这里或兜底任务补删（契约要求三路径都"立刻删除"）。
+	if newly || t.State == spec.StateExpired {
 		a.purgeCiphertext(r, id)
 	}
 	return t, true
@@ -515,11 +517,13 @@ func (a *API) handleAck(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, store.ErrLeaseExpired):
 			fail(w, r, spec.ErrDownloadNotStarted)
 		case errors.Is(err, store.ErrExpired):
-			// TTL 到点：ack 不计数，返回 410（与 EXPIRED tombstone 同口径）。
-			if _, ok := a.expireIfNeeded(w, r, id); !ok {
+			// TTL 到点：ack 不计数，返回 410；错误名按**当时的真实状态**取，
+			// 已 REVOKED/CONSUMED 的行不能报成 EXPIRED（与 loadReadableTransfer 口径一致）。
+			fresh, ok := a.expireIfNeeded(w, r, id)
+			if !ok {
 				return
 			}
-			fail(w, r, spec.ErrTransferExpired)
+			fail(w, r, spec.TerminalErrorCode(fresh.State))
 		case errors.Is(err, store.ErrConflict):
 			fail(w, r, spec.ErrTransferStateConflict)
 		default:

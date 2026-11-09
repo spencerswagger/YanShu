@@ -680,6 +680,11 @@ type InboxRow struct {
 
 // ListInbox 按接收码列出传输（keyset 分页）。
 func (s *Store) ListInbox(ctx context.Context, q InboxQuery) ([]InboxRow, error) {
+	if q.Now.IsZero() {
+		// 零值会让 `expires_at > $3` 静默失效（1970 年以前任何时刻都"未到期"），
+		// 把已到期的行漏回列表里；这里兜底成当前时刻。
+		q.Now = time.Now().UTC()
+	}
 	args := []any{q.Code, q.States, q.Now}
 	clause := `t.recipient_code = $1 AND t.state = ANY($2) AND t.expires_at > $3`
 	if q.HasCursor {

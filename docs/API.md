@@ -607,7 +607,7 @@ ack 后 download_count 达 max_downloads ──► CONSUMED（密文删除）
 - `GET /inbox` **不返回**已到 `expires_at` 的条目（即使后台还没扫到该行）。
 - 到期后的 `POST /ack` → `410 TRANSFER_EXPIRED` 且**不计数**（`download_count` 不变）；到期后的 `POST /revoke` → `409 TRANSFER_STATE_CONFLICT`（与 §6.7 一致）。
 
-tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保留 7 天后物理删除；响应里带 `terminal_reason` ∈ `REVOKED | EXPIRED | CONSUMED`。
+tombstone 保留 §2.1 的元数据字段（**不含任何密文**），并**永久保留**（终结满 30 天后把 `uploader_ip` / `prelude_sm3` / `upload_token_sm3` 三列置 `NULL` 脱敏，其余字段永久；口径同 §5.2「保留与脱敏」与 `adr/0002-stats-and-audit-retention.md`）。两段关系：**到期由请求时刻判定（本节上一条），留存按保留期执行（§5.2 保留段），互不覆盖**。响应里带 `terminal_reason` ∈ `REVOKED | EXPIRED | CONSUMED`。
 
 ### 5.3 三种终结态的语义差异（客户端处置）
 
