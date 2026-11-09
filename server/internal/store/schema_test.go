@@ -19,8 +19,8 @@ var expectedColumns = map[string][]string{
 	"codes":           {"code", "nickname", "public_key", "registered_at", "updated_at"},
 	"auth_challenges": {"challenge_id", "expires_at", "nonce", "purpose", "used"},
 	"transfers": {
-		"chunk_count", "chunk_size", "created_at", "download_count", "expires_at",
-		"max_downloads", "plaintext_size", "prelude_len", "prelude_received",
+		"chunk_count", "chunk_size", "ciphertext_purged_at", "created_at", "download_count",
+		"expires_at", "max_downloads", "plaintext_size", "prelude_len", "prelude_received",
 		"prelude_sm3", "received_chunks", "recipient_code", "sender_code", "state",
 		"terminal_at", "terminal_reason", "total_ciphertext_bytes", "transfer_id",
 		"updated_at", "upload_token_sm3", "upload_token_kid", "uploader_ip",

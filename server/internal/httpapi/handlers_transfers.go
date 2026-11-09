@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -609,10 +610,20 @@ func (a *API) transferIDParam(w http.ResponseWriter, r *http.Request) (string, b
 	return id, true
 }
 
-// purgeCiphertext 物理删除密文（ack 达上限 / 撤回 / TTL 三条路径）。
+// purgeCiphertext 物理删除密文（ack 达上限 / 撤回 / TTL 三条路径），并写下删除水位。
+//
+// 水位（`ciphertext_purged_at`）不是审计字段，而是兜底任务推进的依据：
+// 请求路径删成功之后，这一行就离开「待删密文」集合，清理任务不会反复处理同一批行。
 func (a *API) purgeCiphertext(r *http.Request, id string) {
 	if err := a.blobs.Purge(id); err != nil {
 		a.log.Error("purge ciphertext failed", "transferId", id, "err", err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
+	defer cancel()
+	if _, err := a.store.MarkCiphertextPurged(ctx, []string{id}, a.now()); err != nil {
+		// 删密文已成功；水位没写上只会让兜底多删一次（幂等），不阻断请求。
+		a.log.Warn("mark ciphertext purged failed", "transferId", id, "err", err.Error())
 	}
 }
 

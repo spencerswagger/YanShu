@@ -66,10 +66,12 @@ type Stats struct {
 	Expired     int
 	Purged      int
 	PurgeErrors int
-	Challenges  int64
-	Idempotency int64
-	Redacted    int64
-	AuditPurged int64
+	// PurgeRemaining 是本轮结束后**仍未确认删除密文**的终结行数（真实值，不是批次大小）。
+	PurgeRemaining int64
+	Challenges     int64
+	Idempotency    int64
+	Redacted       int64
+	AuditPurged    int64
 	// Reconcile 是本次真正跑过的对账结果（未到期则为 nil）。
 	Reconcile *store.DayReconcile
 }
@@ -110,25 +112,43 @@ func (s *Sweeper) Once(ctx context.Context) (Stats, error) {
 		return stats, err
 	}
 	stats.Expired = len(expired)
+	purgedIDs := make([]string, 0, len(expired)+s.batch)
 	for _, id := range expired {
 		if err := s.blobs.Purge(id); err != nil {
 			s.log.Error("purge expired ciphertext failed", "transferId", id, "err", err.Error())
 			stats.PurgeErrors++
+			continue
 		}
+		stats.Purged++
+		purgedIDs = append(purgedIDs, id)
 	}
 
-	// 2) 所有终结态再兜底删一次密文（删除幂等）。
-	terminal, err := s.store.ListTerminal(ctx, s.batch)
+	// 2) 兜底删密文：按 `ciphertext_purged_at` 水位推进。
+	//    终结行永久保留后，"ORDER BY terminal_at LIMIT n" 每 tick 都返回同一批最老的行，
+	//    更晚终结的行永远轮不到（密文永久残留）。这里每删成功一批就写水位，下一批自然推进。
+	unpurged, err := s.store.ListUnpurgedTerminal(ctx, s.batch)
 	if err != nil {
 		return stats, err
 	}
-	for _, t := range terminal {
-		if err := s.blobs.Purge(t.ID); err != nil {
-			s.log.Error("purge terminal ciphertext failed", "transferId", t.ID, "err", err.Error())
+	for _, row := range unpurged {
+		if err := s.blobs.Purge(row.ID); err != nil {
+			s.log.Error("purge terminal ciphertext failed", "transferId", row.ID, "err", err.Error())
 			stats.PurgeErrors++
 			continue
 		}
 		stats.Purged++
+		purgedIDs = append(purgedIDs, row.ID)
+	}
+	if len(purgedIDs) > 0 {
+		if _, err := s.store.MarkCiphertextPurged(ctx, purgedIDs, now); err != nil {
+			s.log.Warn("mark ciphertext purged failed", "count", len(purgedIDs), "err", err.Error())
+		}
+	}
+	// 真实剩余量（不是常量 200）：运维据此判断兜底是否跟上。
+	if remaining, err := s.store.CountUnpurgedTerminal(ctx); err == nil {
+		stats.PurgeRemaining = remaining
+	} else {
+		s.log.Warn("count unpurged terminal failed", "err", err.Error())
 	}
 
 	// 3) 过期挑战（10 分钟）。
@@ -199,11 +219,13 @@ func (s *Sweeper) Once(ctx context.Context) (Stats, error) {
 		}
 	}
 
-	if stats.Expired > 0 || stats.Purged > 0 || stats.Redacted > 0 || stats.AuditPurged > 0 {
+	if stats.Expired > 0 || stats.Purged > 0 || stats.Redacted > 0 || stats.AuditPurged > 0 ||
+		stats.PurgeRemaining > 0 || stats.PurgeErrors > 0 {
 		s.log.Info("sweep",
 			"expired", stats.Expired,
 			"purged", stats.Purged,
 			"purgeErrors", stats.PurgeErrors,
+			"purgeRemaining", stats.PurgeRemaining,
 			"redacted", stats.Redacted,
 			"auditPurged", stats.AuditPurged,
 		)

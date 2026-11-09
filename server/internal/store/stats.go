@@ -148,6 +148,7 @@ func (s *Store) RedactOldTerminal(ctx context.Context, before time.Time, batch i
 				WHERE state IN ('CONSUMED', 'REVOKED', 'EXPIRED')
 				  AND terminal_at IS NOT NULL AND terminal_at < $1
 				  AND (uploader_ip IS NOT NULL OR prelude_sm3 IS NOT NULL OR upload_token_sm3 IS NOT NULL)
+				ORDER BY terminal_at
 				LIMIT $2
 			)`, before, batch)
 		if err != nil {

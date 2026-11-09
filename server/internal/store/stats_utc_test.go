@@ -197,3 +197,34 @@ func TestReconcileDayDetectsDrift(t *testing.T) {
 		t.Fatalf("deviation = %v, want ≈0.5（|1-2|/2）", rec.Deviation())
 	}
 }
+
+// 建包行与 created 计数必须同事务（P1）：统计写失败时不能留下"有传输行、没计数"的半截状态，
+// 否则接口 500 + 客户端重试会多一条，计数器与事实行永久漂移。
+func TestCreateTransferRollsBackWhenStatsFails(t *testing.T) {
+	st := openWithSessionTZ(t, "atomic", "UTC")
+	ctx := context.Background()
+	if _, err := st.Pool().Exec(ctx, `DROP TABLE stats_counters`); err != nil {
+		t.Fatalf("drop counters: %v", err)
+	}
+
+	id := "77777777777777777777777777777777"
+	_, err := st.CreateTransfer(ctx, store.Transfer{
+		ID: id, SenderCode: "AAAA", RecipientCode: "BBBB",
+		PlaintextSize: 10, ChunkSize: 32, ChunkCount: 1, PreludeLen: 300,
+		PreludeSM3: make([]byte, 32), TotalCiphertextBytes: 506, MaxDownloads: 1,
+		CreatedAt: time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC),
+		ExpiresAt: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC),
+		UploadTokenSM3: make([]byte, 32), UploadTokenKID: "1",
+	})
+	if err == nil {
+		t.Fatal("统计表缺失时 CreateTransfer 应失败")
+	}
+	var n int
+	if err := st.Pool().QueryRow(ctx, `SELECT count(*) FROM transfers`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("统计写失败却留下了 %d 条传输行（应为 0，事务未回滚）", n)
+	}
+}

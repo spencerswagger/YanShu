@@ -2,8 +2,10 @@ package cleanup_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -126,5 +128,90 @@ func TestSweeperReconcileRaisesDrift(t *testing.T) {
 	}
 	if stats2.Reconcile != nil {
 		t.Fatal("对账未按 ReconcileInterval 限频")
+	}
+}
+
+// P0 回归：兜底删密文必须**逐批推进**。
+//
+// 旧实现用 `ORDER BY terminal_at LIMIT batch`：终结行永久保留后，每个 tick 都拿回同一批
+// 最老的行，更晚终结的行永远轮不到（密文永久残留），日志里的 purged 还是常量。
+// 现在按 `ciphertext_purged_at` 水位推进，两轮必须处理不同行、最终密文文件数为 0。
+func TestSweeperPurgeAdvancesWatermark(t *testing.T) {
+	now := time.Date(2026, 11, 10, 3, 0, 0, 0, time.UTC)
+	_, st := newSweeper(t, now) // 只借它的 store（干净的 schema）
+	ctx := context.Background()
+	blobRoot := filepath.Join(t.TempDir(), "blobs2")
+	blobs, err := blob.NewDisk(blobRoot)
+	if err != nil {
+		t.Fatalf("blobs: %v", err)
+	}
+	sw2 := cleanup.New(st, blobs, time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	sw2.Now = func() time.Time { return now }
+	sw2.AuditRetention = 0 // 只测密文水位
+	sw2.ReconcileInterval = 0
+
+	const total = 250 // > 默认批大小 200
+
+	ids := make([]string, 0, total)
+	for i := 0; i < total; i++ {
+		id := fmt.Sprintf("%032x", i+1)
+		ids = append(ids, id)
+		if _, err := st.CreateTransfer(ctx, store.Transfer{
+			ID: id, SenderCode: "AAAA", RecipientCode: "BBBB",
+			PlaintextSize: 10, ChunkSize: 32, ChunkCount: 1, PreludeLen: 8,
+			PreludeSM3: make([]byte, 32), TotalCiphertextBytes: 40, MaxDownloads: 1,
+			CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
+			ExpiresAt: now.Add(-time.Minute), UploadTokenSM3: make([]byte, 32), UploadTokenKID: "1",
+		}); err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+		if _, err := st.Pool().Exec(ctx, `UPDATE transfers SET state='CONSUMED',
+			terminal_reason='CONSUMED', terminal_at=$2, download_count=1 WHERE transfer_id=$1`,
+			id, now.Add(-time.Duration(total-i)*time.Second)); err != nil {
+			t.Fatalf("terminalize: %v", err)
+		}
+		if _, err := blobs.PutPrelude(id, []byte("ciphertx")); err != nil {
+			t.Fatalf("put prelude: %v", err)
+		}
+	}
+
+	countFiles := func() int {
+		n := 0
+		_ = filepath.Walk(blobRoot, func(_ string, info os.FileInfo, err error) error {
+			if err == nil && info != nil && !info.IsDir() {
+				n++
+			}
+			return nil
+		})
+		return n
+	}
+	if got := countFiles(); got != total {
+		t.Fatalf("blob files before sweep = %d, want %d", got, total)
+	}
+
+	round1, err := sw2.Once(ctx)
+	if err != nil {
+		t.Fatalf("round1: %v", err)
+	}
+	if round1.Purged != 200 || round1.PurgeRemaining != int64(total-200) {
+		t.Fatalf("round1 purged=%d remaining=%d, want 200/%d", round1.Purged, round1.PurgeRemaining, total-200)
+	}
+	if got := countFiles(); got != total-200 {
+		t.Fatalf("blob files after round1 = %d, want %d（旧实现会一直是 50 个残留被反复处理）", got, total-200)
+	}
+
+	round2, err := sw2.Once(ctx)
+	if err != nil {
+		t.Fatalf("round2: %v", err)
+	}
+	if round2.Purged != total-200 || round2.PurgeRemaining != 0 {
+		t.Fatalf("round2 purged=%d remaining=%d, want %d/0（未推进到新行）",
+			round2.Purged, round2.PurgeRemaining, total-200)
+	}
+	if got := countFiles(); got != 0 {
+		t.Fatalf("blob files after round2 = %d, want 0", got)
+	}
+	if round1.Purged == round2.Purged {
+		t.Fatalf("两轮处理数相同（%d），日志计数仍是常量", round1.Purged)
 	}
 }
