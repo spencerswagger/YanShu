@@ -1160,3 +1160,10 @@ input[type='text'] {
 .speed-line .grow {
   flex: 1;
 }
+/* 接收行的两段进度：`下载中 62%` / `解密中` */
+.row-progress .stage {
+  font: 600 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2, var(--muted));
+  margin-top: 8px;
+}

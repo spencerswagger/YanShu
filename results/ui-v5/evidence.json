@@ -1,371 +1,778 @@
 {
-  "out": "/worktrees/YS-WEB/results/ui-v5",
+  "app": "http://127.0.0.1:4173/",
+  "api": "http://127.0.0.1:18080",
+  "sizeMb": 96,
   "shots": [
-    "/worktrees/YS-WEB/results/ui-v5/first-1440x900.png",
-    "/worktrees/YS-WEB/results/ui-v5/empty-1440x900.png",
-    "/worktrees/YS-WEB/results/ui-v5/first-390x844.png",
-    "/worktrees/YS-WEB/results/ui-v5/empty-390x844.png",
-    "/worktrees/YS-WEB/results/ui-v5/transferring-1440x900.png",
-    "/worktrees/YS-WEB/results/ui-v5/transferring-390x844.png"
+    "/worktrees/YS-WEB/results/ui-v5/sending-speed-390x844.png",
+    "/worktrees/YS-WEB/results/ui-v5/sending-speed-1440x900.png",
+    "/worktrees/YS-WEB/results/ui-v5/sent-done-390x844.png",
+    "/worktrees/YS-WEB/results/ui-v5/ttl-four-states-390x844.png",
+    "/worktrees/YS-WEB/results/ui-v5/ttl-four-states-1440x900.png",
+    "/worktrees/YS-WEB/results/ui-v5/receiving-two-stage-390x844.png",
+    "/worktrees/YS-WEB/results/ui-v5/received-done-390x844.png",
+    "/worktrees/YS-WEB/results/ui-v5/stats-platform-390x844.png",
+    "/worktrees/YS-WEB/results/ui-v5/stats-platform-1440x900.png"
   ],
-  "measures": [
+  "checks": [
     {
-      "view": "1440x900",
-      "phase": "first",
-      "count": 10,
-      "minW": 48,
-      "minH": 48,
-      "items": [
+      "ok": true,
+      "label": "发送速度行有真实速率数字",
+      "detail": {
+        "speed": "0 B/s",
+        "warn": "",
+        "eta": "",
+        "pair": "18 MB / 96 MB",
+        "done": false
+      }
+    },
+    {
+      "ok": true,
+      "label": "发送 ETA 有真实文案",
+      "detail": {
+        "speed": "67.9 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "62 MB / 96 MB",
+        "done": false
+      }
+    },
+    {
+      "ok": true,
+      "label": "已传/总大小为 x/y 形式",
+      "detail": {
+        "speed": "0 B/s",
+        "warn": "",
+        "eta": "",
+        "pair": "18 MB / 96 MB",
+        "done": false
+      }
+    },
+    {
+      "ok": true,
+      "label": "发送完成态显示服务端 TTL",
+      "detail": "23 小时后过期"
+    },
+    {
+      "ok": true,
+      "label": "列表显示「N 小时后过期」",
+      "detail": [
+        "42 分钟后过期",
+        "2 天后过期",
+        "已过期，无法取回",
+        "23 小时后过期"
+      ]
+    },
+    {
+      "ok": true,
+      "label": "列表显示「42 分钟后过期」",
+      "detail": [
+        "42 分钟后过期",
+        "2 天后过期",
+        "已过期，无法取回",
+        "23 小时后过期"
+      ]
+    },
+    {
+      "ok": true,
+      "label": "列表显示「2 天后过期」",
+      "detail": [
+        "42 分钟后过期",
+        "2 天后过期",
+        "已过期，无法取回",
+        "23 小时后过期"
+      ]
+    },
+    {
+      "ok": true,
+      "label": "列表显示「已过期，无法取回」",
+      "detail": [
+        "42 分钟后过期",
+        "2 天后过期",
+        "已过期，无法取回",
+        "23 小时后过期"
+      ]
+    },
+    {
+      "ok": true,
+      "label": "过期行下载置灰",
+      "detail": [
         {
-          "tag": "BUTTON",
-          "label": "安全说明",
-          "w": 48,
-          "h": 48,
-          "hidden": false
+          "ttl": "42 分钟后过期",
+          "expiredClass": false,
+          "btnDisabled": false
         },
         {
-          "tag": "BUTTON",
-          "label": "复制码",
-          "w": 48,
-          "h": 48,
-          "hidden": false
+          "ttl": "2 天后过期",
+          "expiredClass": false,
+          "btnDisabled": false
         },
         {
-          "tag": "BUTTON",
-          "label": "雁MBDT",
-          "w": 100,
-          "h": 48,
-          "hidden": false
+          "ttl": "已过期，无法取回",
+          "expiredClass": true,
+          "btnDisabled": true
         },
         {
-          "tag": "BUTTON",
-          "label": "端到端加密 · 私钥仅存本机",
-          "w": 162,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "INPUT",
-          "label": "",
-          "w": 451,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "查询接收方",
-          "w": 76,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "DIV",
-          "label": "选择或拖入文件",
-          "w": 537,
-          "h": 162,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "发送文件",
-          "w": 537,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "刷新",
-          "w": 48,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "发送文件",
-          "w": 302,
-          "h": 48,
-          "hidden": false
+          "ttl": "23 小时后过期",
+          "expiredClass": false,
+          "btnDisabled": false
         }
       ]
     },
     {
-      "view": "390x844",
-      "phase": "first",
-      "count": 12,
-      "minW": 48,
-      "minH": 48,
-      "items": [
-        {
-          "tag": "BUTTON",
-          "label": "安全说明",
-          "w": 48,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "复制码",
-          "w": 48,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "雁MBDT",
-          "w": 100,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "端到端加密 · 私钥仅存本机",
-          "w": 162,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "INPUT",
-          "label": "",
-          "w": 222,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "查询接收方",
-          "w": 68,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "DIV",
-          "label": "选择或拖入文件",
-          "w": 300,
-          "h": 162,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "发送文件",
-          "w": 300,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "刷新",
-          "w": 48,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "发送文件",
-          "w": 276,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "发送文件",
-          "w": 176,
-          "h": 56,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "接收文件",
-          "w": 176,
-          "h": 56,
-          "hidden": false
-        }
+      "ok": true,
+      "label": "点到了未过期行的下载按钮",
+      "detail": true
+    },
+    {
+      "ok": true,
+      "label": "接收显示「下载中 N%」",
+      "detail": [
+        "",
+        "下载中 1%",
+        "下载中 2%",
+        "下载中 3%",
+        "下载中 4%",
+        "下载中 5%",
+        "下载中 6%",
+        "下载中 7%",
+        "下载中 8%",
+        "下载中 9%",
+        "下载中 10%",
+        "下载中 11%",
+        "下载中 13%",
+        "下载中 14%",
+        "下载中 15%",
+        "下载中 16%",
+        "下载中 17%",
+        "下载中 18%",
+        "下载中 19%",
+        "下载中 20%",
+        "下载中 24%",
+        "下载中 25%",
+        "下载中 26%",
+        "下载中 27%",
+        "下载中 28%",
+        "下载中 29%",
+        "下载中 30%",
+        "下载中 31%",
+        "下载中 32%",
+        "下载中 33%",
+        "下载中 34%",
+        "下载中 35%",
+        "下载中 36%",
+        "下载中 38%",
+        "下载中 39%",
+        "下载中 40%",
+        "下载中 41%",
+        "下载中 42%",
+        "下载中 43%",
+        "下载中 44%",
+        "下载中 45%",
+        "下载中 46%",
+        "下载中 47%",
+        "下载中 48%",
+        "下载中 49%",
+        "下载中 50%",
+        "下载中 51%",
+        "下载中 52%",
+        "下载中 53%",
+        "下载中 54%",
+        "下载中 55%",
+        "下载中 56%",
+        "下载中 57%",
+        "下载中 58%",
+        "下载中 59%",
+        "下载中 60%",
+        "下载中 61%",
+        "下载中 63%",
+        "下载中 64%",
+        "下载中 65%",
+        "下载中 66%",
+        "下载中 67%",
+        "下载中 68%",
+        "下载中 69%",
+        "下载中 70%",
+        "下载中 71%",
+        "下载中 72%",
+        "下载中 73%",
+        "下载中 74%",
+        "下载中 75%",
+        "下载中 76%",
+        "下载中 77%",
+        "下载中 78%",
+        "下载中 79%",
+        "下载中 80%",
+        "下载中 81%",
+        "下载中 82%",
+        "下载中 83%",
+        "下载中 84%",
+        "下载中 85%",
+        "下载中 86%",
+        "下载中 88%",
+        "下载中 89%",
+        "下载中 90%",
+        "下载中 91%",
+        "下载中 92%",
+        "下载中 93%",
+        "下载中 94%",
+        "下载中 95%",
+        "下载中 96%",
+        "下载中 97%",
+        "下载中 98%",
+        "下载中 99%",
+        "下载中 100%",
+        "下载中 100%",
+        ""
       ]
     },
     {
-      "view": "1440x900",
-      "phase": "transferring",
-      "count": 10,
-      "minW": 48,
-      "minH": 48,
-      "items": [
-        {
-          "tag": "BUTTON",
-          "label": "安全说明",
-          "w": 48,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "复制码",
-          "w": 48,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "雁MBDT",
-          "w": 100,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "端到端加密 · 私钥仅存本机",
-          "w": 162,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "INPUT",
-          "label": "",
-          "w": 451,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "查询接收方",
-          "w": 76,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "发送中…",
-          "w": 537,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "取消",
-          "w": 537,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "刷新",
-          "w": 48,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "发送文件",
-          "w": 302,
-          "h": 48,
-          "hidden": false
-        }
+      "ok": true,
+      "label": "逐块解密在进度里可见（解密块 i/N）",
+      "detail": [
+        "",
+        "解密块 1/96",
+        "解密块 2/96",
+        "解密块 3/96",
+        "解密块 4/96",
+        "解密块 5/96",
+        "解密块 6/96",
+        "解密块 7/96",
+        "解密块 8/96",
+        "解密块 9/96",
+        "解密块 10/96",
+        "解密块 11/96",
+        "解密块 12/96",
+        "解密块 13/96",
+        "解密块 14/96",
+        "解密块 15/96",
+        "解密块 16/96",
+        "解密块 17/96",
+        "解密块 18/96",
+        "解密块 19/96",
+        "解密块 23/96",
+        "解密块 24/96",
+        "解密块 25/96",
+        "解密块 26/96",
+        "解密块 27/96",
+        "解密块 28/96",
+        "解密块 29/96",
+        "解密块 30/96",
+        "解密块 31/96",
+        "解密块 32/96",
+        "解密块 33/96",
+        "解密块 34/96",
+        "解密块 35/96",
+        "解密块 36/96",
+        "解密块 37/96",
+        "解密块 38/96",
+        "解密块 39/96",
+        "解密块 40/96",
+        "解密块 41/96",
+        "解密块 42/96",
+        "解密块 43/96",
+        "解密块 44/96",
+        "解密块 45/96",
+        "解密块 46/96",
+        "解密块 47/96",
+        "解密块 48/96",
+        "解密块 49/96",
+        "解密块 50/96",
+        "解密块 51/96",
+        "解密块 52/96",
+        "解密块 53/96",
+        "解密块 54/96",
+        "解密块 55/96",
+        "解密块 56/96",
+        "解密块 57/96",
+        "解密块 58/96",
+        "解密块 59/96",
+        "解密块 60/96",
+        "解密块 61/96",
+        "解密块 62/96",
+        "解密块 63/96",
+        "解密块 64/96",
+        "解密块 65/96",
+        "解密块 66/96",
+        "解密块 67/96",
+        "解密块 68/96",
+        "解密块 69/96",
+        "解密块 70/96",
+        "解密块 71/96",
+        "解密块 72/96",
+        "解密块 73/96",
+        "解密块 74/96",
+        "解密块 75/96",
+        "解密块 76/96",
+        "解密块 77/96",
+        "解密块 78/96",
+        "解密块 79/96",
+        "解密块 80/96",
+        "解密块 81/96",
+        "解密块 82/96",
+        "解密块 83/96",
+        "解密块 84/96",
+        "解密块 85/96",
+        "解密块 86/96",
+        "解密块 87/96",
+        "解密块 88/96",
+        "解密块 89/96",
+        "解密块 90/96",
+        "解密块 91/96",
+        "解密块 92/96",
+        "解密块 93/96",
+        "解密块 94/96",
+        "解密块 95/96",
+        "解密块 96/96",
+        "解密块 96/96",
+        ""
       ]
     },
     {
-      "view": "390x844",
-      "phase": "transferring",
-      "count": 12,
-      "minW": 48,
-      "minH": 48,
-      "items": [
-        {
-          "tag": "BUTTON",
-          "label": "安全说明",
-          "w": 48,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "复制码",
-          "w": 48,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "雁MBDT",
-          "w": 100,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "端到端加密 · 私钥仅存本机",
-          "w": 162,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "INPUT",
-          "label": "",
-          "w": 222,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "查询接收方",
-          "w": 68,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "发送中…",
-          "w": 300,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "取消",
-          "w": 300,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "刷新",
-          "w": 48,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "发送文件",
-          "w": 276,
-          "h": 48,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "发送文件",
-          "w": 210,
-          "h": 56,
-          "hidden": false
-        },
-        {
-          "tag": "BUTTON",
-          "label": "接收文件",
-          "w": 210,
-          "h": 56,
-          "hidden": false
-        }
+      "ok": true,
+      "label": "接收速度行有真实速率",
+      "detail": [
+        "",
+        "0 B/s",
+        "0 B/s",
+        "0 B/s",
+        "0 B/s",
+        "0 B/s",
+        "0 B/s",
+        "0 B/s",
+        "0 B/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "14.8 MB/s",
+        "14.8 MB/s",
+        "14.8 MB/s",
+        "14.8 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.3 MB/s",
+        "14.4 MB/s",
+        "14.4 MB/s",
+        "14.4 MB/s",
+        "14.4 MB/s",
+        "14.4 MB/s",
+        "14.4 MB/s",
+        "14.4 MB/s",
+        "14.0 MB/s",
+        "14.0 MB/s",
+        "14.0 MB/s",
+        "14.0 MB/s",
+        "14.0 MB/s",
+        "14.0 MB/s",
+        "14.0 MB/s",
+        "14.0 MB/s",
+        "14.5 MB/s",
+        "14.5 MB/s",
+        "14.5 MB/s",
+        "14.5 MB/s",
+        "14.5 MB/s",
+        "14.5 MB/s",
+        "14.5 MB/s",
+        "14.5 MB/s",
+        "14.7 MB/s",
+        "14.7 MB/s",
+        "14.7 MB/s",
+        "14.7 MB/s",
+        "14.7 MB/s",
+        "14.7 MB/s",
+        "14.7 MB/s",
+        "14.7 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.0 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        "15.1 MB/s",
+        ""
       ]
+    },
+    {
+      "ok": true,
+      "label": "API 有真实今日取走/流量",
+      "detail": {
+        "consumed": 9,
+        "consumed_bytes": 208666624,
+        "created": 35
+      }
+    },
+    {
+      "ok": true,
+      "label": "界面六项与 /v1/stats 逐项一致",
+      "detail": {
+        "want": {
+          "今日已取走": "9",
+          "今日流量": "199 MB",
+          "今日新建": "35",
+          "累计已取走": "35",
+          "累计流量": "1.2 GB",
+          "累计新建": "84"
+        },
+        "got": {
+          "本机发送": "0",
+          "本机接收": "0",
+          "成功率": "—",
+          "今日已取走": "9",
+          "今日流量": "199MB",
+          "今日新建": "35",
+          "累计已取走": "35",
+          "累计流量": "1.2GB",
+          "累计新建": "84"
+        }
+      }
+    },
+    {
+      "ok": true,
+      "label": "已完成的流式传输不再出现在「未完成的上传」",
+      "detail": 0
     }
   ],
-  "matrix": {
-    "cells": 96,
-    "cols": 32
-  },
-  "frames": {
-    "samples": 35,
-    "maxPerFrame": 6
-  },
   "failures": [],
-  "app": "http://127.0.0.1:5173/",
-  "peerCode": "NKKK",
-  "sendStarted": {
-    "ok": true
-  }
+  "stats": {
+    "api": {
+      "today": {
+        "consumed": 9,
+        "consumed_bytes": 208666624,
+        "created": 35
+      },
+      "total": {
+        "consumed": 35,
+        "consumed_bytes": 1273903439,
+        "created": 84
+      },
+      "generated_at": "2026-11-09T17:58:56Z"
+    },
+    "dom": [
+      {
+        "k": "本机发送",
+        "v": "0"
+      },
+      {
+        "k": "本机接收",
+        "v": "0"
+      },
+      {
+        "k": "成功率",
+        "v": "—"
+      },
+      {
+        "k": "今日已取走",
+        "v": "9"
+      },
+      {
+        "k": "今日流量",
+        "v": "199MB"
+      },
+      {
+        "k": "今日新建",
+        "v": "35"
+      },
+      {
+        "k": "累计已取走",
+        "v": "35"
+      },
+      {
+        "k": "累计流量",
+        "v": "1.2GB"
+      },
+      {
+        "k": "累计新建",
+        "v": "84"
+      }
+    ]
+  },
+  "ttl": [
+    {
+      "ttl": "42 分钟后过期",
+      "expiredClass": false,
+      "btnDisabled": false
+    },
+    {
+      "ttl": "2 天后过期",
+      "expiredClass": false,
+      "btnDisabled": false
+    },
+    {
+      "ttl": "已过期，无法取回",
+      "expiredClass": true,
+      "btnDisabled": true
+    },
+    {
+      "ttl": "23 小时后过期",
+      "expiredClass": false,
+      "btnDisabled": false
+    }
+  ],
+  "send": {
+    "samples": [
+      {
+        "speed": "0 B/s",
+        "warn": "",
+        "eta": "",
+        "pair": "18 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "67.9 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "62 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "67.9 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "72 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "70.9 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "82 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "70.9 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "93 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "70.9 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "0 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "49.6 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "2.0 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "49.6 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "6.0 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "49.6 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "10 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "40.1 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "14 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "40.1 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "18 MB / 96 MB",
+        "done": false
+      },
+      {
+        "speed": "33.6 MB/s",
+        "warn": "",
+        "eta": "即将完成",
+        "pair": "22 MB / 96 MB",
+        "done": false
+      }
+    ],
+    "lastSample": {
+      "speed": "",
+      "warn": "",
+      "eta": "",
+      "pair": "",
+      "done": true
+    },
+    "doneTtl": "23 小时后过期"
+  },
+  "recv": {
+    "samples": [
+      {
+        "stage": "",
+        "speed": "",
+        "eta": "",
+        "pair": "",
+        "msg": "",
+        "saved": false,
+        "banner": [],
+        "still": true
+      },
+      {
+        "stage": "下载中 1%",
+        "speed": "0 B/s",
+        "eta": "",
+        "pair": "1.0 MB / 96 MB",
+        "msg": "解密块 1/96",
+        "saved": false,
+        "banner": [],
+        "still": true
+      },
+      {
+        "stage": "下载中 2%",
+        "speed": "0 B/s",
+        "eta": "",
+        "pair": "2.0 MB / 96 MB",
+        "msg": "解密块 2/96",
+        "saved": false,
+        "banner": [],
+        "still": true
+      },
+      {
+        "stage": "下载中 3%",
+        "speed": "0 B/s",
+        "eta": "",
+        "pair": "3.0 MB / 96 MB",
+        "msg": "解密块 3/96",
+        "saved": false,
+        "banner": [],
+        "still": true
+      },
+      {
+        "stage": "下载中 4%",
+        "speed": "0 B/s",
+        "eta": "",
+        "pair": "4.0 MB / 96 MB",
+        "msg": "解密块 4/96",
+        "saved": false,
+        "banner": [],
+        "still": true
+      },
+      {
+        "stage": "下载中 5%",
+        "speed": "0 B/s",
+        "eta": "",
+        "pair": "5.0 MB / 96 MB",
+        "msg": "解密块 5/96",
+        "saved": false,
+        "banner": [],
+        "still": true
+      },
+      {
+        "stage": "下载中 6%",
+        "speed": "0 B/s",
+        "eta": "",
+        "pair": "6.0 MB / 96 MB",
+        "msg": "解密块 6/96",
+        "saved": false,
+        "banner": [],
+        "still": true
+      },
+      {
+        "stage": "下载中 7%",
+        "speed": "0 B/s",
+        "eta": "",
+        "pair": "7.0 MB / 96 MB",
+        "msg": "解密块 7/96",
+        "saved": false,
+        "banner": [],
+        "still": true
+      },
+      {
+        "stage": "下载中 8%",
+        "speed": "0 B/s",
+        "eta": "",
+        "pair": "8.0 MB / 96 MB",
+        "msg": "解密块 8/96",
+        "saved": false,
+        "banner": [],
+        "still": true
+      },
+      {
+        "stage": "下载中 9%",
+        "speed": "15.0 MB/s",
+        "eta": "即将完成",
+        "pair": "9.0 MB / 96 MB",
+        "msg": "解密块 9/96",
+        "saved": false,
+        "banner": [],
+        "still": true
+      },
+      {
+        "stage": "下载中 10%",
+        "speed": "15.0 MB/s",
+        "eta": "即将完成",
+        "pair": "10 MB / 96 MB",
+        "msg": "解密块 10/96",
+        "saved": false,
+        "banner": [],
+        "still": true
+      },
+      {
+        "stage": "下载中 11%",
+        "speed": "15.0 MB/s",
+        "eta": "即将完成",
+        "pair": "11 MB / 96 MB",
+        "msg": "解密块 11/96",
+        "saved": false,
+        "banner": [],
+        "still": true
+      }
+    ],
+    "fail": "",
+    "console": [
+      {
+        "m": "Log.entryAdded",
+        "t": "The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element."
+      }
+    ]
+  },
+  "peerCode": "GHV7",
+  "doneDebug": "已发送，等待对方接收\n码 GHV7 · 23 小时后过期\n撤回传输",
+  "pendingHeadings": 0
 }

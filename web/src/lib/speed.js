@@ -101,3 +101,16 @@ export function formatBytesPair(done, total) {
   }
   return `${f(done)} / ${f(total)}`
 }
+
+/**
+ * 接收侧两段进度文案（S3）：`下载中 62%` / `解密中`。
+ * 解密是「收齐后一次性验签+解密」，没有增量进度，**不编百分比**；其它阶段交给 message 行。
+ */
+export function stageLabel(phase, done, total) {
+  if (phase === 'downloading') {
+    const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
+    return `下载中 ${pct}%`
+  }
+  if (phase === 'decrypting') return '解密中'
+  return ''
+}

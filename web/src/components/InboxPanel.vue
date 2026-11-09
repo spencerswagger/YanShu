@@ -1,8 +1,11 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { describeError } from '../net/errors.js'
-import { bytes as fmtBytes, clock, percent } from '../lib/format.js'
+import { bytes as fmtBytes, percent } from '../lib/format.js'
+import { createSpeedMeter, stageLabel } from '../lib/speed.js'
+import { isExpired, remainingMs } from '../lib/serverClock.js'
 import ReportSheet from './ReportSheet.vue'
+import SpeedLine from './SpeedLine.vue'
 import TtlPill from './TtlPill.vue'
 
 const props = defineProps({
@@ -15,7 +18,13 @@ const loading = ref(false)
 const errorText = ref('')
 const notice = ref('')
 const activeId = ref('')
-const progress = ref({ done: 0, total: 0, message: '', verified: false, meta: null })
+const progress = ref({ phase: '', done: 0, total: 0, message: '', verified: false, meta: null })
+/** 接收侧速度表：只吃真实字节进度（下载中），解密的最终校验没有增量、不编百分比 */
+const rxSpeed = ref({ speedBps: 0, etaSec: null, state: 'ok' })
+const rxMeter = createSpeedMeter()
+
+/** S3 两段：`下载中 62%` / `解密中`（最终验签没有增量进度，故不给假百分比） */
+const stageText = computed(() => stageLabel(progress.value.phase, progress.value.done, progress.value.total))
 
 async function refresh() {
   if (!props.api) return
@@ -36,16 +45,22 @@ async function take(item) {
   activeId.value = item.transfer_id
   errorText.value = ''
   notice.value = ''
+  rxMeter.reset()
+  rxSpeed.value = { speedBps: 0, etaSec: null, state: 'ok' }
   try {
     const result = await props.receive({
       transferId: item.transfer_id,
       onProgress: (p) => {
         progress.value = {
+          phase: p.phase || '',
           done: p.done || 0,
           total: p.total || 0,
           message: p.message || '',
           verified: Boolean(p.verified),
           meta: p.meta || progress.value.meta,
+        }
+        if (p.phase === 'downloading') {
+          rxSpeed.value = rxMeter.update(p.done || 0, p.total || 0)
         }
       },
     })
@@ -57,14 +72,14 @@ async function take(item) {
     if (d.terminal) items.value = items.value.filter((i) => i.transfer_id !== item.transfer_id)
   } finally {
     activeId.value = ''
-    progress.value = { done: 0, total: 0, message: '', verified: false, meta: null }
+    progress.value = { phase: '', done: 0, total: 0, message: '', verified: false, meta: null }
+    rxMeter.reset()
   }
 }
 
-/** 过期项：下载置灰（服务端也会 410，前端先拦一层） */
+/** 过期项：下载置灰（服务端也会 410，前端先拦一层）；用服务端时间基准，不看本机时钟 */
 function isExpiredItem(item) {
-  const t = Date.parse(item.expires_at || 0)
-  return Number.isFinite(t) ? t <= Date.now() : false
+  return Boolean(item.expires_at) && isExpired(remainingMs(item.expires_at))
 }
 
 function focusDrop() {
@@ -114,6 +129,15 @@ refresh()
         </button>
         <ReportSheet :api="api" :transfer-id="item.transfer_id" icon-only />
         <div v-if="activeId === item.transfer_id" class="row-progress">
+          <div v-if="stageText" class="meta stage">{{ stageText }}</div>
+          <SpeedLine
+            v-if="progress.phase === 'downloading'"
+            :speed-bps="rxSpeed.speedBps"
+            :eta-sec="rxSpeed.etaSec"
+            :state="rxSpeed.state"
+            :done="progress.done"
+            :total="progress.total"
+          />
           <div class="progress"><span :style="{ width: percent(progress.done, progress.total) + '%' }" /></div>
           <div class="meta">{{ progress.message }}</div>
         </div>

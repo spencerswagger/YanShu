@@ -13,9 +13,11 @@ import {
   remainingMs,
   formatTtl,
   isExpiringSoon,
+  isExpired,
+  parseServerExpiry,
   resetServerTime,
 } from '../src/lib/serverClock.js'
-import { createSpeedMeter, formatEta, formatSpeed, formatBytesPair } from '../src/lib/speed.js'
+import { createSpeedMeter, formatEta, formatSpeed, formatBytesPair, stageLabel } from '../src/lib/speed.js'
 import { fetchStats, formatCount, formatBytesTotal } from '../src/net/stats.js'
 
 const HOUR = 3600_000
@@ -127,4 +129,37 @@ test('/v1/stats：数值格式化（四舍五入到千/万，前端只做展示�
   assert.equal(formatCount(1_284_930), '1.28M')
   assert.equal(formatBytesTotal(42 * 1099511627776), '42.0 TB')
   assert.equal(formatBytesTotal(1_500_000_000), '1.4 GB')
+})
+
+test('TTL：过期判定走服务端时间基准（设备时钟快 3 小时也不能提前判过期）', () => {
+  resetServerTime()
+  const realNow = Date.now()
+  // 设备时钟比服务端快 3 小时
+  globalThis.performance = { now: () => 1000 }
+  syncServerTime(realNow)
+  const expiresAt = parseServerExpiry(new Date(realNow + 42 * MIN).toISOString())
+  assert.equal(expiresAt, realNow + 42 * MIN, '服务端时间串必须解析成毫秒')
+  assert.equal(isExpired(remainingMs(expiresAt)), false, '还剩 42 分钟就不该判过期')
+  assert.equal(formatTtl(remainingMs(expiresAt)), '42 分钟后过期')
+  // 已过期：服务端时间已经超过 expires_at
+  const past = parseServerExpiry(new Date(realNow - 1000).toISOString())
+  assert.equal(isExpired(remainingMs(past)), true)
+  assert.equal(formatTtl(remainingMs(past)), '已过期，无法取回')
+  resetServerTime()
+})
+
+test('TTL：expires_at 缺失/非法 → null（界面不显示胶囊，不猜）', () => {
+  assert.equal(parseServerExpiry(undefined), null)
+  assert.equal(parseServerExpiry(''), null)
+  assert.equal(parseServerExpiry('not-a-date'), null)
+  assert.equal(parseServerExpiry(0), null)
+})
+
+test('接收两段进度：下载中给真实百分比，解密中不给假数字', () => {
+  assert.equal(stageLabel('downloading', 62, 100), '下载中 62%')
+  assert.equal(stageLabel('downloading', 0, 0), '下载中 0%')
+  assert.equal(stageLabel('downloading', 200, 100), '下载中 100%')
+  assert.equal(stageLabel('decrypting', 0, 0), '解密中')
+  assert.equal(stageLabel('', 0, 0), '')
+  assert.equal(stageLabel('saving', 10, 10), '')
 })

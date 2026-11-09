@@ -31,6 +31,12 @@ export function resetServerTime() {
   offsetMs = null
 }
 
+/** 服务端时间串（RFC3339，如 `expires_at`）→ 毫秒；缺失/非法返回 null */
+export function parseServerExpiry(v) {
+  const t = typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) : NaN
+  return Number.isFinite(t) && t > 0 ? t : null
+}
+
 /** 距离过期的毫秒数（≤0 表示已过期） */
 export function remainingMs(expiresAt, now = serverNow()) {
   const t = typeof expiresAt === 'number' ? expiresAt : Date.parse(expiresAt)

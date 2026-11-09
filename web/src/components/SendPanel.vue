@@ -5,9 +5,10 @@ import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent, clock } from '../lib/format.js'
 import { createSignaler } from '../net/signal.js'
 import DropZone from './DropZone.vue'
+import TtlPill from './TtlPill.vue'
 import BlockMatrix from './BlockMatrix.vue'
 import SpeedLine from './SpeedLine.vue'
-import { createSpeedMeter } from '../lib/speed.js'
+import { createSpeedMeter, formatBytesPair } from '../lib/speed.js'
 import { config } from '../config.js'
 
 const props = defineProps({
@@ -39,7 +40,6 @@ const pending = ref([])
  * 直连状态：默认中转（体验不变）；打洞只在后台静默尝试，打通后由用户点一下才切。
  * 失败/超时一律回到 idle，不弹错——中转本来就是默认路径。
  */
-const startedAt = ref(Date.now())
 const speedMeter = createSpeedMeter()
 const speedInfo = ref({ speedBps: 0, etaSec: null, state: 'ok', label: '0 B/s' })
 const direct = reactive({ status: 'idle', enable: null, notice: '' })
@@ -63,6 +63,7 @@ const chunkDone = computed(() => {
   return Math.floor((pctv / 100) * chunkTotal.value)
 })
 const pct = computed(() => percent(progress.value.done, progress.value.total))
+const pairText = computed(() => formatBytesPair(progress.value.done, progress.value.total || file.value?.size || 0))
 
 /** 块矩阵：用真实块数（服务端块 1 MiB）与按比例推导的块状态 */
 const matrixChunks = computed(() => {
@@ -83,23 +84,6 @@ const matrixStates = computed(() => {
   if (phase.value === 'done') out.fill('done')
   return out
 })
-const rateText = computed(() => {
-  const d = progress.value.done || 0
-  const elapsed = (Date.now() - startedAt.value) / 1000
-  if (!elapsed || !d) return '0.0'
-  return ((d / 1048576) / elapsed).toFixed(1)
-})
-const etaText = computed(() => {
-  const total = progress.value.total || 0
-  const d = progress.value.done || 0
-  const r = Number(rateText.value)
-  if (!r || !total) return '—'
-  const left = Math.max(0, (total - d) / 1048576 / r)
-  return left > 60 ? `${Math.round(left / 60)} 分` : `${Math.max(1, Math.round(left))} 秒`
-})
-const doneText = computed(() => `${((progress.value.done || 0) / 1048576).toFixed(1)} MB`)
-const totalText = computed(() => `${((progress.value.total || file.value?.size || 0) / 1048576).toFixed(1)} MB`)
-
 /** 码的归一化口径由内核给（`ys_normalize_code`），前端不自己实现 Crockford。 */
 const normalized = computed(() => {
   const raw = codeInput.value.trim()
@@ -144,7 +128,6 @@ async function send() {
   lastTransfer.value = null
   phase.value = 'packing'
   abort.value = new AbortController()
-  startedAt.value = Date.now()
   let signaler = null
   const wsUrl = props.p2pConfig?.wsUrl || ''
   const stunUrls = props.p2pConfig?.stunUrls || []
@@ -283,7 +266,8 @@ loadPending()
         </div>
       </div>
 
-      <div v-if="!file" class="drop-wrap">
+      <!-- 拖入区常驻：选完文件后仍要能看到文件名/大小，也能换一个文件（否则只能刷新页面） -->
+      <div class="drop-wrap">
         <DropZone @pick="pickFile" />
         <div v-if="file" class="file" style="margin-top: 8px">
           <div class="meta">
@@ -318,7 +302,7 @@ loadPending()
           :states="matrixStates"
           :variant="matrixVariant"
         />
-        <div class="meta">{{ doneText }} / {{ totalText }} · {{ pct }}%</div>
+        <div class="meta">{{ pairText }} · {{ pct }}%</div>
       </div>
 
       <div v-if="canSwitchDirect || direct.notice" class="banner info">
@@ -341,8 +325,10 @@ loadPending()
         </svg>
         <div style="font-weight: 700">已发送，等待对方接收</div>
         <div class="meta" style="margin-top: 2px">
-          码 <b style="font-family: ui-monospace, monospace">{{ lastTransfer.recipientCode }}</b> ·
-          24 小时后自动删除
+          码 <b style="font-family: ui-monospace, monospace">{{ lastTransfer.recipientCode }}</b>
+          <template v-if="lastTransfer.expiresAt">
+            · <TtlPill :expires-at="lastTransfer.expiresAt" />
+          </template>
         </div>
         <div class="row" style="margin-top: 10px; justify-content: center">
           <button type="button" class="sm btn-48" @click="revoke">撤回传输</button>

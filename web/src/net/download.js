@@ -14,6 +14,12 @@ import { info } from '../lib/log.js'
 import { config } from '../config.js'
 import { bytes } from '../lib/bytes.js'
 
+/** 让出一帧：`unpack.finish()` 是同步的，不让出的话「解密中」这段永远画不出来 */
+function nextPaint() {
+  if (typeof requestAnimationFrame !== 'function') return new Promise((r) => setTimeout(r, 0))
+  return new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))
+}
+
 const TERMINAL_CODES = {
   REVOKED: 'TRANSFER_REVOKED',
   EXPIRED: 'TRANSFER_EXPIRED',
@@ -220,6 +226,7 @@ async function receiveOnce({
       message: '端侧验签并解密（块 AEAD + 摘要）',
       verified: false,
     })
+    await nextPaint()
     const finished = unpack.finish()
     plain = finished.plain
     if (Number(finished.meta.size) !== plain.length) {
