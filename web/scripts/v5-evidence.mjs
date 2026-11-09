@@ -325,6 +325,9 @@ try {
     `(() => [...document.querySelectorAll('.rlist .ritem')].map((li) => ({
       ttl: li.querySelector('.ttl')?.textContent?.trim() || '',
       expiredClass: !!li.querySelector('.ttl.expired'),
+      rowExpiredClass: li.classList.contains('expired'),
+      rowOpacity: Number(getComputedStyle(li).opacity),
+      nameDecoration: getComputedStyle(li.querySelector('.rname')).textDecorationLine,
       btnDisabled: !!li.querySelector('button[aria-label="下载并解密"]')?.disabled,
     })))()`,
   )
@@ -334,7 +337,10 @@ try {
   check(ttls.includes('42 分钟后过期'), '列表显示「42 分钟后过期」', ttls)
   check(ttls.includes('2 天后过期'), '列表显示「2 天后过期」', ttls)
   check(ttls.includes('已过期，无法取回'), '列表显示「已过期，无法取回」', ttls)
-  check(ttlRows.some((r) => r.ttl === '已过期，无法取回' && r.btnDisabled), '过期行下载置灰', ttlRows)
+  const expiredRow = ttlRows.find((r) => r.ttl === '已过期，无法取回') || {}
+  check(expiredRow.btnDisabled, '过期行下载置灰', expiredRow)
+  check(expiredRow.rowExpiredClass && expiredRow.rowOpacity < 0.8, '过期行整行灰化', expiredRow)
+  check(/line-through/.test(expiredRow.nameDecoration || ''), '过期行文件名删除线', expiredRow)
   result.shots.push(await shot(cB, join(OUT, 'ttl-four-states-390x844.png')))
   await setViewport(cB, 1440, 900, false)
   await sleep(400)
@@ -404,7 +410,12 @@ try {
     result.shots.push(await shot(cB, join(OUT, 'receiving-failure-390x844.png')))
     throw new Error(`接收未完成：${recvFail}；最后状态 ${JSON.stringify(recvSamples.at(-1))}`)
   }
-  check(recvSamples.some((s) => /^下载中 \d+%$/.test(s.stage)), '接收显示「下载中 N%」', recvSamples.map((s) => s.stage))
+  check(recvSamples.some((s) => /下载中 \d+%/.test(s.stage)), '接收显示「下载中 N%」', recvSamples.map((s) => s.stage))
+  check(
+    recvSamples.some((s) => /解密中 \d+%/.test(s.stage)),
+    '接收同时显示「解密中 N%」（与下载百分比同为真实字节）',
+    recvSamples.map((s) => s.stage),
+  )
   // 流式接收把解密摊到每块（`解密块 i/N`），没有独立「解密中」阶段；非流式回退路径才有（单测覆盖）
   check(
     recvSamples.some((s) => /解密块 \d+\/\d+/.test(s.msg)),

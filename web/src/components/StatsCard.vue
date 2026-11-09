@@ -18,11 +18,11 @@ const total = computed(() => props.platform?.total || null)
 <template>
   <section class="card stats-card">
     <div class="stat">
-      <div class="k">本机发送</div>
+      <div class="k">今日发送</div>
       <FlipCounter :value="sent" size="lg" />
     </div>
     <div class="stat">
-      <div class="k">本机接收</div>
+      <div class="k">今日接收</div>
       <FlipCounter :value="received" size="lg" />
     </div>
     <div class="stat">

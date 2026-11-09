@@ -155,10 +155,16 @@ test('TTL：expires_at 缺失/非法 → null（界面不显示胶囊，不猜�
   assert.equal(parseServerExpiry(0), null)
 })
 
-test('接收两段进度：下载中给真实百分比，解密中不给假数字', () => {
+test('接收两段进度：下载中/解密中都是真百分比', () => {
+  // 只有下载字节：只显示下载中
   assert.equal(stageLabel('downloading', 62, 100), '下载中 62%')
   assert.equal(stageLabel('downloading', 0, 0), '下载中 0%')
   assert.equal(stageLabel('downloading', 200, 100), '下载中 100%')
+  // 已解密字节也上报：两段都给真数字（密文多出每块 16B tag，所以 100% 不越界）
+  assert.equal(stageLabel('downloading', 62, 100, 18), '下载中 62% · 解密中 18%')
+  assert.equal(stageLabel('downloading', 62, 100, 0), '下载中 62%')
+  assert.equal(stageLabel('downloading', 100, 100, 120), '下载中 100% · 解密中 100%')
+  // 非流式回退：最终验签没有增量进度 → 只给阶段名
   assert.equal(stageLabel('decrypting', 0, 0), '解密中')
   assert.equal(stageLabel('', 0, 0), '')
   assert.equal(stageLabel('saving', 10, 10), '')

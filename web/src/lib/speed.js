@@ -103,13 +103,21 @@ export function formatBytesPair(done, total) {
 }
 
 /**
- * 接收侧两段进度文案（S3）：`下载中 62%` / `解密中`。
- * 解密是「收齐后一次性验签+解密」，没有增量进度，**不编百分比**；其它阶段交给 message 行。
+ * 接收侧两段进度文案（S3）：`下载中 62%` · `解密中 18%`。
+ *
+ * 两个百分比都是**真数字**：`done` = 已取到的密文字节，`decrypted` = 已解密并写出的明文字节
+ * （流式接收按块边下边解，两者会差一块左右）。拿不到 `decrypted` 时只显示「下载中 N%」。
+ * 非流式回退路径的最终验签是一次性的，没有增量进度 → 只显示「解密中」，不编百分比。
  */
-export function stageLabel(phase, done, total) {
+export function stageLabel(phase, done, total, decrypted = null) {
   if (phase === 'downloading') {
     const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
-    return `下载中 ${pct}%`
+    const base = `下载中 ${pct}%`
+    if (Number.isFinite(decrypted) && decrypted > 0) {
+      const dpct = total > 0 ? Math.min(100, Math.round((decrypted / total) * 100)) : 0
+      return `${base} · 解密中 ${dpct}%`
+    }
+    return base
   }
   if (phase === 'decrypting') return '解密中'
   return ''

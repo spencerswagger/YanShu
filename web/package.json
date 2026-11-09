@@ -5,31 +5,26 @@
   "type": "module",
   "description": "雁书 YanShu 前端（Vue 3 + Vite）：端侧加密 → 中转 → 端侧解密",
   "scripts": {
-    "build": "vite build",
-    "check": "node --test tests/*.test.js && vite build",
     "dev": "vite",
     "dev:stub": "VITE_YS_CRYPTO=stub-fake vite",
-    "evidence:ui": "node scripts/v4-evidence.mjs",
-    "evidence:v5": "node scripts/v5-evidence.mjs",
-    "prebuild": "node scripts/ensure-wasm.mjs",
-    "pretest": "node scripts/ensure-wasm.mjs",
+    "build": "vite build",
     "preview": "vite preview",
     "relay": "node relay/dev-relay.mjs",
-    "siginput:check": "node scripts/check-siginput.mjs",
-    "siginput:dump": "node scripts/dump-siginput.mjs",
     "test": "node --test tests/*.test.js",
-    "typecheck": "vue-tsc --noEmit",
-    "wasm:check": "node scripts/check-wasm.mjs",
+    "check": "node --test tests/*.test.js && vite build",
+    "wasm:sync": "node scripts/sync-wasm.mjs",
     "wasm:rebuild": "node scripts/rebuild-wasm.mjs",
-    "wasm:sync": "node scripts/sync-wasm.mjs"
+    "wasm:check": "node scripts/check-wasm.mjs",
+    "siginput:dump": "node scripts/dump-siginput.mjs",
+    "siginput:check": "node scripts/check-siginput.mjs",
+    "pretest": "node scripts/ensure-wasm.mjs",
+    "prebuild": "node scripts/ensure-wasm.mjs"
   },
   "dependencies": {
     "vue": "^3.5.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.0",
-    "typescript": "^5.6.3",
-    "vite": "^5.4.0",
-    "vue-tsc": "^2.1.10"
+    "vite": "^5.4.0"
   }
 }

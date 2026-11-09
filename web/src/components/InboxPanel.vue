@@ -18,13 +18,15 @@ const loading = ref(false)
 const errorText = ref('')
 const notice = ref('')
 const activeId = ref('')
-const progress = ref({ phase: '', done: 0, total: 0, message: '', verified: false, meta: null })
+const progress = ref({ phase: '', done: 0, total: 0, decrypted: null, message: '', verified: false, meta: null })
 /** 接收侧速度表：只吃真实字节进度（下载中），解密的最终校验没有增量、不编百分比 */
 const rxSpeed = ref({ speedBps: 0, etaSec: null, state: 'ok' })
 const rxMeter = createSpeedMeter()
 
 /** S3 两段：`下载中 62%` / `解密中`（最终验签没有增量进度，故不给假百分比） */
-const stageText = computed(() => stageLabel(progress.value.phase, progress.value.done, progress.value.total))
+const stageText = computed(() =>
+  stageLabel(progress.value.phase, progress.value.done, progress.value.total, progress.value.decrypted),
+)
 
 async function refresh() {
   if (!props.api) return
@@ -55,6 +57,7 @@ async function take(item) {
           phase: p.phase || '',
           done: p.done || 0,
           total: p.total || 0,
+          decrypted: Number.isFinite(p.decrypted) ? p.decrypted : null,
           message: p.message || '',
           verified: Boolean(p.verified),
           meta: p.meta || progress.value.meta,
@@ -72,7 +75,7 @@ async function take(item) {
     if (d.terminal) items.value = items.value.filter((i) => i.transfer_id !== item.transfer_id)
   } finally {
     activeId.value = ''
-    progress.value = { phase: '', done: 0, total: 0, message: '', verified: false, meta: null }
+    progress.value = { phase: '', done: 0, total: 0, decrypted: null, message: '', verified: false, meta: null }
     rxMeter.reset()
   }
 }
@@ -105,7 +108,7 @@ refresh()
     <p v-if="errorText" class="banner warn">{{ errorText }}</p>
 
     <ul v-if="items.length" class="rlist">
-      <li v-for="item in items" :key="item.transfer_id" class="ritem row-72">
+      <li v-for="item in items" :key="item.transfer_id" class="ritem row-72" :class="{ expired: isExpiredItem(item) }">
         <div class="who">
           <div class="avatar">{{ (item.sender_nickname || item.sender_code || '?').slice(0, 1) }}</div>
           <div>

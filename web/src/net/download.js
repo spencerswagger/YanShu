@@ -106,12 +106,16 @@ async function receiveStreaming({
       bytes(kernel.segmenter.buildRecordHeader(index, slice.length - 16, chunkCount), slice),
     )
 
-  let done = 0
+  let done = 0 // 已解密并写出的明文字节
+  let fetched = 0 // 已取到的密文字节（含尚未解密的块）
   for (let index = 0; index < chunkCount; index++) {
     if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
     const picked = directBuffer
       ? await takeChunkBytes({ directBuffer, index, getChunk: relayGet })
       : { bytes: await relayGet(index), source: 'relay' }
+    // 先记「已取到」再解密：两个百分比因此会差一块左右，能看出解密落后于网络
+    fetched += picked.bytes.length
+    report({ phase: 'downloading', done: fetched, decrypted: done, total: totalSize, message: `下载块 ${index + 1}/${chunkCount}` })
     let plain
     try {
       plain = unpackSlice(index, picked.bytes)
@@ -122,7 +126,13 @@ async function receiveStreaming({
     }
     await sink.write(plain)
     done += plain.length
-    report({ phase: 'downloading', done, total: totalSize, message: `解密块 ${index + 1}/${chunkCount}` })
+    report({
+      phase: 'downloading',
+      done: fetched,
+      decrypted: done,
+      total: totalSize,
+      message: `解密块 ${index + 1}/${chunkCount}`,
+    })
   }
   kernel.streamUnpackEnd()
 
