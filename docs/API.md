@@ -401,10 +401,11 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 域 | 字段 |
 |---|---|
 | 码 | `code`、`public_key`、`nickname`、`registered_at`、`updated_at` |
-| 传输 | `transfer_id`、`sender_code`、`recipient_code`、`plaintext_size`、`chunk_size`、`chunk_count`、`prelude_len`、`prelude_sm3`、`total_ciphertext_bytes`、`created_at`、`expires_at`、`state`、`terminal_reason`、`terminal_at`、`download_count`、`max_downloads`、`uploader_ip`（派生列，仅用于按 IP 配额与反滥用）、`updated_at` |
+| 传输 | `transfer_id`、`sender_code`、`recipient_code`、`plaintext_size`、`chunk_size`、`chunk_count`、`prelude_len`、`prelude_sm3`、`total_ciphertext_bytes`、`created_at`、`expires_at`、`state`、`terminal_reason`、`terminal_at`、`download_count`、`max_downloads`、`uploader_ip`（派生列，仅用于按 IP 配额与反滥用）、`ciphertext_purged_at`（派生列，密文删除水位，仅用于让兜底清理逐批推进；无内容语义）、`updated_at` |
 | 块 | `transfer_id`、`index`、`length`、`ciphertext_sm3`（幂等比对用）、`stored_at` |
 | 挑战 | `challenge_id`、`purpose`、`nonce`（协议数据，过期即删）、`expires_at`、`used` |
-| 派生状态（服务端内部，无业务内容） | `prelude_received`、`received_chunks`（位图或行集）、`upload_token_sm3`、`uploaded_bytes`、下载租约与取件记录（`download_id`、`lease_expires_at`、`acked_at`）、幂等键映射（`idempotency_key → transfer_id`，≤600 秒） |
+| 派生状态（服务端内部，无业务内容） | `prelude_received`、`received_chunks`（位图或行集）、`upload_token_sm3`、`upload_token_kid`（凭据版本号，轮换即吊销旧凭据，见 §1.7.3）、`uploaded_bytes`、下载租约与取件记录（`download_id`、`lease_expires_at`、`acked_at`）、幂等键映射（`idempotency_key → transfer_id`，≤600 秒） |
+| 统计计数器（`stats_counters`） | `day`（UTC 日界）、`consumed`、`consumed_bytes`、`created`——**按天聚合的计数**，无个例信息（不含码、`transfer_id`、昵称、大小分布），口径见 §4.6 |
 | 举报 | `transfer_id`、`reporter_code`、`reason`、`note`（举报人自填，≤200 字节，服务端可见）、`created_at`、`distinct_reports`（计数） |
 | 审计 | `ip`、`method`、`route_template`（**路由模板，如 `/v1/transfers/{id}/chunks/{index}`，不含实际路径参数**）、`status`、`bytes`、`ts`、`request_id` |
 
@@ -600,6 +601,14 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | `today` | 服务器 **UTC 日界**（当日 `00:00:00Z` 起）的同一口径 |
 | `total` | 自部署以来（全历史）的同一口径 |
 | `generated_at` | 生成本次数值的时间（UTC，RFC 3339） |
+
+**落桶时间戳（写死，与上表的 UTC 日界配套）**：日界是 UTC 已经写死，但"哪一天"按**哪个时间戳**落桶还必须说清，否则跨零点会错桶、对账会假报警：
+
+- `consumed` / `consumed_bytes` 按 **`terminal_at`** 落桶（取走发生在哪一天，而不是建包在哪一天）；
+- `created` 按 **`created_at`** 落桶；
+- 区间是**半开** `[当日 00:00:00Z, 次日 00:00:00Z)`——同一时刻只落一个桶，不重不漏；对账 MUST 用同一组时间戳与同一区间（`adr/0002-stats-and-audit-retention.md` §2.3）。
+
+（UTC 折算与"回填 / 运行时同口径"的要求见本节上文「日界实现约束」，此处不重复。）
 
 **缓存**：响应 MUST 带 `Cache-Control: no-store`、`CDN-Cache-Control: no-store`、`Surrogate-Control: no-store`（避免中间层缓存把数字冻住）。服务端可内部缓存**≤ 60 秒**，因此**数值可能有 ≤60s 延迟**，不保证与同一时刻的 `GET /transfers/{id}` 逐笔吻合。
 
