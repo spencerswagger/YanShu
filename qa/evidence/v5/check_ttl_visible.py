@@ -195,6 +195,14 @@ def main(argv=None) -> int:
         else:
             rep.add("过期态文案", None, "缺 --web-dir")
 
+        # 11b) /v1/config 不能被缓存：一旦被 CDN/反代缓存，客户端时钟基准整体偏移，所有倒计时静默错
+        stc0, _ = c.config()
+        hdr = {k: (v or "").lower() for k, v in c.headers.items()}
+        rep.add("/v1/config 带 Cache-Control: no-store（时钟基准不可缓存）",
+                stc0 == 200 and hdr.get("cache-control") == "no-store"
+                and hdr.get("cdn-cache-control") == "no-store",
+                f"cache-control={hdr.get('cache-control')!r} cdn-cache-control={hdr.get('cdn-cache-control')!r}")
+
         # 12) 前端时钟基准：/v1/config 的 server_time（#49 起）
         stc, cfg2 = c.config()
         if "server_time" in cfg2:

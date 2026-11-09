@@ -48,7 +48,8 @@ node qa/evidence/v5/ui_v5_shots.mjs --dist /tmp/v5/web/dist --api http://127.0.0
 | `check_metadata_permanent.py` | ③ 元数据永久 | 取件后密文删净；`terminal_at` 推到 10 天前 **行仍在**（v4 的 7 天删除已取消）；40 天前三列 `uploader_ip/prelude_sm3/upload_token_sm3` 置 NULL；其余 9 个字段逐值不变；`GET` 仍 200 tombstone；`prelude`/块仍 410；清道夫幂等 | 后端分支 |
 | `check_stats_consistency.py` | ④ 全平台统计 | 空库基线 0；三个 `no-store`；字段集精确无个例；建 3 取 2 → `created+3 / consumed+2 / consumed_bytes=明文和`；**计数器表 == transfers 直算 == HTTP JSON**；今日按 UTC 日界；`generated_at` 与 `Date` ≤5s；前端格式化真数字；另一客户端同数；撤回不计入 consumed | 后端分支（+ 前端格式化项） |
 | `ui_v5_shots.mjs` | ①④ 界面 | 真 Chromium 打开生产构建：首屏不点刷新就应拉到 4 行；其中一条 `expires_at=now()+30s`，**页面内等到点**后该行必须自己翻成「已过期，无法取回」+ 整行灰化 + 删除线 + 下载置灰（全程不刷新、不重载），并核对服务端此刻 `state=EXPIRED`；平台统计六格文案齐全 | 前后端两条分支 + Chromium |
-| `check_purge_fallback.py` | ③b 兜底删密文 | 种 210 条（> 批次 200）未删密文的终结行，只靠清道夫兜底：盘上残留必须为 0、日志 `purged` 末批必须不足一批（水位推进）、库里未确认删密文的行归零 | 后端分支 |
+| `check_purge_fallback.py` | ③b 兜底删密文 | 种 250 条（> 批次 200）未删密文终结行 + 真文件：残留归零、**第 1/2 轮删的是不同批（交集空）**、各轮并集=全部、日志 `purged` 非常量、`purgeRemaining` 归零；再加「事务内终结 `newly=false`」两条（到期取件 / ack）在 sweep=600s 下密文必须当场删净 | 后端分支 |
+| `check_redact_index.py` | ③c 脱敏索引 | 20 万行稳态上 `EXPLAIN (ANALYZE, BUFFERS)`：子查询与整条 UPDATE 都必须走 Index Scan、buffers/耗时达标；再测「一次性脱敏 18 万行后」的瞬时退化与 `VACUUM` 后的回落 | 后端分支 |
 
 `v5_ui_seed.py` 的第 4 条是**短 TTL**（默认 30s，`--short-ttl` 可调）：「已过期」这一态在
 v5/`#49` 的「过期即终结」语义下**不能靠种一条过期记录来造**（`/v1/inbox` 永不返回过期行），

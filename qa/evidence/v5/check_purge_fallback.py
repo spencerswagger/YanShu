@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""v5 ③b·兜底删密文（永久保留之后的回归）：终结行超过一批时，密文必须**全部**删掉。
+"""v5 ③b·兜底删密文（永久保留后的 P0 回归）：超过一批的终结行也必须被删干净，且**每轮推进到不同行**。
 
-背景（Ark 预审 P0）：元数据改成永久保留后，若兜底清理仍是
-`ORDER BY terminal_at ASC LIMIT 200`，那每 tick 都取回同一批最老的 200 行 →
-**第 201 行之后永远轮不到**，密文永久残留在盘上；更糟的是日志每轮照样打 `purged=200`，
-把"没删掉"伪装成"一直在删"。
+背景（Ark 预审 P0）：元数据永久保留后，若兜底清理仍是
+`ORDER BY terminal_at ASC LIMIT 200`，每 tick 都取回同一批最老的 200 行 →
+第 201 行之后**永远轮不到**，密文永久残留；更糟的是日志每轮照样打 `purged=200`，把"没删掉"伪装成"一直在删"。
 
-本脚本造 N（>200）条**未删密文**的终结行（直接在库里插 + 在 blob 目录种 prelude 文件），
-只靠清道夫兜底，看它能不能把 N 条全删掉：
-
-1. N=210 条终结行、密文都在盘上；
-2. 清道夫跑若干轮后，**盘上残留必须是 0**；
-3. 日志里 `purged` 不能恒等于批次大小（说明水位在推进），且出现多轮累加；
-4. 若实现暴露 `purgeRemaining`，最终必须是 0。
+验 4 件事：
+1. 种 N（> 批次）条**未删密文**的终结行 + 盘上真实 prelude/块文件，只靠清道夫兜底 →
+   **盘上残留必须是 0**；
+2. **逐轮推进**：把文件消失的时刻按轮快照，第 1 轮与第 2 轮删掉的**必须是不同批行**（交集为空），
+   且各轮之和 = N（旧实现第 2 轮会重复删同一批或干脆不动）；
+3. 日志 `purged` / `purgeRemaining` **不是常量**：末批不足一批、剩余数归零；
+4. 事务内终结（`newly=false`）那条路径：把清道夫拉到 600s，走一次「到期后取件」与一次 `ack`，
+   密文必须**在这一次请求里**就没（不能等 sweeper 兜底）。
 
 用法：
     python3 qa/evidence/v5/check_purge_fallback.py --binary <yanshu-server> \
-        --dsn "$TEST_DATABASE_URL" [--schema gate_v5_purge] [--count 210] [--wait 25]
+        --dsn "$TEST_DATABASE_URL" [--schema gate_v5_purge] [--count 250] [--wait 30]
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import sys
 import shutil
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -45,7 +45,6 @@ def q(args, sql: str) -> str:
 
 
 def insert_terminal(args, count: int) -> list[str]:
-    """插 count 条 CONSUMED 行（terminal_at 一小时前，密文未删记录保持 NULL）。"""
     sql = f"""
     INSERT INTO transfers
       (transfer_id, sender_code, recipient_code, plaintext_size, chunk_size, chunk_count,
@@ -60,22 +59,37 @@ def insert_terminal(args, count: int) -> list[str]:
     ON CONFLICT (transfer_id) DO NOTHING
     """
     q(args, sql)
-    ids = q(args, "select transfer_id from transfers where state='CONSUMED' "
-                  "order by transfer_id limit " + str(count)).split()
-    return ids
+    return q(args, "select transfer_id from transfers where terminal_reason='CONSUMED' "
+                   "order by terminal_at limit " + str(count)).split()
 
 
-def plant_blobs(blob_root: Path, ids: list[str]) -> None:
+def plant(blob_root: Path, ids: list[str]) -> None:
     for tid in ids:
         d = blob_root / tid[:2] / tid
-        d.mkdir(parents=True, exist_ok=True)
+        (d / "chunks").mkdir(parents=True, exist_ok=True)
         (d / "prelude").write_bytes(b"YSPK-gate-purge-probe")
-        (d / "chunks").mkdir(exist_ok=True)
         (d / "chunks" / "00000000").write_bytes(b"\x00" * 32)
 
 
-def residue(blob_root: Path, ids: list[str]) -> int:
-    return sum(1 for tid in ids if (blob_root / tid[:2] / tid).is_dir())
+def present(blob_root: Path, ids: list[str]) -> set[str]:
+    return {tid for tid in ids if (blob_root / tid[:2] / tid).is_dir()}
+
+
+def batches_over_time(blob_root: Path, ids: list[str], wait: float) -> list[set[str]]:
+    """按时间顺序记录"每一轮被删掉的那批行"。"""
+    prev = present(blob_root, ids)
+    removed: list[set[str]] = []
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        time.sleep(0.4)
+        cur = present(blob_root, ids)
+        gone = prev - cur
+        if gone:
+            removed.append(gone)
+        prev = cur
+        if not cur:
+            break
+    return removed
 
 
 def main(argv=None) -> int:
@@ -84,55 +98,84 @@ def main(argv=None) -> int:
     ap.add_argument("--dsn", default=os.environ.get("TEST_DATABASE_URL", ""))
     ap.add_argument("--schema", default="gate_v5_purge")
     ap.add_argument("--work", default=os.path.join(tempfile.gettempdir(), "ys-v5-purge"))
-    ap.add_argument("--count", type=int, default=210)
-    ap.add_argument("--wait", type=float, default=25.0)
+    ap.add_argument("--count", type=int, default=250)
+    ap.add_argument("--wait", type=float, default=30.0)
     ap.add_argument("--json-out")
     args = ap.parse_args(argv)
 
-    rep = Y.Report("v5 ③b 兜底删密文 · 永久保留后超过一批的终结行必须也被删干净",
+    rep = Y.Report("v5 ③b 兜底删密文 · 超过一批的终结行必须被删、且每轮推进到不同行",
                    f"count={args.count}（批次 {BATCH}）　schema={args.schema}")
     if not args.dsn:
         rep.add("依赖：TEST_DATABASE_URL", None, "缺 DSN")
         return rep.emit(args.json_out)
 
-    work = Path(args.work) / args.schema   # 每次跑独立目录：别把上一轮的日志读进来
+    work = Path(args.work) / args.schema
     shutil.rmtree(work, ignore_errors=True)
 
     with Y.Server(args.binary, args.dsn, args.schema, work, sweep="1s") as srv:
         ids = insert_terminal(args, args.count)
-        plant_blobs(srv.blob_dir(), ids)
-        planted = residue(srv.blob_dir(), ids)
-        rep.add(f"已种 {args.count} 条终结行且密文都在盘上", planted == args.count,
-                f"残留文件目录={planted}")
+        plant(srv.blob_dir(), ids)
+        rep.add(f"已种 {args.count} 条终结行，且密文真实落盘", len(present(srv.blob_dir(), ids)) == args.count,
+                f"盘上={len(present(srv.blob_dir(), ids))}/{args.count}")
 
-        deadline = time.time() + args.wait
-        last = planted
-        while time.time() < deadline:
-            last = residue(srv.blob_dir(), ids)
-            if last == 0:
-                break
-            time.sleep(0.5)
+        batches = batches_over_time(srv.blob_dir(), ids, args.wait)
+        left = present(srv.blob_dir(), ids)
+        rep.add("清道夫跑完：盘上残留必须为 0", not left,
+                f"残留={len(left)}/{args.count}" + ("" if not left else "（超过一批的行没被删 → 水位没推进）"))
 
-        rep.add("清道夫跑完后盘上残留必须为 0", last == 0,
-                f"残留={last}/{args.count}" + ("" if last == 0 else "（超过一批的行没被删 → 水位没推进）"))
-
-        # 日志：purged 是否恒等于批次大小
-        log = srv.sweep_log_lines()
-        purged_vals = [int(m) for m in re.findall(r'"?purged"?=(\d+)', "\n".join(log))]
-        nz = [v for v in purged_vals if v > 0]
-        # 水位推进的证据：累计删够 N 条，且最后一轮必须是「不足一批」（210 → 200 + 10）
-        rep.add("日志的 purged 累计覆盖全部行，且末批不足一批",
-                bool(nz) and sum(nz) >= args.count and (args.count % BATCH == 0 or nz[-1] < BATCH),
-                f"非零 purged 序列={nz[:8]}{'…' if len(nz) > 8 else ''} 累计={sum(nz)} 期望≥{args.count}")
-
-        remaining = q(args, "select count(*) from transfers where state in ('CONSUMED','REVOKED','EXPIRED') "
-                            "and ciphertext_purged_at is null") if "ciphertext_purged_at" in q(
-            args, "select string_agg(column_name, ',') from information_schema.columns "
-                  "where table_schema=current_schema() and table_name='transfers'") else ""
-        if remaining != "":
-            rep.add("库内「未确认删密文」的终结行归零", remaining.strip() == "0", f"未确认={remaining.strip()}")
+        # 逐轮推进：至少两批，且两批交集为空
+        if len(batches) >= 2:
+            b1, b2 = batches[0], batches[1]
+            rep.add("第 1 轮与第 2 轮删的是**不同批**行（交集为空）",
+                    not (b1 & b2), f"|第1轮|={len(b1)} |第2轮|={len(b2)} 交集={len(b1 & b2)}")
+            rep.add("各轮覆盖并集 = 全部行（无重复删、无漏删）",
+                    len(set().union(*batches)) == args.count,
+                    f"并集={len(set().union(*batches))} / {args.count}，轮次数={len(batches)}")
         else:
-            rep.add("库内「未确认删密文」计数", None, "该分支没有 ciphertext_purged_at 列（水位实现之前）")
+            rep.add("第 1 轮与第 2 轮删的是**不同批**行（交集为空）", False,
+                    f"只观察到 {len(batches)} 批（旧实现会一直删同一批）")
+
+        log = "\n".join(srv.sweep_log_lines())
+        purged_vals = [int(m) for m in re.findall(r'"?purged"?=(\d+)', log)]
+        nz = [v for v in purged_vals if v > 0]
+        rep.add("日志 purged 不是常量（累计覆盖全部行、末批不足一批）",
+                bool(nz) and sum(nz) >= args.count and (args.count % BATCH == 0 or nz[-1] < BATCH),
+                f"非零序列={nz[:6]}{'…' if len(nz) > 6 else ''} 累计={sum(nz)}")
+        rem = [int(m) for m in re.findall(r'"?purgeRemaining"?=(\d+)', log)]
+        rep.add("日志 purgeRemaining 有非零值且最终归零（真实剩余，不是批次大小）",
+                bool(rem) and max(rem) > 0 and rem[-1] == 0,
+                f"序列={rem[:8]}{'…' if len(rem) > 8 else ''}")
+
+    # ── 事务内终结（newly=false）那条路径：清道夫拉到 600s，密文必须在请求内就没
+    work2 = Path(args.work) / (args.schema + "-intx")
+    shutil.rmtree(work2, ignore_errors=True)
+    with Y.Server(args.binary, args.dsn, args.schema + "_intx", work2, sweep="600s") as srv2:
+        c = Y.Client(srv2.base)
+        snd, _ = c.register_pair("intx-sender", "发送方")
+        rcv, _ = c.register_pair("intx-recipient", "接收方")
+
+        # (a) 到期后取件：StartLease 事务内终结 → 该请求必须顺手把密文删了
+        t = Y.make_transfer(c, snd, rcv, size=1024 * 1024, chunk_size=1024 * 1024, chunks=1)
+        tid = t["transfer_id"]
+        Y.psql(args.dsn, "update transfers set expires_at = now() - interval '1 second' "
+                         f"where transfer_id='{tid}'", args.schema + "_intx")
+        st, body = c.get_prelude(tid)
+        code = (body.get("error") or {}).get("code") if isinstance(body, dict) else ""
+        gone = not (srv2.blob_dir() / tid[:2] / tid).is_dir()
+        rep.add("到期后取件（事务内终结、newly=false）：410 且密文当场删净",
+                st == 410 and code == "TRANSFER_EXPIRED" and gone,
+                f"{st} {code} 目录已消失={gone}（sweep=600s，不可能靠兜底）")
+
+        # (b) ack 终结：同样在请求内删密文
+        t2 = Y.make_transfer(c, snd, rcv, size=1024 * 1024, chunk_size=1024 * 1024, chunks=1)
+        tid2 = t2["transfer_id"]
+        stp, _ = c.get_prelude(tid2)
+        dl = c.headers.get("x-ys-download-id", "")
+        sta, bodya = c.ack(tid2, rcv, dl)
+        gone2 = not (srv2.blob_dir() / tid2[:2] / tid2).is_dir()
+        rep.add("ack 终结（事务内终结）：CONSUMED 且密文当场删净",
+                sta == 200 and bodya.get("state") == "CONSUMED" and gone2,
+                f"{sta} state={bodya.get('state')} 目录已消失={gone2}（sweep=600s）")
 
     return rep.emit(args.json_out)
 

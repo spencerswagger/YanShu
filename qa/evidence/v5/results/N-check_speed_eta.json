@@ -1,0 +1,47 @@
+{
+  "title": "v5 ② 速度 / ETA · 真传一遍 + 前端状态机回放",
+  "verdict": 0,
+  "rows": [
+    {
+      "name": "未节流 16 MiB 上传吞吐 > 0",
+      "kind": "PASS",
+      "evidence": "26.3 MB/s（608ms，32 块）"
+    },
+    {
+      "name": "采样窗口 ≥2s",
+      "kind": "PASS",
+      "evidence": "窗口=16000ms"
+    },
+    {
+      "name": "50% 处速度文案合法",
+      "kind": "PASS",
+      "evidence": "speed=1.0 MB/s (1.00 MB/s)、样本 32 个"
+    },
+    {
+      "name": "50% 处 ETA 与真实剩余耗时一致（|Δ|≤1.5s 或 ≤20%）",
+      "kind": "PASS",
+      "evidence": "ETA=8s 实际剩余=8.0s Δ=0.00s（文案「即将完成」）"
+    },
+    {
+      "name": "传完 ETA → 即将完成",
+      "kind": "PASS",
+      "evidence": "etaSec=0 text='即将完成'"
+    },
+    {
+      "name": "3.2s 无字节 → 连接停滞且 ETA 隐藏",
+      "kind": "PASS",
+      "evidence": "state=stalled eta=None label='连接停滞，重试中'"
+    },
+    {
+      "name": "5 KB/s 持续 4s → 网络较慢",
+      "kind": "PASS",
+      "evidence": "state=slow label='网络较慢'"
+    },
+    {
+      "name": "已传/总大小文案",
+      "kind": "PASS",
+      "evidence": "pair='16 MB / 16 MB'"
+    }
+  ],
+  "notes": []
+}
