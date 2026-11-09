@@ -656,11 +656,9 @@ ack 后 download_count 达 max_downloads ──► CONSUMED（密文删除）
 - `GET /inbox` **不返回**已到 `expires_at` 的条目（即使后台还没扫到该行）。
 - 到期后的 `POST /ack` → `410 TRANSFER_EXPIRED` 且**不计数**（`download_count` 不变）；到期后的 `POST /revoke` → `409 TRANSFER_STATE_CONFLICT`（与 §6.7 一致）。
 
-> **两段的关系（不要混为一谈）**：上面一段定的是「**到期与否**」——由**请求时刻**判定，即时生效；下面一段定的是「**终结后留多久**」——行不删、只脱敏。两者互不覆盖：到期不会因为保留期长而延迟，保留也不会因为到期而缩短。
-
 tombstone 只保留 §2.1 的元数据字段（**不含任何密文**）；响应里带 `terminal_reason` ∈ `REVOKED | EXPIRED | CONSUMED`。
 
-**保留与脱敏（写死）**：
+**保留与脱敏（写死）**——与上段「TTL 即时判定」是**两件不同的事**，互不覆盖：上段定「**到期与否**」（由请求时刻判定，即时生效），本段定「**终结后留多久**」（行不删、只脱敏）。到期不因保留期长而延迟，保留也不因到期而缩短。
 
 - **终结记录永久保留**（不再有 7 天清理期）。因此对已终结的 `transfer_id` 查询**恒为 `200` + tombstone**，不会因为时间推移变成 `404`。
 - **终结后 30 天，三个字段置 `NULL` 脱敏**：`uploader_ip`、`prelude_sm3`、`upload_token_sm3`；其余字段（`created_at`、`expires_at`、`terminal_at`、`plaintext_size`、`chunk_count`、`state`、`terminal_reason`、`download_count`）**永久保留**，用于聚合计数与审计。
