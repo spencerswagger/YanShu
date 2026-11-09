@@ -222,7 +222,3 @@ npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局�
 - >64 MiB 文件（内核整包接口；流式接口已排期）
 - 刷新后续传：只在本机留着密文包（≤8 MiB）时可行；更大只能重发（整包接口无法重建会话）
 - 真机 / 跨浏览器实测、1 GB 性能
-
-## 复跑界面证据（布局 / 触摸尺寸 / 块矩阵）
-
-一条命令：`npm run evidence:ui -- --serve=dist --api=http://127.0.0.1:18080`（或 `--url=http://127.0.0.1:5173/` 打 dev server）——产出 6 张截图 + `evidence.json` 到 `web/results/ui-v4/`，**触摸目标 <48、矩阵格数 >1024、单帧更新 >64 任一不满足即非 0 退出**。
