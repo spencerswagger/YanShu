@@ -75,7 +75,7 @@
 
 服务端返回的一切绝对时间（`expires_at`、`lease_expires_at`、`generated_at`）都是 **UTC RFC 3339**。客户端 **MUST NOT** 用本机 `Date.now()` 直接与这些字段相减——设备钟可能偏几分钟到几小时，偏差会直接把"还能取件"显示成"已过期"（或反之）。
 
-- **基准**：用一次响应头 `Date`（或 `/v1/config` 的 `server_time`，若实现提供）算 `offset = serverTime - performance.now()`，之后用**单调时钟** `performance.now() + offset` 推进。
+- **基准**：优先用 `/v1/config` 的 `server_time`（§4.1，UTC 秒级），退化到响应头 `Date`；算 `offset = serverTime - performance.now()`，之后用**单调时钟** `performance.now() + offset` 推进。
 - **刷新**：**不轮询**；页面重新可见（`visibilitychange`）或收到新的 `Date` 头时重算一次 offset，不累积误差。
 - **一致性**：同一屏里"剩余时间展示"与"过期判定（置灰/禁点）" MUST 用同一基准；不允许一处用服务端基准、一处用本机钟。
 - **有效期来源**：发送侧 MUST 用 `POST /v1/transfers` 响应里的 `expires_at`（服务端已按 `[3600, 86400]` 夹取），MUST NOT 用本地 `ttl_seconds` 默认值自算——部署可把 TTL 配得更短（§1.5）。
@@ -649,6 +649,15 @@ ack 后 download_count 达 max_downloads ──► CONSUMED（密文删除）
 | `CONSUMED` | 200（tombstone） | **`410 TRANSFER_CONSUMED`** | 取件完成/次数用尽 |
 | 不存在 | `404 TRANSFER_NOT_FOUND` | 同上 | id 本身无效 |
 
+**TTL 判定在读写路径上即时生效（写死）**：判定时刻是**每次请求的服务器时间**，`expires_at <= now` 即视为 `EXPIRED`，不依赖后台清理任务的扫描周期（清理任务只是兜底重试物理删除）。因此：
+
+- 到期后的**第一次** `GET /transfers/{id}` 就返回 `EXPIRED` tombstone（`terminal_reason: "EXPIRED"`、`terminal_at` = 该次请求时间，`expires_at` 保留**原始**到期时刻、不被改写）。
+- 到期后 `GET /prelude` / `GET /chunks/{i}` 一律 `410 TRANSFER_EXPIRED`；上传侧的 `GET status`、`PUT prelude`、`PUT chunks/{i}`、`POST complete` 同样是 `410 TRANSFER_EXPIRED`（**不是** `401 AUTH_TOKEN_EXPIRED`：传输终结不可恢复，重签发凭据也救不回来，二者不得混用，见 §1.7.4）。
+- `GET /inbox` **不返回**已到 `expires_at` 的条目（即使后台还没扫到该行）。
+- 到期后的 `POST /ack` → `410 TRANSFER_EXPIRED` 且**不计数**（`download_count` 不变）；到期后的 `POST /revoke` → `409 TRANSFER_STATE_CONFLICT`（与 §6.7 一致）。
+
+> **两段的关系（不要混为一谈）**：上面一段定的是「**到期与否**」——由**请求时刻**判定，即时生效；下面一段定的是「**终结后留多久**」——行不删、只脱敏。两者互不覆盖：到期不会因为保留期长而延迟，保留也不会因为到期而缩短。
+
 tombstone 只保留 §2.1 的元数据字段（**不含任何密文**）；响应里带 `terminal_reason` ∈ `REVOKED | EXPIRED | CONSUMED`。
 
 **保留与脱敏（写死）**：
@@ -1075,7 +1084,7 @@ v1 **已实现**信令与在线表（§9.1–§9.5）。但"WS 不可用"仍是*
 | `SIGNAL_PEER_MISMATCH` | 403 | 信令双方与传输不匹配 | 停止该直传尝试，走中转 |
 | `NOT_TRANSFER_PARTY` | 403 | 已认证（签名有效）但**不是该传输的当事人**：非接收方调 `ack`、非发送方调 `revoke` | 停止操作、不要重试；提示"这不是你的传输" |
 | `CODE_NOT_FOUND` | 404 | 码未注册 | 提示"码不对或对方已换浏览器" |
-| `TRANSFER_NOT_FOUND` | 404 | 传输不存在/已物理删除 | 从本地列表移除 |
+| `TRANSFER_NOT_FOUND` | 404 | `transfer_id` 本身无效（不存在/格式错）。**终结记录永久保留**，不再因保留期变 `404` | 从本地列表移除 |
 | `CHUNK_NOT_FOUND` | 404 | 该块不存在 | 按 §7.6 重新探块；必要时让发送方重传该块 |
 | `CODE_TAKEN` | 409 | 码被占用 | **换密钥对、重算码、重试注册（≤8 次）** |
 | `PUBKEY_TAKEN` | 409 | 公钥已在别的码下注册 | 清本地身份重来，或复用既有码 |
