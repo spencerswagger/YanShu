@@ -358,7 +358,7 @@ try {
   const expiredRow = ttlRows.find((r) => r.ttl === '已过期，无法取回') || {}
   check(expiredRow.btnDisabled, '过期行下载置灰', expiredRow)
   check(expiredRow.rowExpiredClass && expiredRow.rowOpacity < 0.8, '过期行整行灰化', expiredRow)
-  check(/line-through/.test(expiredRow.nameDecoration || ''), '过期行文件名删除线', expiredRow)
+  check(/line-through/.test(expiredRow.nameDecoration || ''), '过期行发件人名删除线', expiredRow)
   result.shots.push(await shot(cB, join(OUT, 'ttl-four-states-390x844.png')))
   await setViewport(cB, 1440, 900, false)
   await sleep(400)

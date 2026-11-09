@@ -36,6 +36,6 @@ node qa/evidence/v5/ui_v5_shots.mjs --dist web/dist --api http://127.0.0.1:18099
   #49 之后 TTL 在读写路径即时终结，`/v1/inbox` 不再返回过期的行，所以脚本里"直接造一条已过期的记录"永远进不了列表。
   过期态只会在「行已加载、时间到点」时出现。本分支的 `scripts/v5-evidence.mjs` 用这个真实路径复现：
   种一笔 20 秒后到期的行 → 打开页面 → 等到点 → 该行自己翻成「已过期，无法取回」+ 整行灰化（opacity 0.55）+ 发件人名删除线 + 下载置灰
-  （见 `ttl-three-states-*.png` 与 `evidence.json` 的 4 条 TTL 记录）。
+  （见 `ttl-four-states-*.png` 与 `evidence.json` 的 4 条 TTL 记录）。
 
 > 建议（脚本归 Gate）：`v5_ui_seed.py` 的"已过期"那条改成短 TTL + 页面内等到点，或由脚本先把行种成 10 秒后到期再加载。
