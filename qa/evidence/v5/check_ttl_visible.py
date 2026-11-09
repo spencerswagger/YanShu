@@ -195,6 +195,46 @@ def main(argv=None) -> int:
         else:
             rep.add("过期态文案", None, "缺 --web-dir")
 
+        # 12) 前端时钟基准：/v1/config 的 server_time（#49 起）
+        stc, cfg2 = c.config()
+        if "server_time" in cfg2:
+            now2 = http_date_ms(c.headers)
+            delta_cfg = abs(iso_ms(cfg2["server_time"]) - now2) / 1000 if now2 else 999
+            rep.add("/v1/config 带 server_time（前端时钟基准）", delta_cfg <= 2,
+                    f"server_time={cfg2['server_time']} 与 Date 差={delta_cfg:.0f}s")
+        else:
+            rep.add("/v1/config 带 server_time（前端时钟基准）", None,
+                    "该分支的 config 无 server_time（#49 才有）")
+
+        # 13) 上传中也能看到剩余有效期：/status 带 expires_at（#49 起）
+        ts = Y.make_transfer(c, snd, rcv, size=64 * 1024, ttl_seconds=3600, upload=False)
+        sts, st_body = c.json("GET", f"/v1/transfers/{ts['transfer_id']}/status", None,
+                              {"X-YS-Upload-Token": ts["upload_token"]})
+        if sts == 200 and "expires_at" in st_body:
+            rep.add("/status 带 expires_at（发送方上传中可见）",
+                    iso_ms(st_body["expires_at"]) == iso_ms(ts["created"]["expires_at"]),
+                    f"status.expires_at={st_body['expires_at']}")
+        else:
+            rep.add("/status 带 expires_at（发送方上传中可见）", None,
+                    f"/status 无该字段（{sts}；#49 才有）")
+
+    # 14) TTL 到点在读写路径即时生效：清道夫拉到 600s，仍然必须立刻 410
+    sch2 = args.schema + "_nosweep"
+    with Y.Server(args.binary, args.dsn, sch2, Path(args.work + "-nosweep"), sweep="600s") as srv2:
+        c2 = Y.Client(srv2.base)
+        s2, _ = c2.register_pair("ttl-nosweep-sender", "发送方")
+        r2, _ = c2.register_pair("ttl-nosweep-recipient", "接收方")
+        t = Y.make_transfer(c2, s2, r2, size=64 * 1024, ttl_seconds=3600)
+        Y.psql(args.dsn, "update transfers set expires_at = now() - interval '1 second' "
+                         f"where transfer_id = '{t['transfer_id']}'", sch2)
+        stq, meta2 = c2.transfer(t["transfer_id"])
+        stp, body2 = c2.get_prelude(t["transfer_id"])
+        code2 = (body2.get("error") or {}).get("code") if isinstance(body2, dict) else ""
+        rep.add("TTL 到点即时生效（清道夫 600s 也不等它）",
+                stq == 200 and meta2.get("state") == "EXPIRED" and stp == 410
+                and code2 == "TRANSFER_EXPIRED",
+                f"GET={stq} state={meta2.get('state')} 取件={stp} {code2}（sweep=600s）")
+
     return rep.emit(args.json_out)
 
 

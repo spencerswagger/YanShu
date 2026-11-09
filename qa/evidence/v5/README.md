@@ -43,7 +43,7 @@ node qa/evidence/v5/ui_v5_shots.mjs --dist /tmp/v5/web/dist --api http://127.0.0
 
 | 脚本 | 块 | 关键断言（节选） | 依赖 |
 |---|---|---|---|
-| `check_ttl_visible.py` | ① TTL 可见 | `expires_at − created_at == ttl`；TTL 夹到 `[3600, 86400]`；`/v1/inbox` 每行带 `expires_at`；到期 → `EXPIRED` + `410 TRANSFER_EXPIRED` + 密文物理删除；**用响应头 `Date` 当"现在"**跑前端 `formatTtl` 得 `23 小时后过期` / `42 分钟后过期` / `已过期，无法取回` | 后端分支 + 前端分支（文案项） |
+| `check_ttl_visible.py` | ① TTL 可见 | `expires_at − created_at == ttl`；TTL 夹到 `[3600, 86400]`；`/v1/inbox` 每行带 `expires_at`；`config.server_time`、`status.expires_at`（#49）；到期 → `EXPIRED` + `410 TRANSFER_EXPIRED` + 密文物理删除；**清道夫拉到 600s，到点也必须立刻 410**（读写路径即时生效）；用响应头 `Date` 当"现在"跑前端 `formatTtl` 得 `23 小时后过期` / `42 分钟后过期` / `已过期，无法取回` | 后端 #48+#49 + 前端分支（文案项） |
 | `check_speed_eta.py` | ② 速度 / ETA | 真传 16 MiB 量吞吐；节流到 1 MB/s 取 16s 采样窗；回放进 `createSpeedMeter`：50% 处 ETA 与真实剩余耗时 `|Δ|≤1.5s`；`<10 KB/s` 3s → `网络较慢`；3s 无进展 → `连接停滞，重试中` 且 ETA 隐藏 | 后端分支 + 前端分支 |
 | `check_metadata_permanent.py` | ③ 元数据永久 | 取件后密文删净；`terminal_at` 推到 10 天前 **行仍在**（v4 的 7 天删除已取消）；40 天前三列 `uploader_ip/prelude_sm3/upload_token_sm3` 置 NULL；其余 9 个字段逐值不变；`GET` 仍 200 tombstone；`prelude`/块仍 410；清道夫幂等 | 后端分支 |
 | `check_stats_consistency.py` | ④ 全平台统计 | 空库基线 0；三个 `no-store`；字段集精确无个例；建 3 取 2 → `created+3 / consumed+2 / consumed_bytes=明文和`；**计数器表 == transfers 直算 == HTTP JSON**；今日按 UTC 日界；`generated_at` 与 `Date` ≤5s；前端格式化真数字；另一客户端同数；撤回不计入 consumed | 后端分支（+ 前端格式化项） |

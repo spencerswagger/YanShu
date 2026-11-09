@@ -1,0 +1,77 @@
+{
+  "title": "v5 ① TTL 可见性 · TTL 到期与可见（真服务 + 真库 + 前端格式化模块）",
+  "verdict": 1,
+  "rows": [
+    {
+      "name": "/v1/config 给出 max_ttl_seconds",
+      "kind": "PASS",
+      "evidence": "max_ttl_seconds=86400"
+    },
+    {
+      "name": "建传输 ttl=82800 → expires_at−created_at=82800s",
+      "kind": "PASS",
+      "evidence": "created_at=2026-11-09T17:56:15Z expires_at=2026-11-10T16:56:15Z Δ=82800s"
+    },
+    {
+      "name": "前端 formatTtl(真实 expires_at, 服务端 Date) → 23 小时后过期",
+      "kind": "PASS",
+      "evidence": "text='23 小时后过期' remaining=23.00h soon=False"
+    },
+    {
+      "name": "GET /v1/inbox 每行带 expires_at",
+      "kind": "PASS",
+      "evidence": "rows=1 该行 expires_at=2026-11-10T16:56:15Z"
+    },
+    {
+      "name": "ttl=60 被夹到下限 3600s",
+      "kind": "PASS",
+      "evidence": "Δ=3600s"
+    },
+    {
+      "name": "ttl=999999 被夹到上限 86400s",
+      "kind": "PASS",
+      "evidence": "Δ=86400s"
+    },
+    {
+      "name": "42 分钟态 → 文案「42 分钟后过期」+ 警示态",
+      "kind": "PASS",
+      "evidence": "text='42 分钟后过期' remaining=42.0min soon=True"
+    },
+    {
+      "name": "TTL 到期 → state=EXPIRED / terminal_reason=EXPIRED",
+      "kind": "PASS",
+      "evidence": "state=EXPIRED reason=EXPIRED"
+    },
+    {
+      "name": "到期后 GET prelude → 410 TRANSFER_EXPIRED",
+      "kind": "PASS",
+      "evidence": "410 TRANSFER_EXPIRED"
+    },
+    {
+      "name": "到期后密文物理删除（blob 无残留）",
+      "kind": "PASS",
+      "evidence": "prelude_exists=False 残留文件=0"
+    },
+    {
+      "name": "过期态 → 文案「已过期，无法取回」",
+      "kind": "PASS",
+      "evidence": "text='已过期，无法取回' expired=True"
+    },
+    {
+      "name": "/v1/config 带 server_time（前端时钟基准）",
+      "kind": "SKIP",
+      "evidence": "该分支的 config 无 server_time（#49 才有）"
+    },
+    {
+      "name": "/status 带 expires_at（发送方上传中可见）",
+      "kind": "SKIP",
+      "evidence": "/status 无该字段（200；#49 才有）"
+    },
+    {
+      "name": "TTL 到点即时生效（清道夫 600s 也不等它）",
+      "kind": "FAIL",
+      "evidence": "GET=200 state=READY 取件=200 （sweep=600s）"
+    }
+  ],
+  "notes": []
+}

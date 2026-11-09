@@ -5,17 +5,17 @@
     {
       "name": "未节流 16 MiB 上传吞吐 > 0",
       "kind": "PASS",
-      "evidence": "18.0 MB/s（890ms，32 块）"
+      "evidence": "31.7 MB/s（504ms，32 块）"
     },
     {
       "name": "采样窗口 ≥2s",
       "kind": "PASS",
-      "evidence": "窗口=16000ms"
+      "evidence": "窗口=16005ms"
     },
     {
       "name": "50% 处速度文案合法",
       "kind": "PASS",
-      "evidence": "speed=1.0 MB/s (1.00 MB/s)、样本 32 个"
+      "evidence": "speed=1023 KB/s (1.00 MB/s)、样本 32 个"
     },
     {
       "name": "50% 处 ETA 与真实剩余耗时一致（|Δ|≤1.5s 或 ≤20%）",

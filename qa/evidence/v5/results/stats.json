@@ -5,7 +5,7 @@
     {
       "name": "空库基线全 0",
       "kind": "PASS",
-      "evidence": "200 {\"today\": {\"consumed\": 0, \"consumed_bytes\": 0, \"created\": 0}, \"total\": {\"consumed\": 0, \"consumed_bytes\": 0, \"created\": 0}, \"generated_at\": \"2026-11-09T17:51:57Z\"}"
+      "evidence": "200 {\"today\": {\"consumed\": 0, \"consumed_bytes\": 0, \"created\": 0}, \"total\": {\"consumed\": 0, \"consumed_bytes\": 0, \"created\": 0}, \"generated_at\": \"2026-11-09T17:57:03Z\"}"
     },
     {
       "name": "响应带三个 no-store 头",
@@ -50,7 +50,7 @@
     {
       "name": "generated_at 与 Date 头一致（≤5s）",
       "kind": "PASS",
-      "evidence": "generated_at=2026-11-09T17:52:58Z Δ=0.0s"
+      "evidence": "generated_at=2026-11-09T17:58:04Z Δ=0.0s"
     },
     {
       "name": "前端格式化真数字（非空、不塌成 0）",

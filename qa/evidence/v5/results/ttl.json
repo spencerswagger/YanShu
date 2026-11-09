@@ -10,7 +10,7 @@
     {
       "name": "建传输 ttl=82800 → expires_at−created_at=82800s",
       "kind": "PASS",
-      "evidence": "created_at=2026-11-09T17:51:24Z expires_at=2026-11-10T16:51:24Z Δ=82800s"
+      "evidence": "created_at=2026-11-09T17:56:49Z expires_at=2026-11-10T16:56:49Z Δ=82800s"
     },
     {
       "name": "前端 formatTtl(真实 expires_at, 服务端 Date) → 23 小时后过期",
@@ -20,7 +20,7 @@
     {
       "name": "GET /v1/inbox 每行带 expires_at",
       "kind": "PASS",
-      "evidence": "rows=1 该行 expires_at=2026-11-10T16:51:24Z"
+      "evidence": "rows=1 该行 expires_at=2026-11-10T16:56:49Z"
     },
     {
       "name": "ttl=60 被夹到下限 3600s",
@@ -56,6 +56,21 @@
       "name": "过期态 → 文案「已过期，无法取回」",
       "kind": "PASS",
       "evidence": "text='已过期，无法取回' expired=True"
+    },
+    {
+      "name": "/v1/config 带 server_time（前端时钟基准）",
+      "kind": "PASS",
+      "evidence": "server_time=2026-11-09T17:56:49Z 与 Date 差=0s"
+    },
+    {
+      "name": "/status 带 expires_at（发送方上传中可见）",
+      "kind": "PASS",
+      "evidence": "status.expires_at=2026-11-09T18:56:49Z"
+    },
+    {
+      "name": "TTL 到点即时生效（清道夫 600s 也不等它）",
+      "kind": "PASS",
+      "evidence": "GET=200 state=EXPIRED 取件=410 TRANSFER_EXPIRED（sweep=600s）"
     }
   ],
   "notes": []
