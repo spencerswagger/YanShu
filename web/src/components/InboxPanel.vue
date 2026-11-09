@@ -1,9 +1,10 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent } from '../lib/format.js'
 import { createSpeedMeter, stageLabel } from '../lib/speed.js'
 import { isExpired, remainingMs } from '../lib/serverClock.js'
+import { expiryNow, refreshExpiryClock } from '../lib/expiryTicker.js'
 import ReportSheet from './ReportSheet.vue'
 import SpeedLine from './SpeedLine.vue'
 import TtlPill from './TtlPill.vue'
@@ -44,6 +45,11 @@ async function refresh() {
 }
 
 async function take(item) {
+  // 兜底：万一定时器被节流没翻，这里按 serverClock 再判一次，直接置成过期态、不发请求（别去吃 410）
+  if (isExpiredItem(item)) {
+    refreshExpiryClock()
+    return
+  }
   activeId.value = item.transfer_id
   errorText.value = ''
   notice.value = ''
@@ -80,21 +86,10 @@ async function take(item) {
   }
 }
 
-/** 让「过期」这层跟着时间自己翻（否则行不会重渲染，只有胶囊里的文字会变） */
-const clockTick = ref(0)
-const clockTimer = setInterval(() => (clockTick.value += 1), 30_000)
-const onVisible = () => {
-  if (document.visibilityState === 'visible') clockTick.value += 1
-}
-document.addEventListener('visibilitychange', onVisible)
-onBeforeUnmount(() => {
-  clearInterval(clockTimer)
-  document.removeEventListener('visibilitychange', onVisible)
-})
-
-/** 过期项：整行灰化 + 下载置灰（服务端也会 410，前端先拦一层）；用服务端时间基准，不看本机时钟 */
+/** 过期项：整行灰化 + 下载置灰；时间来自共享的单一定时器（与胶囊同一帧翻），不碰本机时钟 */
+const now = expiryNow()
 function isExpiredItem(item) {
-  void clockTick.value // 依赖 tick：到点后行自己重渲染
+  void now.value // 依赖共享 tick：到点后行与胶囊同帧重渲染
   return Boolean(item.expires_at) && isExpired(remainingMs(item.expires_at))
 }
 

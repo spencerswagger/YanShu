@@ -17,6 +17,7 @@ import { info } from './lib/log.js'
 import { createSignaler } from './net/signal.js'
 import { fetchStats } from './net/stats.js'
 import { syncServerTime } from './lib/serverClock.js'
+import { refreshExpiryClock } from './lib/expiryTicker.js'
 import { createResponder } from './net/p2pResponder.js'
 import { createDirectBuffer } from './net/p2pChunks.js'
 import MyCodeCard from './components/MyCodeCard.vue'
@@ -148,6 +149,7 @@ onMounted(async () => {
       // 用服务端时间基准初始化倒计时（Date 头或 server_time 都可）
       const dateHeader = cfg.headers?.get?.('date')
       syncServerTime(cfg.json?.server_time ? Date.parse(cfg.json.server_time) : dateHeader ? Date.parse(dateHeader) : Date.now())
+      refreshExpiryClock() // 时间基准变了，TTL 的共享 tick 立刻重算
       info('已连接中转', { path: '/config', status: cfg.status })
     } catch (err) {
       const d = describeError(err)

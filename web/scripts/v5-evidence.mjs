@@ -327,6 +327,9 @@ try {
   // 第三笔 20 秒后到期：#49 之后「过期即终结」，/v1/inbox 不再返回过期的行，
   // 所以过期态只能在「已加载的行到点」时看到（这也是用户真实遇到的情形）。
   await psql(`UPDATE transfers SET expires_at = now() + interval '20 seconds' WHERE transfer_id = '${ids[2]}'`)
+  const shortExpiryMs = Number(
+    await psql(`SELECT (extract(epoch from expires_at) * 1000)::bigint FROM transfers WHERE transfer_id = '${ids[2]}'`),
+  )
 
   // P0 回归：首屏不点刷新就应该有待收行（api 注入完成后自动拉取）
   await evalJs(cB, `location.reload()`)
@@ -336,8 +339,45 @@ try {
   check(inboxAuto > 0, '首屏不点刷新就有待收行（api 注入后自动加载）', inboxAuto)
   result.shots.push(await shot(cB, join(OUT, 'inbox-first-screen-390x844.png')))
 
-  // 等 20 秒那笔到点：同一个页面里的行自己翻成「已过期，无法取回」
-  await sleep(36_000) // TtlPill 30s 一 tick，多等一格确认它自己翻成过期
+  // 到点翻转实测：胶囊（文字）/ 整行灰化 / 下载禁用 分别在什么时候翻，滞后多少毫秒。
+  // 判据：整行滞后 <1s，且胶囊与整行基本同帧（skew <500ms）。
+  result.flip = await evalJs(
+    cB,
+    `(async () => {
+      const expiresAt = ${JSON.stringify(shortExpiryMs)};
+      const cfg = await fetch('/v1/config').then((r) => r.json());
+      const serverT = Date.parse(cfg.server_time);
+      const t0 = performance.now();
+      const nowMs = () => serverT + (performance.now() - t0);
+      const rows = [...document.querySelectorAll('.rlist .ritem')];
+      const row = rows.find((li) => (li.querySelector('.ttl')?.textContent || '').trim() === '1 分钟后过期');
+      if (!row) return { ok: false, why: 'target row not found', rows: rows.length };
+      let pillAt = null, rowAt = null, btnAt = null;
+      const start = performance.now();
+      while (performance.now() - start < 90_000) {
+        const pillExpired = /已过期/.test(row.querySelector('.ttl')?.textContent || '');
+        const rowExpired = row.classList.contains('expired');
+        const btn = row.querySelector('button[aria-label="下载并解密"]');
+        if (pillExpired && pillAt === null) pillAt = nowMs();
+        if (rowExpired && rowAt === null) rowAt = nowMs();
+        if (btn && btn.disabled && btnAt === null) btnAt = nowMs();
+        if (pillAt !== null && rowAt !== null && btnAt !== null) break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      return {
+        ok: pillAt !== null && rowAt !== null && btnAt !== null,
+        expiresAt,
+        pillLagMs: pillAt === null ? null : Math.round(pillAt - expiresAt),
+        rowLagMs: rowAt === null ? null : Math.round(rowAt - expiresAt),
+        btnLagMs: btnAt === null ? null : Math.round(btnAt - expiresAt),
+        skewMs: pillAt !== null && rowAt !== null ? Math.round(rowAt - pillAt) : null,
+        text: row.querySelector('.ttl')?.textContent?.trim() || '',
+      };
+    })()`,
+  )
+  check(result.flip?.ok, '胶囊 / 整行 / 下载在到点后都翻了', result.flip)
+  check(result.flip?.rowLagMs !== null && result.flip?.rowLagMs < 1000, '整行状态翻转滞后 <1s', result.flip?.rowLagMs)
+  check(result.flip?.skewMs !== null && result.flip?.skewMs < 500, '胶囊与整行同帧（skew <500ms）', result.flip?.skewMs)
   const ttlRows = await evalJs(
     cB,
     `(() => [...document.querySelectorAll('.rlist .ritem')].map((li) => ({
@@ -359,6 +399,30 @@ try {
   check(expiredRow.btnDisabled, '过期行下载置灰', expiredRow)
   check(expiredRow.rowExpiredClass && expiredRow.rowOpacity < 0.8, '过期行整行灰化', expiredRow)
   check(/line-through/.test(expiredRow.nameDecoration || ''), '过期行发件人名删除线', expiredRow)
+  // 兜底：就算状态没翻，点按钮也不该发请求（点击时按 serverClock 再判一次）
+  result.guard = await evalJs(
+    cB,
+    `(async () => {
+      const row = [...document.querySelectorAll('.rlist .ritem')].find((li) => li.classList.contains('expired'));
+      if (!row) return { ok: false, why: 'no expired row' };
+      const btn = row.querySelector('button[aria-label="下载并解密"]');
+      if (!btn) return { ok: false, why: 'no button' };
+      btn.disabled = false; // 人为还原成"可点"，验证点击路径自己的判定
+      btn.click();
+      await new Promise((r) => setTimeout(r, 1500));
+      return {
+        ok: true,
+        progressShown: !!row.querySelector('.row-progress'),
+        banners: [...document.querySelectorAll('.banner')].map((b) => (b.textContent || '').trim()),
+      };
+    })()`,
+  )
+  check(
+    result.guard?.ok && !result.guard.progressShown && result.guard.banners.length === 0,
+    '过期行被点也不发请求（点击时按 serverClock 再判一次）',
+    result.guard,
+  )
+
   result.shots.push(await shot(cB, join(OUT, 'ttl-four-states-390x844.png')))
   await setViewport(cB, 1440, 900, false)
   await sleep(400)

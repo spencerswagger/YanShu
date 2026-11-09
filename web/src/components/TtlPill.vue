@@ -1,24 +1,32 @@
 <script setup>
-/** TTL 胶囊：`23 小时后过期` / `42 分钟后过期` / `已过期，无法取回`；≤1 小时换警示色 + 沙漏。 */
-import { computed, onBeforeUnmount, ref } from 'vue'
+/**
+ * TTL 胶囊：`23 小时后过期` / `42 分钟后过期` / `已过期，无法取回`；≤1 小时换警示色 + 沙漏。
+ *
+ * 时间来自 `lib/expiryTicker.js` 的**单一定时器**（与整行灰化/下载置灰共用同一个 `now`），
+ * 到点精确调度（临近窗口 ≤60s 时直接 setTimeout 到那一刻），所以文字与行状态同帧翻转。
+ */
+import { computed, onBeforeUnmount, watch } from 'vue'
+import { expiryNow, trackDeadline } from '../lib/expiryTicker.js'
 import { formatTtl, isExpired, isExpiringSoon, remainingMs } from '../lib/serverClock.js'
 
 const props = defineProps({ expiresAt: { type: [String, Number], default: 0 } })
 
-const tick = ref(0)
-// 每 30s 本地重算一次（不轮询服务器）；页面重新可见时立即重算
-const timer = setInterval(() => (tick.value += 1), 30_000)
-const onVisible = () => {
-  if (document.visibilityState === 'visible') tick.value += 1
-}
-document.addEventListener('visibilitychange', onVisible)
-onBeforeUnmount(() => {
-  clearInterval(timer)
-  document.removeEventListener('visibilitychange', onVisible)
-})
+const now = expiryNow()
+let untrack = null
+
+watch(
+  () => props.expiresAt,
+  (v) => {
+    untrack?.()
+    const ms = typeof v === 'number' ? v : Date.parse(v)
+    untrack = trackDeadline(ms)
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => untrack?.())
 
 const ms = computed(() => {
-  void tick.value
+  void now.value // 依赖共享 tick：到点由它叫醒
   return remainingMs(props.expiresAt)
 })
 const expired = computed(() => isExpired(ms.value))

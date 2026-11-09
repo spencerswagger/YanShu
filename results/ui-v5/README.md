@@ -13,7 +13,7 @@ node scripts/v5-evidence.mjs --api=http://127.0.0.1:18080 --serve=dist \
   `YANSHU_VERIFIER=sm2` + 真内核，独立 schema（脚本用 `PGOPTIONS="-c search_path=<schema>"` 指定）；
 - 真前端：`npm run build` 产物，由脚本起静态服务并把 `/v1` 反代到服务端（同源，CSP 只放 `'self'`）；
 - 两个 Chrome profile = 两个独立身份（IndexedDB 隔离），A 发、B 收，96 MiB 真文件；
-- 脚本断言 20 项，全过才 exit 0；断言明细在 `evidence.json.checks`。
+- 脚本断言 24 项，全过才 exit 0；断言明细在 `evidence.json.checks`。
 
 ## 截图
 
@@ -40,6 +40,25 @@ node scripts/v5-evidence.mjs --api=http://127.0.0.1:18080 --serve=dist \
 - TTL 三态的 `expires_at` 是**测试夹具**：真发 3 笔 1 MiB 后把库里三行改成 `now()+43m` / `now()+50h` / `now()+20s`；
   最后一笔**等它在页面里到点**再截——因为 #49 之后「过期即终结」，`/v1/inbox` 不会再返回已过期的行，
   过期态只会在「行已加载、时间到点」时出现（这也是用户真实遇到的情形）。
+
+## TTL 翻转：单一定时器（P3）
+
+原来胶囊与整行各挂一个 30s `setInterval`：文字到点就翻，整行灰化/删除线/下载置灰要等下一格，实测**滞后 29.6s**，
+这 30 秒里「已过期」但按钮还能点（点了吃 `410 TRANSFER_EXPIRED`）。
+
+现在收敛成 `web/src/lib/expiryTicker.js` 的**一个**定时器与**一个** `now`：
+
+- 胶囊（`TtlPill`）与整行状态（`InboxPanel`）都读同一个 `now`，同帧翻转；
+- 平时 30s 粒度（不忙轮询）；任一截止时刻进入 **≤60s** 窗口后直接 `setTimeout` 到那一刻 +20ms；
+- `visibilitychange` 回到前台、以及每次 `syncServerTime` 之后立刻重算一次（补偿后台节流）；
+- **点击兜底**：即使状态没来得及翻，`take()` 也会按 `serverClock` 再判一次到期 → 直接置成过期态、不发请求。
+
+实测（见 `flip-lag.json`，两次独立跑）：胶囊 / 整行 / 下载按钮**三者同帧**（skew = 0），
+滞后 **45ms** 与 **-162ms**（负值是页面侧 `/v1/config` 往返误差，不是提前过期），都远小于 1s。
+复现：真发 3 笔小文件，把一笔 `expires_at` 改到 +20s → 首屏加载（不刷新，`inboxAuto=4`）→ 页面内每 25ms 采样到点那一刻。
+
+**降级行为（如实）**：后台标签页会被浏览器节流（定时器最短 1s，某些省电模式到 1min），翻转可能延后到下一格；
+页面回到前台立刻重算并补翻（`visibilitychange`）。另外点击兜底保证"延后"不会变成"点了报 410"。
 
 ## Gate 脚本复跑
 

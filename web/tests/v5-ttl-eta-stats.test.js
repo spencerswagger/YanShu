@@ -19,6 +19,7 @@ import {
 } from '../src/lib/serverClock.js'
 import { createSpeedMeter, formatEta, formatSpeed, formatBytesPair, stageLabel } from '../src/lib/speed.js'
 import { fetchStats, formatCount, formatBytesTotal } from '../src/net/stats.js'
+import { nextDelayFor, IDLE_MS, NEAR_MS } from '../src/lib/expiryTicker.js'
 
 const HOUR = 3600_000
 const MIN = 60_000
@@ -168,4 +169,23 @@ test('接收两段进度：下载中/解密中都是真百分比', () => {
   assert.equal(stageLabel('decrypting', 0, 0), '解密中')
   assert.equal(stageLabel('', 0, 0), '')
   assert.equal(stageLabel('saving', 10, 10), '')
+})
+
+test('TTL 定时器：平时 30s 粒度，临近（≤60s）精确到点，已过去的不参与', () => {
+  const now = 1_700_000_000_000
+  // 没有截止：退到 30s（不忙轮询）
+  assert.equal(nextDelayFor(now, []), IDLE_MS)
+  // 还早（>60s）：仍是 30s 粒度
+  assert.equal(nextDelayFor(now, [now + 23 * HOUR, now + 5 * MIN]), IDLE_MS)
+  // 进入临近窗口：精确到那一刻（+20ms 余量），滞后 <1s
+  assert.equal(nextDelayFor(now, [now + 12_000]), 12_020)
+  assert.equal(nextDelayFor(now, [now + 300]), 320)
+  assert.ok(nextDelayFor(now, [now + 300]) < 1000, '临近窗口内必须 <1s 内叫醒')
+  // 最近的那个说了算（多个截止混在一起）
+  assert.equal(nextDelayFor(now, [now + 45_000, now + 2_000, now + 42 * MIN]), 2_020)
+  // 已过去的截止不再安排（避免 0ms 自旋）
+  assert.equal(nextDelayFor(now, [now - 1, now + 23 * HOUR]), IDLE_MS)
+  // 非法值忽略
+  assert.equal(nextDelayFor(now, [NaN, Infinity, now + 23 * HOUR]), IDLE_MS)
+  assert.ok(NEAR_MS === 60_000)
 })
