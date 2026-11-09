@@ -238,6 +238,26 @@ func (a *API) notifyTransfer(t store.Transfer) {
 	})
 }
 
+// expireIfNeeded 是 TTL 的**读写路径即时判定**：`expires_at` 一到就把这条置 EXPIRED 并物理删密文。
+//
+// 清道夫 30 秒才扫一次，若只靠它，到期后的这 30 秒里仍能取件、列表里还挂着「可下载」，
+// 与「已过期，无法取回」的界面语义直接矛盾，所以到期判定必须落在每次读写上。
+func (a *API) expireIfNeeded(w http.ResponseWriter, r *http.Request, id string) (store.Transfer, bool) {
+	t, newly, err := a.store.TerminalizeExpiredID(r.Context(), id, a.now())
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, r, spec.ErrTransferNotFound)
+			return store.Transfer{}, false
+		}
+		a.internalError(w, r, "terminalize expired", err)
+		return store.Transfer{}, false
+	}
+	if newly {
+		a.purgeCiphertext(r, id)
+	}
+	return t, true
+}
+
 // handleGetTransfer 是 GET /v1/transfers/{id}（API.md §7.2）。
 // transfer_id 是能力凭证：持有即可读元数据，不需要签名。
 func (a *API) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
@@ -256,6 +276,15 @@ func (a *API) handleGetTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	t, ok := a.expireIfNeeded(w, r, id)
+	if !ok {
+		return
+	}
+	if spec.IsTerminalState(t.State) {
+		// 到期即终结：返回 EXPIRED tombstone（expires_at / terminal_at 都是原始值）。
+		writeJSON(w, http.StatusOK, a.transferResponse(r, t))
+		return
+	}
 	t, err := a.store.ReclaimExpiredLease(r.Context(), id, a.now())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -307,7 +336,7 @@ func (a *API) handleInbox(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 
-	q := store.InboxQuery{Code: code, States: states, Limit: limit + 1}
+	q := store.InboxQuery{Code: code, States: states, Limit: limit + 1, Now: a.now()}
 	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
 		at, id, err := decodeCursor(cursor)
 		if err != nil {
@@ -388,6 +417,7 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Bitmap:          auth.B64.EncodeToString(buildBitmap(indexes, uint32(t.ChunkCount))),
 		Missing:         missingRanges(indexes, uint32(t.ChunkCount)),
 		UploadedBytes:   uploaded,
+		ExpiresAt:       spec.FormatTime(t.ExpiresAt),
 		UpdatedAt:       spec.FormatTime(t.UpdatedAt),
 	})
 }
@@ -484,6 +514,12 @@ func (a *API) handleAck(w http.ResponseWriter, r *http.Request) {
 			fail(w, r, spec.ErrDownloadNotStarted)
 		case errors.Is(err, store.ErrLeaseExpired):
 			fail(w, r, spec.ErrDownloadNotStarted)
+		case errors.Is(err, store.ErrExpired):
+			// TTL 到点：ack 不计数，返回 410（与 EXPIRED tombstone 同口径）。
+			if _, ok := a.expireIfNeeded(w, r, id); !ok {
+				return
+			}
+			fail(w, r, spec.ErrTransferExpired)
 		case errors.Is(err, store.ErrConflict):
 			fail(w, r, spec.ErrTransferStateConflict)
 		default:
@@ -525,6 +561,10 @@ func (a *API) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	code, ok := a.verifySignature(w, r, spec.PurposeTransferRevoke, "", nil,
 		func(signedCode string) ([]byte, error) { return auth.TransferRevokeFields(signedCode, id) })
 	if !ok {
+		return
+	}
+	// 已到 TTL 的先判过期：否则会给出 REVOKED 200，而契约里 EXPIRED 撤回是 409（§6.7）。
+	if _, ok := a.expireIfNeeded(w, r, id); !ok {
 		return
 	}
 	t, err := a.store.RevokeTransfer(r.Context(), id, code, a.now())
@@ -573,6 +613,21 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 			return store.Transfer{}, false
 		}
 		a.internalError(w, r, "get transfer", err)
+		return store.Transfer{}, false
+	}
+	// TTL 到点 → 410 TRANSFER_EXPIRED，且**先于**凭据判定：
+	// 传输终结不可恢复，先回 401 AUTH_TOKEN_EXPIRED（可重签发）会把发送方引向重签，
+	// 重签之后仍然是 410（API.md §1.7.4「两者语义不同、不得混用」）。
+	if !t.ExpiresAt.After(a.now()) {
+		fresh, ok := a.expireIfNeeded(w, r, id)
+		if !ok {
+			return store.Transfer{}, false
+		}
+		if spec.IsTerminalState(fresh.State) {
+			fail(w, r, spec.TerminalErrorCode(fresh.State))
+		} else {
+			fail(w, r, spec.ErrTransferExpired)
+		}
 		return store.Transfer{}, false
 	}
 	// 判定顺序（先凭据后状态）：

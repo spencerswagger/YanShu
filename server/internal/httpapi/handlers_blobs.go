@@ -301,6 +301,10 @@ func (a *API) handleHeadChunk(w http.ResponseWriter, r *http.Request) {
 
 // loadReadableTransfer 取传输并处理状态：终结 → 410，未就绪 → 409。
 func (a *API) loadReadableTransfer(w http.ResponseWriter, r *http.Request, id string) (store.Transfer, bool) {
+	// TTL 到点即终结：这一步之后 state 才可信（否则 expires_at 已过还能取件）。
+	if _, ok := a.expireIfNeeded(w, r, id); !ok {
+		return store.Transfer{}, false
+	}
 	t, err := a.store.ReclaimExpiredLease(r.Context(), id, a.now())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -336,6 +340,12 @@ func (a *API) startLease(w http.ResponseWriter, r *http.Request, t store.Transfe
 			fail(w, r, spec.ErrTransferNotReady)
 		case errors.Is(err, store.ErrTerminal):
 			fail(w, r, spec.ErrTransferStateConflict)
+		case errors.Is(err, store.ErrExpired):
+			// 与 checkLease 之间的竞态窗口：StartLease 在事务里已把它置 EXPIRED。
+			if _, ok := a.expireIfNeeded(w, r, t.ID); !ok {
+				return "", time.Time{}, false
+			}
+			fail(w, r, spec.ErrTransferExpired)
 		case errors.Is(err, store.ErrNotFound):
 			fail(w, r, spec.ErrTransferNotFound)
 		default:

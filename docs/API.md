@@ -453,6 +453,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
   "max_plaintext_size": 4294967296,
   "max_ttl_seconds": 86400,
   "token_epoch": 1,
+  "server_time": "2026-11-02T14:00:00Z",
   "stun_urls": ["stun:stun.yan-shu.example:3478"],
   "ws_url": "wss://yan-shu.example/v1/ws",
   "limits": {
@@ -467,6 +468,8 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 **不返回**任何密钥、任何内部地址、任何 turn 配置（本项目**没有** TURN，见 §9.5）。
 
 **`token_epoch`**：只读整数，与 §1.7 的凭据版本 `KID` **同义**（对外沿用 `token_epoch` 这个字段名）；递增即吊销全部既有凭据。只用于观测与排查，客户端 MUST NOT 依赖它做鉴权判断。
+
+**`server_time`**：服务端当前时间（UTC，RFC 3339 秒级）。客户端用它算**时钟偏差**、作为 TTL 倒计时的基准（`剩余 = expires_at - (server_time + 本地单调流逝)`）。不能直接用设备时钟减 `expires_at`：设备差几分钟到几小时就会显示错的「还剩多久」。该字段与响应头 `Date` 同义，显式给出是为了不依赖中间层是否保留 `Date`（且不受秒级截断之外的影响）。
 
 **`stun_urls` / `ws_url` 的契约约束**：由部署注入，契约不给默认值。`stun_urls` MUST 至少 1 条且 MUST NOT 含 `turn:` / `turns:`；`ws_url` 允许为 `null`（表示该部署不提供信令），此时客户端 MUST 按 §9.6 降级；`config` 里 MUST NOT 出现密钥、TURN 凭据或内部地址。
 
@@ -597,6 +600,13 @@ ack 后 download_count 达 max_downloads ──► CONSUMED（密文删除）
 | `CONSUMED` | 200（tombstone） | **`410 TRANSFER_CONSUMED`** | 取件完成/次数用尽 |
 | 不存在 | `404 TRANSFER_NOT_FOUND` | 同上 | id 本身无效 |
 
+**TTL 判定在读写路径上即时生效（写死）**：判定时刻是**每次请求的服务器时间**，`expires_at <= now` 即视为 `EXPIRED`，不依赖后台清理任务的扫描周期（清理任务只是兜底重试物理删除）。因此：
+
+- 到期后的**第一次** `GET /transfers/{id}` 就返回 `EXPIRED` tombstone（`terminal_reason: "EXPIRED"`、`terminal_at` = 该次请求时间，`expires_at` 保留**原始**到期时刻、不被改写）。
+- 到期后 `GET /prelude` / `GET /chunks/{i}` 一律 `410 TRANSFER_EXPIRED`；上传侧的 `GET status`、`PUT prelude`、`PUT chunks/{i}`、`POST complete` 同样是 `410 TRANSFER_EXPIRED`（**不是** `401 AUTH_TOKEN_EXPIRED`：传输终结不可恢复，重签发凭据也救不回来，二者不得混用，见 §1.7.4）。
+- `GET /inbox` **不返回**已到 `expires_at` 的条目（即使后台还没扫到该行）。
+- 到期后的 `POST /ack` → `410 TRANSFER_EXPIRED` 且**不计数**（`download_count` 不变）；到期后的 `POST /revoke` → `409 TRANSFER_STATE_CONFLICT`（与 §6.7 一致）。
+
 tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保留 7 天后物理删除；响应里带 `terminal_reason` ∈ `REVOKED | EXPIRED | CONSUMED`。
 
 ### 5.3 三种终结态的语义差异（客户端处置）
@@ -716,9 +726,12 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
   "bitmap": "wA",
   "missing": [ { "start": 2, "count": 1 } ],
   "uploaded_bytes": 96,
+  "expires_at": "2026-11-03T14:00:00Z",
   "updated_at": "2026-11-02T14:01:10Z"
 }
 ```
+
+- `expires_at`：与 §6.1 / §7.2 同一个值——发送方在上传过程中也能显示这条传输的剩余有效期，不必等 `complete`。
 
 - `bitmap`：每块 1 bit，**第 i 块的 bit 位于第 `i/8` 字节的 `bit (7 - i%8)`（MSB 优先）**，长度 `ceil(chunk_count/8)` 字节，base64url 无填充。示例 `"wA"` = `11000000` → 块 0、1 已收到。
 - `missing`：连续缺失区间，按 `start` 升序。
@@ -757,6 +770,8 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保�
 |---|---|
 | `ready`（默认） | `READY` + `LEASED`（收件人现在就能取） |
 | `all` | 另含 `UPLOADING`（发送方还在传，仅供进度展示）；**永不返回** `REVOKED` / `EXPIRED` / `CONSUMED` |
+
+已到 `expires_at` 的行**不出现在任何一档里**（判定见 §5.2：TTL 在请求时刻即时生效，不等后台清理）。
 
 **响应 200**
 

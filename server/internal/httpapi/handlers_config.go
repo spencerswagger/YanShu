@@ -40,6 +40,7 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 		STUNURLs:          a.cfg.STUNURLs,
 		WSURL:             wsURL,
 		TokenEpoch:        epoch,
+		ServerTime:        spec.FormatTime(a.now()),
 		Verifier:          string(a.cfg.Verifier),
 		Env:               a.cfg.Env,
 		KernelSHA256:      kernelSHA,
