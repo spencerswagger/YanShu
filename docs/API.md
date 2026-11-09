@@ -71,6 +71,16 @@
 - 4 位 Crockford Base32 用户码；撞码时**客户端重新生成密钥对**。
 - 私钥只在本机（IndexedDB），不上传、不备份、无导出接口。
 
+### 0.4 客户端时间基准（跨端统一，禁止用本机钟算有效期）
+
+服务端返回的一切绝对时间（`expires_at`、`lease_expires_at`、`generated_at`）都是 **UTC RFC 3339**。客户端 **MUST NOT** 用本机 `Date.now()` 直接与这些字段相减——设备钟可能偏几分钟到几小时，偏差会直接把"还能取件"显示成"已过期"（或反之）。
+
+- **基准**：用一次响应头 `Date`（或 `/v1/config` 的 `server_time`，若实现提供）算 `offset = serverTime - performance.now()`，之后用**单调时钟** `performance.now() + offset` 推进。
+- **刷新**：**不轮询**；页面重新可见（`visibilitychange`）或收到新的 `Date` 头时重算一次 offset，不累积误差。
+- **一致性**：同一屏里"剩余时间展示"与"过期判定（置灰/禁点）" MUST 用同一基准；不允许一处用服务端基准、一处用本机钟。
+- **有效期来源**：发送侧 MUST 用 `POST /v1/transfers` 响应里的 `expires_at`（服务端已按 `[3600, 86400]` 夹取），MUST NOT 用本地 `ttl_seconds` 默认值自算——部署可把 TTL 配得更短（§1.5）。
+- 该规则对所有端（Web 与后续端）一致，属契约层，不由各端自定。
+
 ---
 
 ## 1. 身份、码与鉴权
@@ -589,6 +599,14 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 
 **隐私**：只返回**聚合数字**，不含任何个例信息（无码、无 `transfer_id`、无昵称、无大小分布）。展示层可做量级化（如"约 45 万次"），服务端返回的是**精确值**。
 
+**参数**：不接受任何查询参数；出现未知参数 → `400 BAD_REQUEST`（§0.1 全局约定）。
+
+**日界实现约束**：`today` MUST 按 UTC 计算，且 MUST NOT 依赖数据库会话时区（`::date` 强转会吃会话 `TimeZone`）。实现须显式 UTC 化（`(ts AT TIME ZONE 'UTC')::date`，或连接级固定 `TimeZone=UTC`）；**回填与运行时累加必须同一口径**，否则同一天的数字会跨零点错桶（回填按 `terminal_at::date`、运行时按进程 UTC 日，两者在非 UTC 会话下不一致）。
+
+**审计**：该端点**匿名且会被首页轮询**，MUST NOT 每请求写一条审计行（实测：20 次匿名请求 → 20 行 `audit_events`；而 `audit_events` 当前无保留期，等于把首页流量线性写进库）。审计口径见 `adr/0002-stats-and-audit-retention.md`。
+
+**对账**：计数器是**派生数据**，以 `transfers` 实际行为准；MUST 有每日对账（`count(*)`/`sum(plaintext_size)` 与计数器比对，偏差 > 0.1% 报警）。没有对账时"漏加/重放"不会被发现。
+
 **失败**：`503 SERVICE_UNAVAILABLE`（统计不可用，如后端查询超时）。**不返回** `401`——该端点无鉴权，也不因缺头而拒绝。
 
 ---
@@ -638,6 +656,8 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**）；响�
 - **终结记录永久保留**（不再有 7 天清理期）。因此对已终结的 `transfer_id` 查询**恒为 `200` + tombstone**，不会因为时间推移变成 `404`。
 - **终结后 30 天，三个字段置 `NULL` 脱敏**：`uploader_ip`、`prelude_sm3`、`upload_token_sm3`；其余字段（`created_at`、`expires_at`、`terminal_at`、`plaintext_size`、`chunk_count`、`state`、`terminal_reason`、`download_count`）**永久保留**，用于聚合计数与审计。
 - **保留 ≠ 可取件**：`REVOKED`/`EXPIRED`/`CONSUMED` 三种终结态下，`GET /prelude` 与 `GET /chunks/{i}` 一律 `410`（见上表），与保留期无关。
+- **脱敏不改变任何响应字段集**：tombstone 响应本来就不含 `prelude_sm3`（§7.2 已写死字段集），`uploader_ip`/`upload_token_sm3` 从未对外返回；因此 30 天脱敏对客户端**不可观测**，客户端 MUST NOT 依赖这三列的任何取值。
+- **脱敏不影响限流**：按 IP 的存储配额只核算**尚未终结**（`UPLOADING`/`READY`/`LEASED`）的传输——终结态密文已物理删除，不计入占用。因此 `uploader_ip` 在终结满 30 天被置 NULL，对限流与配额核算**无影响**。
 
 ### 5.3 三种终结态的语义差异（客户端处置）
 
@@ -1215,6 +1235,7 @@ Content-Type: application/json
 5. 传输加密依赖外层 HTTPS（不做国密 TLS），应用层再叠 SM4 密文；两者互不替代。
 6. CORS：只允许站点自身源；不开放 `*`；不开放 `credentials`。
 7. 前端零第三方脚本 + 严格 CSP（属 Web 交付，此处只作为跨端约束记录）。
+8. **审计保留期与免审计端点**：`audit_events` MUST 有保留期（建议 90 天，随 sweeper 清理）；匿名只读端点（`/v1/stats`、`/v1/config`）**MUST NOT** 每请求写审计行——只保留进程访问日志。审计只覆盖**有身份或有副作用**的请求（见 `adr/0002-stats-and-audit-retention.md` §2.4）。
 
 ---
 
