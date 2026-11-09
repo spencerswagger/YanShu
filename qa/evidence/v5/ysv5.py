@@ -161,7 +161,9 @@ class Server:
 
     def __init__(self, binary: str, dsn: str, schema: str, work: Path,
                  sweep: str = "1s", keep: bool = False):
-        self.binary, self.dsn, self.schema = binary, dsn, schema
+        # PG 的 search_path 是未加引号的标识符（会被折成小写），schema 名统一小写，
+        # 否则「建 schema 带引号保留大写 + search_path 折小写」会找不到 schema，服务起不来。
+        self.binary, self.dsn, self.schema = binary, dsn, str(schema).lower()
         self.work = Path(work)
         self.sweep = sweep
         self.keep = keep

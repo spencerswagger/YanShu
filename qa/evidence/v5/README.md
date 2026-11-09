@@ -47,7 +47,12 @@ node qa/evidence/v5/ui_v5_shots.mjs --dist /tmp/v5/web/dist --api http://127.0.0
 | `check_speed_eta.py` | ② 速度 / ETA | 真传 16 MiB 量吞吐；节流到 1 MB/s 取 16s 采样窗；回放进 `createSpeedMeter`：50% 处 ETA 与真实剩余耗时 `|Δ|≤1.5s`；`<10 KB/s` 3s → `网络较慢`；3s 无进展 → `连接停滞，重试中` 且 ETA 隐藏 | 后端分支 + 前端分支 |
 | `check_metadata_permanent.py` | ③ 元数据永久 | 取件后密文删净；`terminal_at` 推到 10 天前 **行仍在**（v4 的 7 天删除已取消）；40 天前三列 `uploader_ip/prelude_sm3/upload_token_sm3` 置 NULL；其余 9 个字段逐值不变；`GET` 仍 200 tombstone；`prelude`/块仍 410；清道夫幂等 | 后端分支 |
 | `check_stats_consistency.py` | ④ 全平台统计 | 空库基线 0；三个 `no-store`；字段集精确无个例；建 3 取 2 → `created+3 / consumed+2 / consumed_bytes=明文和`；**计数器表 == transfers 直算 == HTTP JSON**；今日按 UTC 日界；`generated_at` 与 `Date` ≤5s；前端格式化真数字；另一客户端同数；撤回不计入 consumed | 后端分支（+ 前端格式化项） |
-| `ui_v5_shots.mjs` | ①④ 界面 | 真 Chromium 打开生产构建：待收列表出现三态 TTL 胶囊（小时级 / 分钟级 / 已过期 + `soon`/`expired` 类），平台统计六格文案齐全；**首屏是否自动拉到列表**也一并断言 | 前后端两条分支 + Chromium |
+| `ui_v5_shots.mjs` | ①④ 界面 | 真 Chromium 打开生产构建：首屏不点刷新就应拉到 4 行；其中一条 `expires_at=now()+30s`，**页面内等到点**后该行必须自己翻成「已过期，无法取回」+ 整行灰化 + 删除线 + 下载置灰（全程不刷新、不重载），并核对服务端此刻 `state=EXPIRED`；平台统计六格文案齐全 | 前后端两条分支 + Chromium |
+| `check_purge_fallback.py` | ③b 兜底删密文 | 种 210 条（> 批次 200）未删密文的终结行，只靠清道夫兜底：盘上残留必须为 0、日志 `purged` 末批必须不足一批（水位推进）、库里未确认删密文的行归零 | 后端分支 |
+
+`v5_ui_seed.py` 的第 4 条是**短 TTL**（默认 30s，`--short-ttl` 可调）：「已过期」这一态在
+v5/`#49` 的「过期即终结」语义下**不能靠种一条过期记录来造**（`/v1/inbox` 永不返回过期行），
+只能「行已加载 + 时间到点」。`check_purge_fallback.py` 供元数据永久保留后的 P0 回归用。
 
 `render_web.mjs` 是共用跑分器：把后端真数字塞进 `web/src/lib/serverClock.js` /
 `web/src/lib/speed.js` / `web/src/net/stats.js` 跑一遍，避免"后端对、界面文案错"漏检。
@@ -61,6 +66,7 @@ node qa/evidence/v5/ui_v5_shots.mjs --dist /tmp/v5/web/dist --api http://127.0.0
 - `check_stats_consistency.py` 会等 `/v1/stats` 的 60s 内部缓存过期，整条跑约 70s，不是卡住。
 - 前端用例需要 `public/ys_kernel.wasm`（`*.wasm` 在 `.gitignore` 里）：拷内核产物过去，否则内核相关用例会 SKIP。
 - 所有脚本自己建 `gate_v5_*` schema，跑完即删；不碰 `yanshu_test` 默认 schema，也不碰别人的数据。
+- **schema 名会统一转小写**：PG 的 `search_path` 是未加引号标识符（折小写），带大写会让"建 schema 保留大写 + search_path 折小写"对不上，服务直接起不来。
 - 脚本不写别人的业务代码，只读产物、只打自己的 schema。
 
 ## 3. 结果

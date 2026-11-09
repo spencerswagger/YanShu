@@ -1,27 +1,25 @@
 #!/usr/bin/env node
 /**
- * v5 ① / ④ 的界面取证：真服务 + 真前端产物 + 真 Chromium。
+ * v5 ①④ 的界面取证：真服务 + 真前端产物 + 真 Chromium。
  *
- * 为什么要这一层：TTL 胶囊与平台统计是**界面**上的东西，单测只证明函数对，
- * 证明不了「这一屏真的显示出来」。所以这里打开生产构建（dist），
- * 用真 API（`/v1` 反代到真服务）跑一遍，截图 + 抓 DOM 文案，任何一条不满足就 exit 1。
- *
- * 流程：起静态服务（反代 /v1）→ 开 Chromium → 读本机码 → 用 python 造三条真传输
- *      （23h / 42m / 已过期）→ 重载页面 → 截图 → 断言 DOM 文案。
+ * 关键设计（v5/`#49` 之后）：TTL 在**读写路径即时终结**，`/v1/inbox` 永不返回过期行。
+ * 所以「已过期」这一态**不能靠种一条过期记录来造**——那种断言在该语义下永远不可能通过。
+ * 这里走真实路径：四行都不过期地加载出来 → 其中一行 `expires_at = now()+30s` → **页面内等到点** →
+ * 该行必须自己翻成「已过期，无法取回」+ 整行灰化 + 删除线 + 下载置灰，全程**不点刷新、不重载**。
+ * 同时再查一次服务端：那一刻该传输必须已是 `EXPIRED`（前后端口径一致）。
  *
  * 用法：
  *   node qa/evidence/v5/ui_v5_shots.mjs --dist <web/dist> --api http://127.0.0.1:PORT \
- *        --out <out dir> --dsn "$TEST_DATABASE_URL" --schema gate_v5_ui
+ *        --out <out dir> --dsn "$TEST_DATABASE_URL" --schema gate_v5_ui [--short-ttl 30]
  *
- * 产物：first-1440x900.png / inbox-1440x900.png / inbox-390x844.png / evidence.json
+ * 产物：first-1440x900.png / ttl-after-expiry-1440x900.png / ttl-after-expiry-390x844.png / evidence.json
  */
 import { spawn } from 'node:child_process'
 import { createReadStream, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, request as httpRequest } from 'node:http'
-import { extname, join, resolve } from 'node:path'
+import { extname, join, resolve, dirname } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import { dirname } from 'node:path'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const arg = (name, def = '') => {
@@ -33,10 +31,12 @@ const arg = (name, def = '') => {
 }
 
 const DIST = resolve(arg('dist'))
-const API = arg('api')
+const API = arg('api').replace(/\/$/, '')
 const OUT = resolve(arg('out', 'results/ui-v5'))
 const DSN = arg('dsn')
 const SCHEMA = arg('schema', 'gate_v5_ui')
+const SHORT_TTL = Number(arg('short-ttl', '30'))
+const WAIT_EXPIRY_MS = Number(arg('wait-expiry-ms', '90000'))
 const CHROME = process.env.CHROME || '/usr/lib/chromium/chromium'
 const PORT = Number(arg('port', 4183))
 
@@ -108,7 +108,23 @@ const shot = async (c, file) => {
 const viewport = (c, width, height, mobile) =>
   c.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile, screenWidth: width, screenHeight: height })
 
-const result = { out: OUT, shots: [], ttl: [], stats: null, seeds: null, failures: [] }
+/** 读列表里每一行 TTL 胶囊 + 该行的样式/按钮状态 */
+const READ_TTL = `[...document.querySelectorAll('.rlist .ritem')].map((row) => {
+  const pill = row.querySelector('.ttl')
+  const name = row.querySelector('.rname')
+  const btn = row.querySelector('button.icon-btn')
+  const cs = getComputedStyle(row)
+  return {
+    text: pill ? pill.textContent.trim() : '',
+    soon: pill ? pill.classList.contains('soon') : null,
+    expired: pill ? pill.classList.contains('expired') : null,
+    rowOpacity: cs.opacity,
+    nameDecoration: name ? getComputedStyle(name).textDecorationLine : null,
+    downloadDisabled: btn ? btn.disabled : null,
+  }
+})`
+
+const result = { out: OUT, shots: [], beforeExpiry: null, afterExpiry: null, serverState: null, failures: [] }
 let server = null
 const procs = []
 let exitCode = 0
@@ -131,10 +147,12 @@ try {
   result.code = code
   if (!code || code === '——') throw new Error('本机码未就绪（前端没连上 API？）')
 
-  // 造三条真传输（TTL 三态）
-  const seedPy = join(HERE, 'v5_ui_seed.py')
-  const seedArgs = ['python3', seedPy, '--base-url', API, '--schema', SCHEMA, '--recipient', code,
-    '--json-out', join(OUT, 'seeds.json')]
+  // `/v1/stats` 服务端内部缓存 60s：先等过缓存窗，再种数据，否则统计区截到的是旧数字
+  await sleep(62000)
+
+  // 造四条真传输（其中一条 30 秒后到期）
+  const seedArgs = ['python3', join(HERE, 'v5_ui_seed.py'), '--base-url', API, '--schema', SCHEMA,
+    '--recipient', code, '--short-ttl', String(SHORT_TTL), '--json-out', join(OUT, 'seeds.json')]
   if (DSN) seedArgs.push('--dsn', DSN)
   const seed = await new Promise((ok) => {
     const p = spawn(seedArgs[0], seedArgs.slice(1), { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -146,74 +164,107 @@ try {
   })
   if (seed.rc !== 0) throw new Error(`造数据失败：${seed.err.trim().slice(-300)}`)
   result.seeds = JSON.parse(seed.out.trim().split('\n').pop())
+  const shortId = (result.seeds.seeds || []).find((s) => s.name === 'short')?.transfer_id
+  if (!shortId) throw new Error('seeds 里没有 short 那条')
 
-  // 重载 => 重新拉 inbox 与 /v1/stats
-  // 注意：`/v1/stats` 服务端内部缓存 60s，必须等过缓存窗，否则截到的是旧数字。
-  await sleep(62000)
+  // 重载 => 重新拉 inbox（不要点刷新：要验的就是首屏自动加载）
   await c.send('Page.reload')
   await sleep(6000)
   await viewport(c, 1440, 900, false)
-  await sleep(800)
+  await sleep(600)
 
-  // 先看「自动加载」是否成立：不点刷新，列表里有没有东西
   result.inboxAuto = await evaluate(c, `document.querySelectorAll('.rlist .ritem').length`)
-  if (!result.inboxAuto) {
-    // 点一次刷新（aria-label=刷新）——用来区分「没拉到」和「根本没渲染」
-    await evaluate(c, `(() => {
-      const b = [...document.querySelectorAll('button')].find((x) => x.getAttribute('aria-label') === '刷新');
-      if (b) b.click();
-      return true;
-    })()`)
-    await sleep(2000)
-    result.inboxAfterRefresh = await evaluate(c, `document.querySelectorAll('.rlist .ritem').length`)
-  }
+  result.beforeExpiry = await evaluate(c, READ_TTL)
+  result.stats = await evaluate(c, `(() => {
+    const card = document.querySelector('.stats-card')
+    return card ? card.textContent.replace(/\\s+/g, ' ').trim().slice(0, 240) : ''
+  })()`)
   result.shots.push(await shot(c, join(OUT, 'first-1440x900.png')))
 
-  // 平台统计区块（④）
-  result.stats = await evaluate(c, `(() => {
-    const card = document.querySelector('.stats-card');
-    const rows = card ? [...card.querySelectorAll('.stat')].map((s) => ({
-      k: (s.querySelector('.k') || {}).textContent?.trim() || '',
-      v: (s.querySelector('.v, .flip, .flip-counter, span:last-child') || {}).textContent?.trim() || '',
-    })) : [];
-    return { text: card ? card.textContent.replace(/\\s+/g, ' ').trim().slice(0, 240) : '', rows };
-  })()`)
+  // 页面内等到点：不点刷新、不重载（这才是用户真实遇到的情形）
+  const t0 = Date.now()
+  let elapsed = 0
+  for (;;) {
+    const rows = await evaluate(c, READ_TTL)
+    if (rows.some((r) => r.expired)) break
+    if (Date.now() - t0 > WAIT_EXPIRY_MS) break
+    await sleep(1000)
+    elapsed = Date.now() - t0
+  }
+  result.waitMs = elapsed
+  // 胶囊（TtlPill 自己的 30s 定时器）与整行状态（InboxPanel 的 30s tick）是两个独立定时器：
+  // 先记下「胶囊翻」到「整行翻」的实际间隔，再等整行到位（有界）。
+  const tFlip = Date.now()
+  let styleLagMs = null
+  for (;;) {
+    const rows = await evaluate(c, READ_TTL)
+    const e = rows.find((r) => r.expired)
+    if (e && (e.rowOpacity === '0.55' || String(e.nameDecoration || '').includes('line-through'))) {
+      styleLagMs = Date.now() - tFlip
+      break
+    }
+    if (Date.now() - tFlip > 40000) { styleLagMs = Date.now() - tFlip; break }
+    await sleep(500)
+  }
+  result.styleLagMs = styleLagMs
+  result.afterExpiry = await evaluate(c, READ_TTL)
+  result.rowsStillListed = result.afterExpiry.length
 
-  // TTL 胶囊（①）
-  await evaluate(c, `(() => {
-    const el = [...document.querySelectorAll('*')].find((n) => (n.textContent || '').includes('待接收'));
-    if (el) el.scrollIntoView({ block: 'center' });
-    window.scrollTo(0, document.body.scrollHeight * 0.35);
-    return true;
-  })()`)
-  await sleep(500)
-  result.shots.push(await shot(c, join(OUT, 'inbox-1440x900.png')))
-  result.ttl = await evaluate(c, `[...document.querySelectorAll('.ttl')].map((e) => ({
-    text: e.textContent.trim(), soon: e.classList.contains('soon'), expired: e.classList.contains('expired'),
-  }))`)
+  // 服务端同一时刻的口径：该传输必须已 EXPIRED（读路径即时终结）
+  const st = await fetch(`${API}/v1/transfers/${shortId}`)
+  const body = await st.json().catch(() => ({}))
+  result.serverState = { status: st.status, state: body.state, terminal_reason: body.terminal_reason }
 
+  result.shots.push(await shot(c, join(OUT, 'ttl-after-expiry-1440x900.png')))
   await viewport(c, 390, 844, true)
-  await sleep(900)
-  await evaluate(c, `window.scrollTo(0, document.body.scrollHeight * 0.35); true`)
-  await sleep(400)
-  result.shots.push(await shot(c, join(OUT, 'inbox-390x844.png')))
+  await sleep(800)
+  result.shots.push(await shot(c, join(OUT, 'ttl-after-expiry-390x844.png')))
 
   // ── 断言
-  if (!result.inboxAuto) {
-    result.failures.push(`首屏未自动加载待收列表（0 行）——点刷新后 ${result.inboxAfterRefresh ?? 0} 行；InboxPanel 在 setup 里 refresh() 时 api 还没就绪`)
-  }
-  const texts = (result.ttl || []).map((t) => t.text)
-  // 想问「文案对不对」：逐字口径由 check_ttl_visible.py 用可控时刻验（那里没有时间漂移）。
-  // 这里问的是「界面上三态真的都出现了，且单位/警示态对」。
   const pat = /^(\d+ (分钟|小时|天)后过期|已过期，无法取回)$/
-  if (result.ttl.length !== 3) result.failures.push(`待收列表 TTL 胶囊数量 ${result.ttl.length} != 3（实际：${texts.join(' | ') || '无'}）`)
-  for (const t of texts) if (!pat.test(t)) result.failures.push(`TTL 文案不合规：${t}`)
-  if (!texts.some((t) => t.includes('小时'))) result.failures.push('没有「小时」级 TTL 行')
-  if (!texts.some((t) => t.includes('分钟'))) result.failures.push('没有「分钟」级 TTL 行')
-  if (!result.ttl.some((t) => t.soon)) result.failures.push('临近过期（≤1h）没有警示态')
-  if (!result.ttl.some((t) => t.expired)) result.failures.push('过期行没有 expired 态')
-  result.ttlTexts = texts
-  const statsText = result.stats?.text || ''
+  const textsBefore = (result.beforeExpiry || []).map((r) => r.text)
+  const textsAfter = (result.afterExpiry || []).map((r) => r.text)
+
+  if (result.inboxAuto !== 4) {
+    result.failures.push(`首屏未自动加载 4 行待收（实际 ${result.inboxAuto}）——InboxPanel 应在 api 注入后自动拉取`)
+  }
+  if (textsBefore.some((t) => t === '已过期，无法取回')) {
+    result.failures.push(`加载时不该有已过期行（种的是 ${SHORT_TTL}s 后到期）：${textsBefore.join(' | ')}`)
+  }
+  if ((result.beforeExpiry || []).filter((r) => r.expired).length !== 0) {
+    result.failures.push('加载时不该有 expired 样式')
+  }
+  for (const unit of ['小时', '分钟', '天']) {
+    if (!textsBefore.some((t) => t.includes(unit))) {
+      result.failures.push(`加载时缺「${unit}」级 TTL 行：${textsBefore.join(' | ')}`)
+    }
+  }
+
+  const expRows = (result.afterExpiry || []).filter((r) => r.expired)
+  if (expRows.length !== 1) {
+    result.failures.push(`到点后应有且仅有 1 行变「已过期」（实际 ${expRows.length} 行；说明界面没跟时间自翻，或翻错了行）`)
+  } else {
+    const e = expRows[0]
+    if (e.text !== '已过期，无法取回') result.failures.push(`过期行文案不对：${e.text}`)
+    if (e.rowOpacity !== '0.55') result.failures.push(`过期行未整行灰化（opacity=${e.rowOpacity}）`)
+    if (!String(e.nameDecoration || '').includes('line-through')) {
+      result.failures.push(`过期行「发件人名」没有删除线（text-decoration=${e.nameDecoration}）`)
+    }
+    if (e.downloadDisabled !== true) result.failures.push('过期行下载按钮没有置灰')
+  }
+  for (const t of textsAfter) if (!pat.test(t)) result.failures.push(`TTL 文案不合规：${t}`)
+  for (const unit of ['小时', '分钟', '天']) {
+    if (!textsAfter.some((t) => t.includes(unit))) {
+      result.failures.push(`到点后的同一屏缺「${unit}」级 TTL 行：${textsAfter.join(' | ')}`)
+    }
+  }
+  if (result.rowsStillListed !== 4) {
+    result.failures.push(`到点后行数应为 4（行应留在列表里变灰，而不是消失）：实际 ${result.rowsStillListed}`)
+  }
+  if (result.serverState?.state !== 'EXPIRED') {
+    result.failures.push(`服务端此刻应为 EXPIRED（前后端口径一致）：${JSON.stringify(result.serverState)}`)
+  }
+  const statsText = result.stats || ''
   for (const want of ['今日已取走', '今日流量', '今日新建', '累计已取走', '累计流量', '累计新建']) {
     if (!statsText.includes(want)) result.failures.push(`平台统计区块缺「${want}」`)
   }
@@ -223,7 +274,8 @@ try {
     exitCode = 1
     console.error('界面证据未通过：\n- ' + result.failures.join('\n- '))
   } else {
-    console.log(`界面证据通过：TTL ${result.ttl.map((t) => t.text).join(' / ')}；平台统计区块 ${result.stats.rows.length} 格`)
+    console.log(`界面证据通过：首屏自动 ${result.inboxAuto} 行；${SHORT_TTL}s 那条在 ${result.waitMs}ms 后自翻「已过期」，`
+      + `服务端 state=${result.serverState.state}；同屏文案 ${textsAfter.join(' / ')}`)
   }
 } catch (err) {
   exitCode = 1
