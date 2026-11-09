@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * v5 前端三块的证据脚本（可复跑，失败非 0 退出）。
+ * v5 前端三块的**取证脚本**（可复跑，失败非 0 退出）。**不是门禁**——
+ * 门禁是 `npm run check`（`node --test` + `vite build`）；这里要起真服务端、真 Chromium、
+ * 等 `/v1/stats` 的 60s 进程内缓存过期，跑批时长敏感，不适合当合入门槛。
  *
  * 覆盖：
  *   ① TTL 可见：真发 4 笔（1 笔大文件 + 3 笔小文件），把 3 笔小文件的 `expires_at`
@@ -172,6 +174,9 @@ let server = null
 const procs = []
 let exitCode = 0
 
+/** 采样留「首 12 + 末 12」：既能证明从 1% 起步，也能证明走完 100% / saved=true */
+const tail = (arr) => (arr.length <= 24 ? arr : [...arr.slice(0, 12), ...arr.slice(-12)])
+
 const check = (ok, label, detail) => {
   result.checks.push({ ok: Boolean(ok), label, detail })
   if (!ok) result.failures.push(`${label}（${JSON.stringify(detail)}）`)
@@ -293,7 +298,7 @@ try {
   await sleep(1200)
   const sentTtl = await evalJs(cA, `document.querySelector('.done .ttl')?.textContent?.trim() || ''`)
   result.doneDebug = await evalJs(cA, `document.querySelector('.done')?.innerText || '(no .done)'`)
-  result.send = { samples: sendSamples.slice(0, 12), lastSample: sampled, doneTtl: sentTtl }
+  result.send = { samples: tail(sendSamples), lastSample: sampled, count: sendSamples.length, doneTtl: sentTtl }
   check(sendSamples.some((s) => /\d+(\.\d+)?\s*(MB|KB)\/s/.test(s.speed)), '发送速度行有真实速率数字', sendSamples[0])
   check(sendSamples.some((s) => /剩|即将完成/.test(s.eta)), '发送 ETA 有真实文案', sendSamples.find((s) => s.eta))
   check(sendSamples.some((s) => /MB \/ |GB \/ /.test(s.pair)), '已传/总大小为 x/y 形式', sendSamples.find((s) => s.pair))
@@ -306,14 +311,17 @@ try {
     await until(async () => evalJs(cA, `!!document.querySelector('.done .seal')`), { what: `第 ${i} 笔小传输完成`, timeout: 120_000 })
     await sleep(300)
   }
-  const rows = await psql(
-    `SELECT transfer_id, expires_at FROM transfers WHERE recipient_code = '${peerCode}' AND state = 'READY' ORDER BY created_at DESC LIMIT 3`,
+  const ids = await until(
+    async () => {
+      const rows = await psql(
+        `SELECT transfer_id FROM transfers WHERE recipient_code = '${peerCode}' AND state = 'READY'
+           AND plaintext_size < 2097152 ORDER BY created_at DESC LIMIT 3`,
+      )
+      const got = rows.split('\n').map((l) => l.split('|')[0]).filter(Boolean)
+      return got.length === 3 ? got : null
+    },
+    { what: '3 笔小传输落成 READY', timeout: 60_000, every: 1000 },
   )
-  const ids = rows
-    .split('\n')
-    .map((l) => l.split('|')[0])
-    .filter(Boolean)
-  if (ids.length < 3) throw new Error(`库里只有 ${ids.length} 笔可改的 READY 传输`)
   await psql(`UPDATE transfers SET expires_at = now() + interval '43 minutes' WHERE transfer_id = '${ids[0]}'`)
   await psql(`UPDATE transfers SET expires_at = now() + interval '50 hours' WHERE transfer_id = '${ids[1]}'`)
   // 第三笔 20 秒后到期：#49 之后「过期即终结」，/v1/inbox 不再返回过期的行，
@@ -351,10 +359,10 @@ try {
   check(expiredRow.btnDisabled, '过期行下载置灰', expiredRow)
   check(expiredRow.rowExpiredClass && expiredRow.rowOpacity < 0.8, '过期行整行灰化', expiredRow)
   check(/line-through/.test(expiredRow.nameDecoration || ''), '过期行文件名删除线', expiredRow)
-  result.shots.push(await shot(cB, join(OUT, 'ttl-three-states-390x844.png')))
+  result.shots.push(await shot(cB, join(OUT, 'ttl-four-states-390x844.png')))
   await setViewport(cB, 1440, 900, false)
   await sleep(400)
-  result.shots.push(await shot(cB, join(OUT, 'ttl-three-states-1440x900.png')))
+  result.shots.push(await shot(cB, join(OUT, 'ttl-four-states-1440x900.png')))
   await setViewport(cB, 390, 844, true)
 
   // ── ② 接收侧：点下载 → 两段进度 + 速度行 ────────────────────
@@ -409,7 +417,8 @@ try {
     recvFail = e.message
   })
   result.recv = {
-    samples: recvSamples.slice(0, 12),
+    samples: tail(recvSamples),
+    count: recvSamples.length,
     fail: recvFail,
     console: cB.events
       .filter((e) => e.method === 'Runtime.consoleAPICalled' || e.method === 'Log.entryAdded')
@@ -437,9 +446,15 @@ try {
   result.shots.push(await shot(cB, join(OUT, 'received-done-390x844.png')))
 
   // ── ④ 平台统计：API 真数字 vs 界面翻牌器 ────────────────────
-  // 服务端 /v1/stats 有 60s 进程内缓存，等过缓存窗再取，避免读到取件前的旧值。
-  await sleep(62_000)
-  const stats = await (await fetch(`${API}/v1/stats`)).json()
+  // 服务端 /v1/stats 有 60s 进程内缓存：轮询到「真数字」为止（最多 3 分钟），不靠固定 sleep 赌。
+  const stats = await until(
+    async () => {
+      const s = await fetch(`${API}/v1/stats`).then((r) => r.json()).catch(() => null)
+      const wantBytes = SIZE_MB * 1048576 * 0.9
+      return s && s.today?.consumed >= 1 && s.today?.consumed_bytes >= wantBytes ? s : null
+    },
+    { what: '/v1/stats 出真数字（60s 进程内缓存）', timeout: 180_000, every: 3000 },
+  )
   result.stats = { api: stats }
   await evalJs(cA, `location.reload()`)
   await sleep(3500)
