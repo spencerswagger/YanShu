@@ -16,17 +16,19 @@ CREATE TABLE IF NOT EXISTS stats_counters (
 );
 
 -- 回填：历史数据一次性聚合（按终结日期 / 创建日期分桶）。
+-- 日界**显式 UTC 化**：`terminal_at::date` 会按会话 TimeZone 截断，部署环境不是 UTC 时
+-- 回填与运行时会把同一个"今天"分到两个桶（ADR-0002 §2.2），故用 (ts AT TIME ZONE 'UTC')::date。
 INSERT INTO stats_counters (day, consumed, consumed_bytes, created)
-SELECT terminal_at::date, count(*), COALESCE(sum(plaintext_size), 0), 0
+SELECT (terminal_at AT TIME ZONE 'UTC')::date, count(*), COALESCE(sum(plaintext_size), 0), 0
 FROM transfers
 WHERE state = 'CONSUMED' AND terminal_at IS NOT NULL
-GROUP BY terminal_at::date
+GROUP BY (terminal_at AT TIME ZONE 'UTC')::date
 ON CONFLICT (day) DO UPDATE
 SET consumed = EXCLUDED.consumed, consumed_bytes = EXCLUDED.consumed_bytes;
 
 INSERT INTO stats_counters (day, consumed, consumed_bytes, created)
-SELECT created_at::date, 0, 0, count(*)
+SELECT (created_at AT TIME ZONE 'UTC')::date, 0, 0, count(*)
 FROM transfers
-GROUP BY created_at::date
+GROUP BY (created_at AT TIME ZONE 'UTC')::date
 ON CONFLICT (day) DO UPDATE
 SET created = EXCLUDED.created;

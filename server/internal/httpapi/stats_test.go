@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -113,5 +114,65 @@ func BenchmarkStatsEndpoint(b *testing.B) {
 			b.Fatal(err)
 		}
 		_ = resp.Body.Close()
+	}
+}
+
+// 统计不可用时必须是 503 SERVICE_UNAVAILABLE（API.md §4.6），不是 500 INTERNAL：
+// 前端按"静默降级隐藏区块"处理，报成内部错误会误导排查方向。
+func TestStatsFailureIs503(t *testing.T) {
+	e := newEnv(t, "")
+	e.api.statsTTL = 0
+	if _, err := e.st.Pool().Exec(context.Background(), `DROP TABLE stats_counters`); err != nil {
+		t.Fatalf("drop counters: %v", err)
+	}
+	e.wantError(e.do(http.MethodGet, spec.PathStats, nil, nil), spec.ErrServiceUnavailable)
+}
+
+// 未知查询参数仍 400（回归：不要因为加了缓存/降级而放过参数白名单）。
+func TestStatsUnknownParamIs400(t *testing.T) {
+	e := newEnv(t, "")
+	e.wantError(e.do(http.MethodGet, spec.PathStats+"?limit=10", nil, nil), spec.ErrBadRequest)
+}
+
+// 匿名只读端点不写审计行（ADR-0002 §2.4）：首页轮询不能变成持续写库；
+// 有身份/有副作用的请求照常审计。
+func TestAnonymousReadOnlyEndpointsWriteNoAudit(t *testing.T) {
+	e := newEnv(t, "")
+	e.api.statsTTL = 0
+	count := func() int {
+		t.Helper()
+		var n int
+		if err := e.st.Pool().QueryRow(context.Background(),
+			`SELECT count(*) FROM audit_events`).Scan(&n); err != nil {
+			t.Fatalf("count audit: %v", err)
+		}
+		return n
+	}
+
+	e.do(http.MethodGet, spec.PathHealthz, nil, nil) // 预热：不参与断言
+	before := count()
+	for i := 0; i < 20; i++ {
+		if resp := e.do(http.MethodGet, spec.PathStats, nil, nil); resp.status != http.StatusOK {
+			t.Fatalf("stats %d: %d", i, resp.status)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		if resp := e.do(http.MethodGet, spec.PathConfig, nil, nil); resp.status != http.StatusOK {
+			t.Fatalf("config %d: %d", i, resp.status)
+		}
+	}
+	if after := count(); after != before {
+		t.Fatalf("anonymous read-only endpoints must not write audit rows: %d -> %d", before, after)
+	}
+
+	// 有身份的端点：审计不能漏。
+	code, _ := e.register("audited")
+	hdrs := e.authHeaders(spec.PurposeInboxList, code) // 挑战请求本身也会审计
+	base := count()
+	if resp := e.do(http.MethodGet, spec.PathInbox, nil, hdrs); resp.status != http.StatusOK {
+		t.Fatalf("inbox: %d %s", resp.status, resp.body)
+	}
+	if got := count(); got != base+1 {
+		t.Fatalf("signed endpoint must write exactly one audit row: %d -> %d", base, got)
 	}
 }

@@ -203,6 +203,13 @@ const (
 	// RedactAfter 是终结后**敏感列**的脱敏时限（v5）：到时把 uploader_ip /
 	// prelude_sm3 / upload_token_sm3 置 NULL。终结元数据本身**永久保留**（不再按时间删除）。
 	RedactAfter = 30 * 24 * time.Hour
+	// AuditRetention 是审计行保留期（ADR-0002 §2.4：90 天）。审计只覆盖有身份/有副作用的请求，
+	// 匿名只读端点（/v1/stats、/v1/config、/healthz）不落审计行，只留访问日志。
+	AuditRetention = 90 * 24 * time.Hour
+	// ReconcileInterval 是统计对账间隔（ADR-0002 §2.3：每日一次）。
+	ReconcileInterval = 24 * time.Hour
+	// DriftThreshold 是对账告警阈值（ADR-0002 §2.3：偏差 > 0.1% 报警）。
+	DriftThreshold = 0.001
 	// UploadTokenTTL 是 upload_token 的有效期（上传 6 小时）。
 	UploadTokenTTL = 6 * time.Hour
 	// IdempotencyWindow 是 POST /transfers 的幂等窗口（API.md §6.2：600 秒）。

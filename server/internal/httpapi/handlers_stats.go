@@ -25,12 +25,12 @@ func (a *API) handleStats(w http.ResponseWriter, r *http.Request) {
 		now := a.now()
 		todayConsumed, todayBytes, todayCreated, err := a.store.DayStats(r.Context(), now)
 		if err != nil {
-			a.internalError(w, r, "stats today", err)
+			a.statsUnavailable(w, r, "stats today", err)
 			return
 		}
 		totalConsumed, totalBytes, totalCreated, err := a.store.TotalStats(r.Context())
 		if err != nil {
-			a.internalError(w, r, "stats total", err)
+			a.statsUnavailable(w, r, "stats total", err)
 			return
 		}
 		resp = spec.StatsResponse{
@@ -54,4 +54,12 @@ func (a *API) handleStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("CDN-Cache-Control", "no-store")
 	w.Header().Set("Surrogate-Control", "no-store")
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// statsUnavailable 是统计不可用时的对外表现：契约要求 503 SERVICE_UNAVAILABLE
+// （API.md §4.6「失败」），不是 500 INTERNAL —— 统计是只读的旁路数据，
+// 取不到应当让前端**静默降级隐藏区块**，而不是报成服务端内部错误。
+func (a *API) statsUnavailable(w http.ResponseWriter, r *http.Request, op string, err error) {
+	a.log.Error("stats unavailable", "op", op, "requestId", requestIDFrom(r), "err", err.Error())
+	fail(w, r, spec.ErrServiceUnavailable)
 }

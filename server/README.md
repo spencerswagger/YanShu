@@ -193,7 +193,21 @@ log_path=/var/log/yanshu/server.log
 | `YANSHU_WS_URL` | 否 | 空 | `/v1/config` 下发的 `ws_url` |
 | `YANSHU_STORAGE_QUOTA_BYTES` | 否 | `8GiB` | 单 IP 未取走密文总量上限（超出 → `507 INSUFFICIENT_STORAGE`） |
 | `YANSHU_SWEEP_INTERVAL` | 否 | `30s` | 清理任务周期（Go duration） |
+| `YANSHU_AUDIT_RETENTION_DAYS` | 否 | `90` | `audit_events` 保留天数（随清理任务分批删除，ADR-0002 §2.4）；匿名只读端点（`/v1/stats`、`/v1/config`、`/healthz`）不写审计行 |
 | `YANSHU_SHUTDOWN_TIMEOUT` | 否 | `10s` | 优雅退出超时（Go duration） |
+
+### 统计对账与告警
+
+清理任务每天对账一次（UTC 昨日）：把 `stats_counters`（派生）与 `transfers` 真实行比对
+（`consumed`/`consumed_bytes` 按 `terminal_at` 落桶，`created` 按 `created_at` 落桶），
+偏差 > **0.1%** 时打一条 ERROR 日志：
+
+```
+level=ERROR msg="stats drift alert" alert=stats_drift day=2026-11-09 deviation=...
+```
+
+部署方的告警通道按 **`alert=stats_drift`** 关键字抓这一行即可（也可在代码里接 `Sweeper.OnDrift`）。
+`GET /v1/stats` 的日界是 **UTC 00:00:00Z**，与数据库会话时区无关（日志里不会出现「本地日」桶）。
 
 **限速阈值目前没有 env 开关**：默认值在 `internal/spec/limits.go`（按 IP/按码/按传输各档），
 要线上调需要改代码发版；这是 v1 的已知限制，不是漏写。

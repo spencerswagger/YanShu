@@ -60,6 +60,8 @@ type Config struct {
 	LogDir string
 	// LogRetentionDays 是滚动日志的保留天数（默认 7）。
 	LogRetentionDays int
+	// AuditRetentionDays 是审计行保留天数（ADR-0002 §2.4，默认 90）。
+	AuditRetentionDays int
 
 	SweepInterval   time.Duration
 	ShutdownTimeout time.Duration
@@ -131,21 +133,22 @@ func isLoopbackHost(host string) bool {
 // Load 从环境变量构造配置。
 func Load() (Config, error) {
 	c := Config{
-		Addr:              env("YANSHU_ADDR", ":8080"),
-		Env:               os.Getenv("YANSHU_ENV"),
-		DatabaseURL:       os.Getenv("YANSHU_DATABASE_URL"),
-		BlobDir:           env("YANSHU_BLOB_DIR", "./data/blobs"),
-		Verifier:          VerifierMode(env("YANSHU_VERIFIER", string(VerifierStubDeny))),
-		TrustProxyHeaders: envBool("YANSHU_TRUST_PROXY", false),
-		STUNURLs:          envList("YANSHU_STUN_URLS", []string{"stun:stun.l.google.com:19302"}),
-		WSURL:             env("YANSHU_WS_URL", ""),
-		StorageQuotaBytes: envInt64("YANSHU_STORAGE_QUOTA_BYTES", 8<<30),
-		KernelWASM:        os.Getenv("YANSHU_KERNEL_WASM"),
-		LogFile:           os.Getenv("YANSHU_LOG_FILE"),
-		LogDir:            os.Getenv("YANSHU_LOG_DIR"),
-		LogRetentionDays:  int(envInt64("YANSHU_LOG_RETENTION_DAYS", 7)),
-		SweepInterval:     envDuration("YANSHU_SWEEP_INTERVAL", 30*time.Second),
-		ShutdownTimeout:   envDuration("YANSHU_SHUTDOWN_TIMEOUT", 10*time.Second),
+		Addr:               env("YANSHU_ADDR", ":8080"),
+		Env:                os.Getenv("YANSHU_ENV"),
+		DatabaseURL:        os.Getenv("YANSHU_DATABASE_URL"),
+		BlobDir:            env("YANSHU_BLOB_DIR", "./data/blobs"),
+		Verifier:           VerifierMode(env("YANSHU_VERIFIER", string(VerifierStubDeny))),
+		TrustProxyHeaders:  envBool("YANSHU_TRUST_PROXY", false),
+		STUNURLs:           envList("YANSHU_STUN_URLS", []string{"stun:stun.l.google.com:19302"}),
+		WSURL:              env("YANSHU_WS_URL", ""),
+		StorageQuotaBytes:  envInt64("YANSHU_STORAGE_QUOTA_BYTES", 8<<30),
+		KernelWASM:         os.Getenv("YANSHU_KERNEL_WASM"),
+		LogFile:            os.Getenv("YANSHU_LOG_FILE"),
+		LogDir:             os.Getenv("YANSHU_LOG_DIR"),
+		LogRetentionDays:   int(envInt64("YANSHU_LOG_RETENTION_DAYS", 7)),
+		AuditRetentionDays: int(envInt64("YANSHU_AUDIT_RETENTION_DAYS", 90)),
+		SweepInterval:      envDuration("YANSHU_SWEEP_INTERVAL", 30*time.Second),
+		ShutdownTimeout:    envDuration("YANSHU_SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
 	if secret := os.Getenv("YANSHU_TOKEN_SECRET"); secret != "" {
 		c.TokenSecret = []byte(secret)
@@ -189,6 +192,9 @@ func Load() (Config, error) {
 	}
 	if c.SweepInterval <= 0 {
 		return Config{}, fmt.Errorf("config: YANSHU_SWEEP_INTERVAL must be positive")
+	}
+	if c.AuditRetentionDays <= 0 {
+		return Config{}, fmt.Errorf("config: YANSHU_AUDIT_RETENTION_DAYS must be positive")
 	}
 	return c, nil
 }
