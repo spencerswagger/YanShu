@@ -43,17 +43,17 @@ python3 qa/evidence/release/clean_env_selftest.py \
 | 8 | 真收真发 B | 留一条 `READY`，记录 prelude/chunk sha256 | 给重启比对留样本 |
 | 9 | 契约 §1.7.4 | 终结态上传 = `410 TRANSFER_CONSUMED`（不是 401） | 规则真跑，不是文档写着 |
 | 10 | 契约 §1.7.4 | 未终结 + 伪造凭据 = `401 AUTH_TOKEN_INVALID` | 阴性对照，防"一律 410" |
-| 11 | 契约 §0.2 | 未路由路径 = 404 JSON 信封 | main 未含 #58 时记 **WARN**（不算通过、也不算失败） |
+| 11 | 契约 §0.2 | 未路由路径 = 404 JSON 信封 | 规则真跑；ref 未含 #58 时记 **WARN**（不算通过、也不算失败） |
 | 12 | 建索引锁写 | 普通 `CREATE INDEX` 期间单条写 >300ms；`CONCURRENTLY` <300ms | 迁移不会挡写 |
 | 13 | down | `SIGTERM` 后 exit=0 | 优雅退出 |
 | 14 | down && up 密钥不变 | 每次 `up` 前重跑一遍 compose init，再比 secrets 两文件 sha256 前后一致 | 重启不换密钥（init 若被改成重新生成，这条会红） |
 | 15 | 重启后密文不变 | 同一 transfer 的 prelude/chunk sha256 与重启前相同 | 数据没被搬坏 |
 | 16 | 重启后旧凭据仍可用 | 旧 `upload_token` 打 status = 200 | 重启不把用户凭据作废（**注意**：这不能证明 secret 没换，`upload_token` 校验只比 SM3，secret 只作派生盐） |
 
-## 预期输出样例（2026-11-11 03:39 CST 真跑，main `200d26b`）
+## 预期输出样例（2026-11-11 03:52 CST 真跑，main `47b7740`）
 
 ```
-PASS  纯净检出（无 .git、空数据目录）                commit=200d26b350c3 files=498
+PASS  纯净检出（无 .git、空数据目录）                commit=47b7740cecf5 files=535
 PASS  新库是空的（迁移前 public 无表）              tables=0
 PASS  secrets 首次生成（0600，hex）               sha256={'token_secret': '…'} mode={'token_secret': '0o600'…}
 PASS  首次启动（空数据目录 + 新库，迁移自动落库）      healthz=200 log=…/selftest-server.log
@@ -63,18 +63,18 @@ PASS  ack 后密文物理删除                          残留=False
 PASS  真收真发 B：留一条 READY 供 down/up 后比对     tid=… sha={'prelude': '88e785f8ea'…}
 PASS  契约 §1.7.4：终结态上传必须 410（且不返回 401）  410 TRANSFER_CONSUMED
 PASS  契约 §1.7.4：未终结 + 伪造凭据必须 401 …       401 AUTH_TOKEN_INVALID
-WARN  契约 §0.2：未路由路径必须是错误信封             404 text/plain（main 未含 #58，记 SKIP 不算通过）
-PASS  建索引期间写入不被阻塞（普通 vs CONCURRENTLY）  普通建索引 12xx ms/写最长 11xx ms；CONCURRENTLY …/写最长 <300ms
+PASS  契约 §0.2：未路由路径必须是错误信封             404 ROUTE_NOT_FOUND
+PASS  建索引期间写入不被阻塞（普通 vs CONCURRENTLY）  普通建索引 1613ms/写最长 1589.2ms；CONCURRENTLY 1449ms/写最长 75.4ms
 PASS  down：进程正常退出                          exit=0
 PASS  down && up 后 secrets sha256 不变          token=… pg=…
 PASS  重启后取回同一密文 sha256 不变               before=88e785f8ea… after=88e785f8ea…
 PASS  重启后旧 upload_token 仍可用（凭据不因重启失效）  status=200
-PASS 15　WARN(SKIP) 1　FAIL 0　共 16 项　结论：PASS
+PASS 16　WARN(SKIP) 0　FAIL 0　共 16 项　结论：PASS
 ```
 
-（完整原始日志与 JSON 在 `results/`，每次运行带 UTC 时间戳与二进制 sha256。上面 `WARN` 不影响退出码，
-它只说明"main 还没合 #58"；#58 合入后这项会自动转 PASS，不需要改脚本。`--skip-index` / `--skip-restart`
-跳过的项也记 WARN，所以汇总行会把 PASS / WARN / FAIL **分开计数**，不会把没跑的算成通过。）
+（完整原始日志与 JSON 在 `results/`，每次运行带 UTC 时间戳与二进制 sha256。`--skip-index` / `--skip-restart`
+跳过的项记 WARN，汇总行把 PASS / WARN / FAIL **分开计数**，不会把没跑的算成通过。若 `--ref` 指向的树
+还没合 #58，§0.2 那项会是 WARN —— 脚本不冒充通过。）
 
 ## 自检：这两条"密钥不变"真能红吗
 

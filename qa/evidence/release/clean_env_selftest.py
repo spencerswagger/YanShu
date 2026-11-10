@@ -435,8 +435,10 @@ def main(argv=None) -> int:
                 st401 == 401 and code401 == "AUTH_TOKEN_INVALID", f"{st401} {code401}")
 
         stx, raw = c.call("GET", "/v1/definitely-not-an-endpoint")
+        # ysv5.Client.call 已经按 content-type 解过 JSON（这里拿到的是 dict），
+        # 只有非 JSON 响应（例如未合 #58 时的 text/plain）才是 bytes —— 别再对 dict 调 json.loads。
         try:
-            obj = json.loads(raw) if raw else {}
+            obj = raw if isinstance(raw, dict) else (json.loads(raw) if raw else {})
             is_env = isinstance(obj.get("error"), dict) and bool(obj["error"].get("code"))
             codex = (obj.get("error") or {}).get("code", "")
         except Exception:  # noqa: BLE001
