@@ -210,9 +210,19 @@ try {
   result.afterExpiry = await evaluate(c, READ_TTL)
   result.rowsStillListed = result.afterExpiry.length
 
-  // 服务端同一时刻的口径：该传输必须已 EXPIRED（读路径即时终结）
-  const st = await fetch(`${API}/v1/transfers/${shortId}`)
-  const body = await st.json().catch(() => ({}))
+  // 服务端口径：该传输必须 EXPIRED。注意契约里 `expires_at`/`server_time` 都是**秒级**，
+  // 前端可能比库内精确时刻早 ≤1s 翻，所以这里给最多 5s 的收敛窗口（并记录等待毫秒数），
+  // 而不是"翻的瞬间必须已 EXPIRED"——那会把秒级截断当成缺陷。
+  const tSrv = Date.now()
+  let st = null
+  let body = {}
+  for (;;) {
+    st = await fetch(`${API}/v1/transfers/${shortId}`)
+    body = await st.json().catch(() => ({}))
+    if (body.state === 'EXPIRED' || Date.now() - tSrv > 5000) break
+    await sleep(100)
+  }
+  result.serverStateWaitMs = Date.now() - tSrv
   result.serverState = { status: st.status, state: body.state, terminal_reason: body.terminal_reason }
 
   result.shots.push(await shot(c, join(OUT, 'ttl-after-expiry-1440x900.png')))
