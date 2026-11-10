@@ -55,7 +55,7 @@ func run() error {
 		fmt.Printf("kernel_sha256=%s\nys_version=0x%08x\nexports=%d\nallowlisted=%t\n",
 			ki.SHA256, ki.Version, ki.Exports, ok)
 		if !ok {
-			return fmt.Errorf("kernel sha256 %s is not in the frozen allowlist (expected %s)",
+			return fmt.Errorf("kernel sha256 %s is not in the frozen allowlist (expected one of: %s)",
 				ki.SHA256, auth.FrozenKernelSHA256List())
 		}
 		return nil
@@ -154,7 +154,7 @@ func run() error {
 	if info, ok := verifier.(interface{ Info() auth.KernelInfo }); ok {
 		ki := info.Info()
 		if !auth.FrozenKernelSHA256[ki.SHA256] {
-			return fmt.Errorf("kernel sha256 %s is not in the frozen allowlist (expected %s); refusing to start",
+			return fmt.Errorf("kernel sha256 %s is not in the frozen allowlist (expected one of: %s); refusing to start",
 				ki.SHA256, auth.FrozenKernelSHA256List())
 		}
 		log.Info("kernel verified", "sha256", ki.SHA256, "version", fmt.Sprintf("0x%08x", ki.Version), "exports", ki.Exports)

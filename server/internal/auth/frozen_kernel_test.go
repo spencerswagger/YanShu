@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -46,7 +47,13 @@ func TestCurrentKernelIsFirstAndShipsInRepo(t *testing.T) {
 		t.Fatalf("CurrentFrozenKernelSHA256()=%s，order[0]=%s", got, want)
 	}
 
-	path := filepath.Join("..", "..", "kernel", "yanshu_sm.wasm")
+	// 用 runtime.Caller 定位包目录：`go test -c` 出来的二进制换 cwd 跑也能找到，
+	// 不会因为 cwd 不同静默 skip 掉这条"白名单首条 == 仓库产物"的断言。
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller 失败，无法定位包目录")
+	}
+	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "kernel", "yanshu_sm.wasm")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Skipf("跳过与仓库产物比对（读不到 %s：%v）", path, err)
