@@ -612,9 +612,9 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**）；响�
 **保留与脱敏（写死）**——与上段「TTL 即时判定」是**两件不同的事**，互不覆盖：上段定「**到期与否**」（由请求时刻判定，即时生效），本段定「**终结后留多久**」（行不删、只脱敏）。到期不因保留期长而延迟，保留也不因到期而缩短。
 
 - **终结记录永久保留**（不再有 7 天清理期）。因此对已终结的 `transfer_id` 查询**恒为 `200` + tombstone**，不会因为时间推移变成 `404`。
-- **终结后 30 天，三个字段置 `NULL` 脱敏**：`uploader_ip`、`prelude_sm3`、`upload_token_sm3`；其余字段（`created_at`、`expires_at`、`terminal_at`、`plaintext_size`、`chunk_count`、`state`、`terminal_reason`、`download_count`）**永久保留**，用于聚合计数与审计。
+- **终结后 30 天，四个字段置 `NULL` 脱敏**（三列在 `transfers`、一列在 `transfer_chunks`）：`transfers.uploader_ip`、`transfers.prelude_sm3`、`transfers.upload_token_sm3`、`transfer_chunks.ciphertext_sm3`（块级密文指纹，与 `prelude_sm3` 同属内容指纹）。其余字段——`transfers` 的 `created_at`、`expires_at`、`terminal_at`、`plaintext_size`、`chunk_size`、`chunk_count`、`state`、`terminal_reason`、`download_count`、`max_downloads`、`total_ciphertext_bytes`、`sender_code`、`recipient_code`，以及 `transfer_chunks` 的 `chunk_index`、`length`、`stored_at`——**永久保留**，用于聚合计数与审计。
 - **保留 ≠ 可取件**：`REVOKED`/`EXPIRED`/`CONSUMED` 三种终结态下，`GET /prelude` 与 `GET /chunks/{i}` 一律 `410`（见上表），与保留期无关。
-- **脱敏不改变任何响应字段集**：tombstone 响应本来就不含 `prelude_sm3`（§7.2 已写死字段集），`uploader_ip`/`upload_token_sm3` 从未对外返回；因此 30 天脱敏对客户端**不可观测**，客户端 MUST NOT 依赖这三列的任何取值。
+- **脱敏不改变任何响应字段集**：tombstone 响应本来就不含 `prelude_sm3`（§7.2 已写死字段集），`uploader_ip`/`upload_token_sm3`/`ciphertext_sm3` 从未对外返回；因此 30 天脱敏对客户端**不可观测**，客户端 MUST NOT 依赖这四个字段的任何取值。
 - **脱敏不影响限流**：按 IP 的存储配额只核算**尚未终结**（`UPLOADING`/`READY`/`LEASED`）的传输——终结态密文已物理删除，不计入占用。因此 `uploader_ip` 在终结满 30 天被置 NULL，对限流与配额核算**无影响**。
 
 ### 5.3 三种终结态的语义差异（客户端处置）
