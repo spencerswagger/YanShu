@@ -71,6 +71,16 @@
 - 4 位 Crockford Base32 用户码；撞码时**客户端重新生成密钥对**。
 - 私钥只在本机（IndexedDB），不上传、不备份、无导出接口。
 
+### 0.4 客户端时间基准（跨端统一，禁止用本机钟算有效期）
+
+服务端返回的一切绝对时间（`expires_at`、`lease_expires_at`、`generated_at`）都是 **UTC RFC 3339**。客户端 **MUST NOT** 用本机 `Date.now()` 直接与这些字段相减——设备钟可能偏几分钟到几小时，偏差会直接把"还能取件"显示成"已过期"（或反之）。
+
+- **基准**：优先用 `/v1/config` 的 `server_time`（§4.1，UTC 秒级），退化到响应头 `Date`；算 `offset = serverTime - performance.now()`，之后用**单调时钟** `performance.now() + offset` 推进。
+- **刷新**：**不轮询**；页面重新可见（`visibilitychange`）或收到新的 `Date` 头时重算一次 offset，不累积误差。
+- **一致性**：同一屏里"剩余时间展示"与"过期判定（置灰/禁点）" MUST 用同一基准；不允许一处用服务端基准、一处用本机钟。
+- **有效期来源**：发送侧 MUST 用 `POST /v1/transfers` 响应里的 `expires_at`（服务端已按 `[3600, 86400]` 夹取），MUST NOT 用本地 `ttl_seconds` 默认值自算——部署可把 TTL 配得更短（§1.5）。
+- 该规则对所有端（Web 与后续端）一致，属契约层，不由各端自定。
+
 ---
 
 ## 1. 身份、码与鉴权
@@ -307,7 +317,13 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 凭据超过自身有效期：**上传 6 小时** / **下载租约 30 分钟** | 401 | `AUTH_TOKEN_EXPIRED` | 上传走 §1.7.5 重签发（已传块不重传）；下载重新 `GET /prelude` 取新租约 |
 | 传输进入终态 | 410 | `TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` | 停止并清理本地 |
 
-**判定顺序写死（四类）**：`KID` 不符 → `AUTH_TOKEN_STALE`；值不对/不存在/格式错 → `AUTH_TOKEN_INVALID`；超期 → `AUTH_TOKEN_EXPIRED`；最后才是传输状态 `409`/`410`。即先凭据（401）、后状态（410）；凭据内部**先 `KID`、再值、再有效期**。
+**判定顺序写死（四类）**：**先判资源终结态**（`REVOKED`/`EXPIRED`/`CONSUMED` → `410`，见 §5.2），资源未终结时才走凭据校验——`KID` 不符 → `AUTH_TOKEN_STALE`；值不对/不存在/格式错 → `AUTH_TOKEN_INVALID`；超期 → `AUTH_TOKEN_EXPIRED`；最后才是 `409` 状态冲突。即**终结态（410）先于凭据（401），凭据内部先 `KID`、再值、再有效期**。
+
+**为什么终结态排在凭据之前（写死）**：传输终结（TTL 到期 / 撤回 / 取走）**不可恢复**，重签发凭据也救不回来。若先回 `401`，客户端会按 §1.7.5 走一遍"重新挑战 → 签名 → 取新凭据"，拿到新凭据后仍然是 `410`——白跑一轮，还会让用户以为"再试一次就好"。因此：
+
+- 传输已终结 → 一律 `410 TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED`（按实际终态取对应码），**不返回**任何 `401`（即 `AUTH_TOKEN_STALE` / `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` 一个都不出现），即使凭据同时不存在 / 已被轮换 / 已超期；
+- 传输未终结 → 上表优先级**原样生效**；`AUTH_TOKEN_STALE` 的「一律」只在资源未终结时成立，不得用来顶替 `410`；
+- 客户端按状态码分叉：`410 TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` → **停止重试、清理本地半成品，不要重取凭据**；`401 AUTH_TOKEN_STALE` / `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` → 才走重签 / 重取租约（§1.7.5）。两者处置互斥，把 `410` 当"凭据问题"重试会一直撞同一堵墙。
 
 **三码的触发位置（便于构造用例）**：`STALE` 在**第 ① 步**（比 `KID`）触发，需要一次版本轮换；`INVALID` 在**第 ② 步**（比 `SM3(token)`）触发，构造方式为错 token / 格式错 / 别的传输的 token；`EXPIRED` 在**第 ③ 步**（比有效期）触发，需把上传 6 h 或租约 30 min 调短、或构造过期记录。"在线路上正常流转的凭据**不会**触发 `INVALID`/`EXPIRED`，所以这两个码只能用针对性用例验证。
 
@@ -385,10 +401,11 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 域 | 字段 |
 |---|---|
 | 码 | `code`、`public_key`、`nickname`、`registered_at`、`updated_at` |
-| 传输 | `transfer_id`、`sender_code`、`recipient_code`、`plaintext_size`、`chunk_size`、`chunk_count`、`prelude_len`、`prelude_sm3`、`total_ciphertext_bytes`、`created_at`、`expires_at`、`state`、`terminal_reason`、`terminal_at`、`download_count`、`max_downloads`、`uploader_ip`（派生列，仅用于按 IP 配额与反滥用）、`updated_at` |
-| 块 | `transfer_id`、`index`、`length`、`ciphertext_sm3`（幂等比对用）、`stored_at` |
+| 传输 | `transfer_id`、`sender_code`、`recipient_code`、`plaintext_size`、`chunk_size`、`chunk_count`、`prelude_len`、`prelude_sm3`、`total_ciphertext_bytes`、`created_at`、`expires_at`、`state`、`terminal_reason`、`terminal_at`、`download_count`、`max_downloads`、`uploader_ip`（派生列，仅用于按 IP 配额与反滥用）、`ciphertext_purged_at`（派生列，密文删除水位，仅用于让兜底清理逐批推进；无内容语义）、`updated_at` |
+| 块 | `transfer_id`、`chunk_index`（库内列名；HTTP 路径参数写作 `{index}`，见 §6.4）、`length`、`ciphertext_sm3`（幂等比对用；**终结 +30 天置 `NULL`**，见 §5.2）、`stored_at` |
 | 挑战 | `challenge_id`、`purpose`、`nonce`（协议数据，过期即删）、`expires_at`、`used` |
-| 派生状态（服务端内部，无业务内容） | `prelude_received`、`received_chunks`（位图或行集）、`upload_token_sm3`、`uploaded_bytes`、下载租约与取件记录（`download_id`、`lease_expires_at`、`acked_at`）、幂等键映射（`idempotency_key → transfer_id`，≤600 秒） |
+| 派生状态（服务端内部，无业务内容） | `prelude_received`、`received_chunks`（位图或行集）、`upload_token_sm3`、`upload_token_kid`（凭据版本号，轮换即吊销旧凭据，见 §1.7.3）、`uploaded_bytes`、下载租约与取件记录（`download_id`、`lease_expires_at`、`acked_at`）、幂等键映射（`idempotency_key → transfer_id`，≤600 秒） |
+| 统计计数器（`stats_counters`） | `day`（UTC 日界）、`consumed`、`consumed_bytes`、`created`——**按天聚合的计数**，无个例信息（不含码、`transfer_id`、昵称、大小分布），口径见 §4.6 |
 | 举报 | `transfer_id`、`reporter_code`、`reason`、`note`（举报人自填，≤200 字节，服务端可见）、`created_at`、`distinct_reports`（计数） |
 | 审计 | `ip`、`method`、`route_template`（**路由模板，如 `/v1/transfers/{id}/chunks/{index}`，不含实际路径参数**）、`status`、`bytes`、`ts`、`request_id` |
 
@@ -407,7 +424,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 2. 二进制端点只接受 `application/octet-stream`；`multipart/form-data`、`text/plain` 等一律 `415 CONTENT_TYPE_UNSUPPORTED`（multipart 是历史上最经典的"顺手带文件名"通道）。
 3. 服务端 **MUST NOT** 解析 `prelude` / 块切片的内容（不读头、不解清单），只做长度与 `SM3` 比对。
 4. 请求日志与错误日志 **MUST NOT** 记录请求体前 N 字节、`Query String` 原文（只记白名单参数名）、`Authorization` 类头、SDP 内容。
-5. 删除是物理删除：`ack` / `revoke` / TTL 清理后，密文分块与 `prelude` 必须被删除；元数据可留 tombstone（见 §5.2）。
+5. 删除是物理删除：`ack` / `revoke` / TTL 清理后，密文分块与 `prelude` 必须被删除；元数据留 tombstone 并**永久保留**（终结 +30 天后脱敏四个字段：`uploader_ip` / `prelude_sm3` / `upload_token_sm3` / `transfer_chunks.ciphertext_sm3`，见 §5.2）。表内**不存在**文件名 / MIME / 明文 / 密钥 / 密文，所以"永久保留"不涉及任何内容留存。
 6. 只记大小、时间、IP、次数（审计白名单，见 §2.1）。
 
 ---
@@ -435,7 +452,8 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 17 | POST | `/v1/transfers/{id}/revoke` | 签名 `TRANSFER_REVOKE` | 发送方主动撤回 |
 | 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`。**v1 定义并实现**；部署方可配置关闭（关闭返回 `501 FEATURE_DISABLED`，代价是吊销后需重建传输并重传）。细则见 §1.7.5 |
 | 19 | WS | `/v1/ws` | 首帧签名 `WS_HELLO` | 在线状态、收件通知、直传信令。**v1 已实现**：连接后 10 秒内必须发 `HELLO`（`WS_HELLO` 签名）进入已认证态；握手、帧类型与限速见 §9 |
-| 20 | POST | `/v1/transfers/{id}/report` | 签名 `ABUSE_REPORT` | 举报一条传输。**v1 定义并实现**：只记录、不改变传输状态，下架由运维执行（§11.5） |
+| 20 | GET | `/v1/stats` | 无 | 全站聚合计数（今日/累计的取走数与字节数、新建数）。**公开无鉴权**，响应禁止缓存（§4.6） |
+| 21 | POST | `/v1/transfers/{id}/report` | 签名 `ABUSE_REPORT` | 举报一条传输。**v1 定义并实现**：只记录、不改变传输状态，下架由运维执行（§11.5） |
 
 ---
 
@@ -559,6 +577,57 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 
 **失败**：`401 AUTH_SIGNATURE_INVALID`（签名与挑战里的 code 或昵称不匹配时同此码）、`401 AUTH_CHALLENGE_INVALID`、`400 NICKNAME_INVALID`。
 
+### 4.6 `GET /v1/stats` —— 全站聚合计数（无鉴权）
+
+**请求**：无参数、无鉴权头。
+
+**响应 200**（字段名固定，实现按此写）：
+
+```json
+{
+  "today":   { "consumed": 123, "consumed_bytes": 456789, "created": 150 },
+  "total":   { "consumed": 45678, "consumed_bytes": 9876543210, "created": 50000 },
+  "generated_at": "2026-11-04T07:10:00Z"
+}
+```
+
+**口径（写死）**：
+
+| 字段 | 含义 |
+|---|---|
+| `consumed` | 已被取走的传输数，即 `state = CONSUMED` 的记录数 |
+| `consumed_bytes` | 这些被取走传输的**明文**总大小（`plaintext_size` 求和；不是密文、不含 `prelude` 与 tag） |
+| `created` | 新建传输数（`POST /transfers` 成功次数）。**单独字段，不与 `consumed` 相加**——两者是不同口径，不能合成"总计" |
+| `today` | 服务器 **UTC 日界**（当日 `00:00:00Z` 起）的同一口径 |
+| `total` | 自部署以来（全历史）的同一口径 |
+| `generated_at` | 生成本次数值的时间（UTC，RFC 3339） |
+
+**落桶时间戳（写死，与上表的 UTC 日界配套）**：日界是 UTC 已经写死，但"哪一天"按**哪个时间戳**落桶还必须说清，否则跨零点会错桶、对账会假报警：
+
+- `consumed` / `consumed_bytes` 按 **`terminal_at`** 落桶（取走发生在哪一天，而不是建包在哪一天）；
+- `created` 按 **`created_at`** 落桶；
+- 区间是**半开** `[当日 00:00:00Z, 次日 00:00:00Z)`——同一时刻只落一个桶，不重不漏；对账 MUST 用同一组时间戳与同一区间（`adr/0002-stats-and-audit-retention.md` §2.3）。
+
+（UTC 折算与"回填 / 运行时同口径"的要求见本节上文「日界实现约束」，此处不重复。）
+
+**缓存**：响应 MUST 带 `Cache-Control: no-store`、`CDN-Cache-Control: no-store`、`Surrogate-Control: no-store`（避免中间层缓存把数字冻住）。服务端可内部缓存**≤ 60 秒**，因此**数值可能有 ≤60s 延迟**，不保证与同一时刻的 `GET /transfers/{id}` 逐笔吻合。
+
+**限速（现状，v0.2.0 的已知限制）**：该端点**没有任何限速**，也**不会返回 `429 RATE_LIMITED`**——服务端只做查询参数白名单校验，没有按 IP / 按码的额度检查。`GET /v1/config` 同样没有额度检查、同样不返回 `429`。当前放大风险由服务端 ≤60s 内部缓存与部署层（CDN / 反代）承担。计划：后续版本给这两个端点加**按 IP 的宽松限速（约 120 次/分）**，届时同步补本节的 `429` + `Retry-After` 语义与 `/v1/config.limits` 的额度字段。客户端 MUST NOT 依赖这两个端点返回 `429` 做退避——当前不会发生。
+
+**隐私**：只返回**聚合数字**，不含任何个例信息（无码、无 `transfer_id`、无昵称、无大小分布）。展示层可做量级化（如"约 45 万次"），服务端返回的是**精确值**。
+
+**参数**：不接受任何查询参数；出现未知参数 → `400 BAD_REQUEST`（§0.1 全局约定）。
+
+**日界实现约束**：`today` MUST 按 UTC 计算，且 MUST NOT 依赖数据库会话时区（`::date` 强转会吃会话 `TimeZone`）。实现须显式 UTC 化（`(ts AT TIME ZONE 'UTC')::date`，或连接级固定 `TimeZone=UTC`）；**回填与运行时累加必须同一口径**，否则同一天的数字会跨零点错桶（回填按 `terminal_at::date`、运行时按进程 UTC 日，两者在非 UTC 会话下不一致）。
+
+**审计**：该端点**匿名且会被首页轮询**，MUST NOT 每请求写一条审计行（修复前实测：20 次匿名请求 → 20 行 `audit_events`；该表现按 90 天保留期清理，见 §12 第 8 条）。审计口径见 `adr/0002-stats-and-audit-retention.md`。
+
+**对账**：计数器是**派生数据**，以 `transfers` 实际行为准；MUST 有每日对账（`count(*)`/`sum(plaintext_size)` 与计数器比对，偏差 > 0.1% 报警）。没有对账时"漏加/重放"不会被发现。
+
+**失败**：`503 SERVICE_UNAVAILABLE`（统计不可用，如后端查询超时）。**不返回** `401`——该端点无鉴权，也不因缺头而拒绝。
+
+---
+
 ---
 
 ## 5. 传输生命周期与状态机
@@ -597,7 +666,22 @@ ack 后 download_count 达 max_downloads ──► CONSUMED（密文删除）
 | `CONSUMED` | 200（tombstone） | **`410 TRANSFER_CONSUMED`** | 取件完成/次数用尽 |
 | 不存在 | `404 TRANSFER_NOT_FOUND` | 同上 | id 本身无效 |
 
-tombstone 只保留 §2.1 的元数据字段（**不含任何密文**），保留 7 天后物理删除；响应里带 `terminal_reason` ∈ `REVOKED | EXPIRED | CONSUMED`。
+**TTL 判定在读写路径上即时生效（写死）**：判定时刻是**每次请求的服务器时间**，`expires_at <= now` 即视为 `EXPIRED`，不依赖后台清理任务的扫描周期（清理任务只是兜底重试物理删除）。因此：
+
+- 到期后的**第一次** `GET /transfers/{id}` 就返回 `EXPIRED` tombstone（`terminal_reason: "EXPIRED"`、`terminal_at` = 该次请求时间，`expires_at` 保留**原始**到期时刻、不被改写）。
+- 到期后 `GET /prelude` / `GET /chunks/{i}` 一律 `410 TRANSFER_EXPIRED`；上传侧的 `GET status`、`PUT prelude`、`PUT chunks/{i}`、`POST complete` 同样是 `410 TRANSFER_EXPIRED`（**不是** `401 AUTH_TOKEN_EXPIRED`：传输终结不可恢复，重签发凭据也救不回来，二者不得混用，见 §1.7.4）。
+- `GET /inbox` **不返回**已到 `expires_at` 的条目（即使后台还没扫到该行）。
+- 到期后的 `POST /ack` → `410 TRANSFER_EXPIRED` 且**不计数**（`download_count` 不变）；到期后的 `POST /revoke` → `409 TRANSFER_STATE_CONFLICT`（与 §6.7 一致）。
+
+tombstone 只保留 §2.1 的元数据字段（**不含任何密文**）；响应里带 `terminal_reason` ∈ `REVOKED | EXPIRED | CONSUMED`。
+
+**保留与脱敏（写死）**——与上段「TTL 即时判定」是**两件不同的事**，互不覆盖：上段定「**到期与否**」（由请求时刻判定，即时生效），本段定「**终结后留多久**」（行不删、只脱敏）。到期不因保留期长而延迟，保留也不因到期而缩短。
+
+- **终结记录永久保留**（不再有 7 天清理期）。因此对已终结的 `transfer_id` 查询**恒为 `200` + tombstone**，不会因为时间推移变成 `404`。
+- **终结后 30 天，四个字段置 `NULL` 脱敏**（三列在 `transfers`、一列在 `transfer_chunks`）：`transfers.uploader_ip`、`transfers.prelude_sm3`、`transfers.upload_token_sm3`、`transfer_chunks.ciphertext_sm3`（块级密文指纹，与 `prelude_sm3` 同属内容指纹）。其余字段——`transfers` 的 `created_at`、`expires_at`、`terminal_at`、`plaintext_size`、`chunk_size`、`chunk_count`、`state`、`terminal_reason`、`download_count`、`max_downloads`、`total_ciphertext_bytes`、`sender_code`、`recipient_code`，以及 `transfer_chunks` 的 `chunk_index`、`length`、`stored_at`——**永久保留**，用于聚合计数与审计。
+- **保留 ≠ 可取件**：`REVOKED`/`EXPIRED`/`CONSUMED` 三种终结态下，`GET /prelude` 与 `GET /chunks/{i}` 一律 `410`（见上表），与保留期无关。
+- **脱敏不改变任何响应字段集**：tombstone 响应本来就不含 `prelude_sm3`（§7.2 已写死字段集），`uploader_ip`/`upload_token_sm3`/`ciphertext_sm3` 从未对外返回；因此 30 天脱敏对客户端**不可观测**，客户端 MUST NOT 依赖这四个字段的任何取值。
+- **脱敏不影响限流**：按 IP 的存储配额只核算**尚未终结**（`UPLOADING`/`READY`/`LEASED`）的传输——终结态密文已物理删除，不计入占用。因此 `uploader_ip` 在终结满 30 天被置 NULL，对限流与配额核算**无影响**。
 
 ### 5.3 三种终结态的语义差异（客户端处置）
 
@@ -1015,7 +1099,7 @@ v1 **已实现**信令与在线表（§9.1–§9.5）。但"WS 不可用"仍是*
 | `SIGNAL_PEER_MISMATCH` | 403 | 信令双方与传输不匹配 | 停止该直传尝试，走中转 |
 | `NOT_TRANSFER_PARTY` | 403 | 已认证（签名有效）但**不是该传输的当事人**：非接收方调 `ack`、非发送方调 `revoke` | 停止操作、不要重试；提示"这不是你的传输" |
 | `CODE_NOT_FOUND` | 404 | 码未注册 | 提示"码不对或对方已换浏览器" |
-| `TRANSFER_NOT_FOUND` | 404 | 传输不存在/已物理删除 | 从本地列表移除 |
+| `TRANSFER_NOT_FOUND` | 404 | `transfer_id` 本身无效（不存在/格式错）。**终结记录永久保留**，不再因保留期变 `404` | 从本地列表移除 |
 | `CHUNK_NOT_FOUND` | 404 | 该块不存在 | 按 §7.6 重新探块；必要时让发送方重传该块 |
 | `CODE_TAKEN` | 409 | 码被占用 | **换密钥对、重算码、重试注册（≤8 次）** |
 | `PUBKEY_TAKEN` | 409 | 公钥已在别的码下注册 | 清本地身份重来，或复用既有码 |
@@ -1157,7 +1241,7 @@ Content-Type: application/json
 | 情形 | 响应 |
 |---|---|
 | 传输不存在 / `transfer_id` 格式错 | `404 TRANSFER_NOT_FOUND` |
-| 传输已终结（`REVOKED` / `EXPIRED` / `CONSUMED`） | `410` + 对应 `TRANSFER_*`（§5.2） |
+| 传输已终结（`REVOKED` / `EXPIRED` / `CONSUMED`） | `410` + 对应码（`TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED`，§5.2） |
 | 举报自己发出的传输 | `202` 照常记录（不做特殊处理，避免泄露"请求者是不是发送方"） |
 | `reason` 非法 / `note` 超长或含控制字符 / 未知字段 | `400 BAD_REQUEST` / `400 FIELD_NOT_ALLOWED` |
 | 同一码 > 5 次/小时、同一 IP > 20 次/小时 | `429 RATE_LIMITED`（`scope: "code"` / `"ip"`，§11.1） |
@@ -1171,10 +1255,11 @@ Content-Type: application/json
 1. 服务端 **不落明文**：唯一二进制通道是 `prelude` 与块切片，服务端不解析、不记录内容片段。
 2. 日志字段白名单 = §2.1 的审计字段（含 `route_template`：只记路由模板，不记实际路径参数，避免 `transfer_id` 这类能力凭证落进日志）；`Query String` 只允许记录白名单参数名（`state/limit/cursor`），不记值之外的原文。
 3. 错误响应 **不泄露**：不区分"码不存在"与"码已注销"；不返回占用者信息；不返回服务端路径/栈。
-4. 密文删除是**物理删除**：`ack`、`revoke`、TTL 三条路径都必须删 `prelude` 与所有块；tombstone 只留元数据（7 天）。
+4. 密文删除是**物理删除**：`ack`、`revoke`、TTL 三条路径都必须删 `prelude` 与所有块；tombstone 只留元数据（**永久保留**，终结 +30 天后 `uploader_ip`/`prelude_sm3`/`upload_token_sm3`/`transfer_chunks.ciphertext_sm3` 置 `NULL`，§5.2）。
 5. 传输加密依赖外层 HTTPS（不做国密 TLS），应用层再叠 SM4 密文；两者互不替代。
 6. CORS：只允许站点自身源；不开放 `*`；不开放 `credentials`。
 7. 前端零第三方脚本 + 严格 CSP（属 Web 交付，此处只作为跨端约束记录）。
+8. **审计保留期与免审计端点**：`audit_events` MUST 有保留期（建议 90 天，随 sweeper 清理）；匿名只读端点（`/v1/stats`、`/v1/config`）**MUST NOT** 每请求写审计行——只保留进程访问日志。审计只覆盖**有身份或有副作用**的请求（见 `adr/0002-stats-and-audit-retention.md` §2.4）。
 
 ---
 
