@@ -166,7 +166,13 @@ var auditExemptRoutes = map[string]struct{}{
 }
 
 // audit 记一条审计（白名单字段）。失败只记日志，不影响响应。
+//
+// store 为空表示"没有持久层"：只有纯路由用例会这样构造 API（`api_routes_test.go`），
+// 此时不落审计行——缺存储永远不该变成一次 panic 或一条假审计。
 func (a *API) audit(r *http.Request, status int, bytes int64) {
+	if a.store == nil {
+		return
+	}
 	path := r.Pattern
 	if path == "" {
 		path = "unmatched"
