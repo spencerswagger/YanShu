@@ -1,0 +1,16 @@
+反向验证 @ 2026-11-10T19:17:40Z  ref=origin/main (1f6b9e05a51a5aea9bbee52f8fed0cae530f9d3d)
+[PASS] 基线：未变异的 main 上两条门禁都是绿的
+[PASS] #57-a 普通 CREATE INDEX 回归：变异后测试变红（门禁有牙）
+        --- FAIL: TestMigrationsCreateIndexesWithoutBlockingWrites (0.00s)
+            migrations_lock_guard_test.go:113: 0011_mutant_plain_index.sql 第 1 条语句在事务迁移里用普通 CREATE INDEX 建 transfers 的索引：
+                `CREATE INDEX` 取 SHARE 锁、applyMigration 把整份文件包在一个事务里，锁持到提交 ——
+[PASS] #57-b CONCURRENTLY 缺 no-transaction 头：变异后测试变红（门禁有牙）
+        --- FAIL: TestMigrationsCreateIndexesWithoutBlockingWrites (0.00s)
+            migrations_lock_guard_test.go:88: 0010_indexes_concurrently.sql 第 2 条语句用了 CONCURRENTLY，但文件头没有 `-- yanshu:no-transaction`：
+                它会跑在事务块里，PostgreSQL 直接拒绝执行。
+[PASS] #56 终结态被凭据存在性顶掉：变异后测试变红（门禁有牙）
+        --- FAIL: TestTerminalStatePrecedesCredentials (7.64s)
+            --- FAIL: TestTerminalStatePrecedesCredentials/CONSUMED (2.60s)
+                --- FAIL: TestTerminalStatePrecedesCredentials/CONSUMED/status/无凭据 (0.22s)
+
+结论：三处变异全部被抓 → 两道门禁有牙
