@@ -318,7 +318,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 凭据超过自身有效期：**上传 6 小时** / **下载租约 30 分钟** | 401 | `AUTH_TOKEN_EXPIRED` | 上传走 §1.7.5 重签发（已传块不重传）；下载重新 `GET /prelude` 取新租约 |
 | 传输进入终态 | 410 | `TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` | 停止并清理本地 |
 
-**判定顺序写死（四类）**：**先判资源终结态**（`REVOKED`/`EXPIRED`/`CONSUMED` → `410`，见 §5.2），资源未终结时才走凭据校验——`KID` 不符 → `AUTH_TOKEN_STALE`；值不对/不存在/格式错 → `AUTH_TOKEN_INVALID`；超期 → `AUTH_TOKEN_EXPIRED`；最后才是 `409` 状态冲突。即**终结态（410）先于凭据（401），凭据内部先 `KID`、再值、再有效期**。
+**判定顺序写死（四类）**：**先判资源终结态**（`REVOKED`/`EXPIRED`/`CONSUMED` → `410`，见 §5.2），资源未终结时才走凭据校验——`KID` 不符 → `AUTH_TOKEN_STALE`；值不对/不存在/格式错 → `AUTH_TOKEN_INVALID`；超期 → `AUTH_TOKEN_EXPIRED`；最后才是 `409` 状态冲突。即**终结态（410）先于凭据（401），凭据内部先 `KID`、再值、再有效期**。当事人判定（`403 NOT_TRANSFER_PARTY`）同样排在 `410` 之后：终结态下不因「你不是当事人」改回 `403`（ADR-0005）。
 
 **为什么终结态排在凭据之前（写死）**：传输终结（TTL 到期 / 撤回 / 取走）**不可恢复**，重签发凭据也救不回来。若先回 `401`，客户端会按 §1.7.5 走一遍"重新挑战 → 签名 → 取新凭据"，拿到新凭据后仍然是 `410`——白跑一轮，还会让用户以为"再试一次就好"。因此：
 
@@ -935,6 +935,7 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**）；响�
 - 计数口径见 §5.1：`ack` 是**唯一**扣数时机（`LEASED` 期间不扣）。
 - `ack` 成功 → `download_count += 1`。若 `download_count < max_downloads`：状态回 `READY`，响应 `{ "state": "READY", "download_count": N, "remaining_downloads": max_downloads - N }`，密文**不删**；达到 `max_downloads` 才转 `CONSUMED` 并在响应前完成物理删除。
 - 幂等键是 `X-YS-Download-Id`：**同一 `download_id` 的重复 `ack` 只计一次**并返回 200；只有拿到新租约（新 `download_id`）后再 `ack` 才会再 +1。
+- **幂等重放优先于 `410`，且仅限 `CONSUMED`**（ADR-0005）：传输已 `CONSUMED` 时，用**该传输已 ack 过的同一 `download_id`** 重放 `ack` → `200`（不计数）；换成别的 `download_id`（哪怕格式合法）→ `410 TRANSFER_CONSUMED`。`REVOKED` / `EXPIRED` 上即使该租约曾 `ack` 过，也一律 `410`（§1.7.4、§5.2 优先）。
 
 ### 7.6 `HEAD /v1/transfers/{id}/chunks/{index}`
 
@@ -1106,7 +1107,7 @@ v1 **已实现**信令与在线表（§9.1–§9.5）。但"WS 不可用"仍是*
 | `AUTH_TOKEN_STALE` | 401 | 凭据记录的 `KID` 落后于当前版本（版本已轮换，§1.7.3） | 重新挑战 → 签名 → 取新凭据（上传 §1.7.5、下载重取租约）；**不要重算签名**；文案"凭据已过期版本，请重新获取" |
 | `AUTH_TOKEN_EXPIRED` | 401 | 凭据超过自身有效期：上传 **6 小时**、下载租约 **30 分钟**（§1.7.4）；与 `410 TRANSFER_EXPIRED`（传输终结）不同 | 上传重签发（已传块不重传）、下载重取租约 |
 | `SIGNAL_PEER_MISMATCH` | 403 | 信令双方与传输不匹配 | 停止该直传尝试，走中转 |
-| `NOT_TRANSFER_PARTY` | 403 | 已认证（签名有效）但**不是该传输的当事人**：非接收方调 `ack`、非发送方调 `revoke` | 停止操作、不要重试；提示"这不是你的传输" |
+| `NOT_TRANSFER_PARTY` | 403 | 已认证（签名有效）但**不是该传输的当事人**：非接收方调 `ack`、非发送方调 `revoke`（**仅传输未终结时**；终结态一律 `410`，见 §1.7.4 / ADR-0005） | 停止操作、不要重试；提示"这不是你的传输" |
 | `CODE_NOT_FOUND` | 404 | 码未注册 | 提示"码不对或对方已换浏览器" |
 | `TRANSFER_NOT_FOUND` | 404 | `transfer_id` 本身无效（不存在/格式错）。**终结记录永久保留**，不再因保留期变 `404` | 从本地列表移除 |
 | `CHUNK_NOT_FOUND` | 404 | 该块不存在 | 按 §7.6 重新探块；必要时让发送方重传该块 |

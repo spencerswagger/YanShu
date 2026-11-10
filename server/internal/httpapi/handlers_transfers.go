@@ -483,7 +483,33 @@ func (a *API) handleAck(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// 契约 §1.7.4 判定顺序写死：**先判资源终结态（410）**，资源未终结才走凭据
+	// （下载租约 = 凭据：缺/不匹配 → 409 DOWNLOAD_NOT_STARTED、过期 → 401 AUTH_TOKEN_EXPIRED）。
+	// 修前这里先判 `download_id`，于是"终态 + 无凭据/伪凭据"回 409 —— 而 §5.2 逐字要求
+	// "到期后的 `POST /ack` → `410 TRANSFER_EXPIRED` 且**不计数**"，客户端会按 409 去补租约，
+	// 补到也仍然是 410（与 §1.7.4「终结不可恢复」自相矛盾）。
+	// expireIfNeeded 同时负责"到期即时终结 + 删密文"，404 与 EXPIRED 都由它给出。
+	t, ok := a.expireIfNeeded(w, r, id)
+	if !ok {
+		return
+	}
 	dl := downloadID(r)
+	if spec.IsTerminalState(t.State) {
+		// 例外只有一个，来自 §7.5 的幂等条款：**同一 `download_id` 的重复 ack 只计一次并返回 200**。
+		// 它只对 CONSUMED（ack 自己造出来的终态）+ 本传输的租约成立——REVOKED / EXPIRED
+		// 按 §1.7.4（终结态一律 410）与 §5.2（"到期后的 `POST /ack` → 410 且不计数"）照回 410。
+		if t.State == spec.StateConsumed && dl != "" {
+			if d, err := a.store.GetDownload(r.Context(), dl); err == nil && d.TransferID == id {
+				if res, err := a.store.AckDownload(r.Context(), dl, a.now()); err == nil {
+					a.writeAckResult(w, res)
+					return
+				}
+			}
+		}
+		fail(w, r, spec.TerminalErrorCode(t.State))
+		return
+	}
+
 	if dl == "" {
 		fail(w, r, spec.ErrDownloadNotStarted)
 		return
@@ -491,15 +517,6 @@ func (a *API) handleAck(w http.ResponseWriter, r *http.Request) {
 	d, err := a.store.GetDownload(r.Context(), dl)
 	if err != nil || d.TransferID != id {
 		fail(w, r, spec.ErrDownloadNotStarted)
-		return
-	}
-	t, err := a.store.GetTransfer(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			fail(w, r, spec.ErrTransferNotFound)
-			return
-		}
-		a.internalError(w, r, "get transfer", err)
 		return
 	}
 	// 裁决 G1：已认证但非当事人 → 403 NOT_TRANSFER_PARTY。
@@ -533,7 +550,12 @@ func (a *API) handleAck(w http.ResponseWriter, r *http.Request) {
 	if res.Consumed && res.Counted {
 		a.purgeCiphertext(r, res.Transfer.ID)
 	}
+	a.writeAckResult(w, res)
+}
 
+// writeAckResult 写 ack 的成功体（§7.5）：正常 ack 与"同租约重复 ack"两条路径共用，
+// 避免两处各拼一份 JSON 走样。
+func (a *API) writeAckResult(w http.ResponseWriter, res store.AckResult) {
 	resp := spec.AckResponse{State: res.Transfer.State, DownloadCount: uint32(res.Transfer.DownloadCount)}
 	if res.Transfer.TerminalReason != nil {
 		resp.TerminalReason = res.Transfer.TerminalReason
