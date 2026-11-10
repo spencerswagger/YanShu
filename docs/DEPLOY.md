@@ -46,6 +46,9 @@ curl -s http://127.0.0.1:18080/v1/config | head  # 含 token_epoch / verifier / 
 | 当前流式内核 | `daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de` | 140,762 B | 仓库内 `server/kernel/yanshu_sm.wasm` 就是它 |
 | 上一版流式 | `8766048ffdd16b9de8c4f3fea49590ec0802418dea9ad0fdca68f0e05bb625f8` | 140,742 B | 回滚目标（换回镜像里的 wasm 即可启动） |
 | 初版 | `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f` | 127,313 B | 灰度期旧镜像，确认无需回滚后移除 |
+
+新部署一律用**当前流式内核**那一行；另两行只用于回滚与灰度。
+
 自检命令（不需要数据库）：
 
 ```sh
