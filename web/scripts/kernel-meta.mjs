@@ -101,6 +101,10 @@ export function atomicWriteJson(path, value) {
 export function probeKernel(bytes) {
   const module = new WebAssembly.Module(bytes)
   const imports = WebAssembly.Module.imports(module).length
+  if (imports !== 0) {
+    // 0 import 是内核的硬约定（wazero / 浏览器两边都必须能空导入实例化），这里先拒，别等到实例化报无意义的错
+    throw new Error(`产物有 ${imports} 个 import（应为 0）`)
+  }
   const e = new WebAssembly.Instance(module, {}).exports
   const fns = Object.keys(e).filter((k) => typeof e[k] === 'function')
   if (typeof e.ys_version !== 'function') {

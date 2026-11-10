@@ -15,6 +15,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { buildTinyKernel } from './helpers/tiny-kernel.js'
+
 const here = dirname(fileURLToPath(import.meta.url))
 const WEB = resolve(here, '..')
 const ENSURE = join(WEB, 'scripts/ensure-wasm.mjs')
@@ -46,8 +48,10 @@ function run(script, { publicDir, env = {}, args = [] } = {}) {
   }
 }
 
-const WASM_A = Buffer.alloc(140_762, 0x61) // 假装「正确的那一版」
-const WASM_B = Buffer.alloc(111_841, 0x62) // 假装缓存里「另一版」
+// 两份**合法**内核形状的 wasm（不是 Buffer.alloc 假字节）：sync 现在会先实例化核验，
+// 用非 wasm 字节测"同步成功"等于测一个不存在的场景。两份字节不同即可当"另一版"。
+const WASM_A = buildTinyKernel({ version: 0x10000, headerLen: 112 })
+const WASM_B = buildTinyKernel({ version: 0x10000, headerLen: 40 })
 
 test('① 产物在、溯源缺：非 0 退出，且不会被替换成缓存里的另一版', () => {
   const sb = sandbox({ wasm: WASM_A })
@@ -59,10 +63,10 @@ test('① 产物在、溯源缺：非 0 退出，且不会被替换成缓存里�
 
   assert.notEqual(r.rc, 0, '缺溯源必须非 0 退出')
   assert.match(r.stderr, /缺溯源/, '报错要说清是缺溯源')
-  assert.match(r.stderr, /140762|daa949|sha256=/i, '报错要带现有产物的大小/摘要')
+  assert.match(r.stderr, new RegExp(`sha256=|${WASM_A.length}`), '报错要带现有产物的大小/摘要')
   assert.match(r.stderr, /wasm:rebuild/, '要给可执行的下一步')
   assert.equal(sha(readFileSync(sb.wasmPath)), before, '产物一个字节都不许变（不许换成另一版）')
-  assert.equal(readFileSync(sb.wasmPath).length, 140_762)
+  assert.equal(readFileSync(sb.wasmPath).length, WASM_A.length)
   assert.equal(existsSync(join(sb.publicDir, 'ys_kernel.build.json')), false, '不许自己编一份溯源出来')
 })
 

@@ -30,7 +30,10 @@ YS_WASM=/.cache/rust-web/wasm32-unknown-unknown/release/yanshu_sm.wasm \
   npm run wasm:sync -- --commit <40 位内核 commit>
 
 #    用仓库里那份冻结内核（server/kernel/yanshu_sm.wasm，sha256 daa94926…31de）时：
-#    npm run wasm:sync -- --expect-sha daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de
+#      只同步产物：npm run wasm:sync -- --expect-sha daa949261c…31de
+#      连溯源一起写（推荐，否则 npm test / npm run build 的 pre* 会因缺溯源硬失败）：
+npm run wasm:sync -- --expect-sha daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de \
+  --commit <这份冻结内核对应的 40 位内核 commit>
 
 # 2) 本地中转（内存、不验签、只存不透明字节）
 npm run relay                 # http://127.0.0.1:8787
@@ -133,9 +136,11 @@ npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局�
 
 产物落在 `public/ys_kernel.wasm`；**溯源 `public/ys_kernel.build.json` 只在能确定来源时才写**——
 `npm run wasm:rebuild` 自动写，或 `wasm:sync --commit <40 位 commit>` 显式声明来源后写
-（字段 `{commit, builtAt, sha256, bytes, imports, exports, ysVersion, headerLen, unpackV1Arity}` 中，
-除 `commit`/`builtAt` 外全部从产物字节现算）。只给 `--expect-sha` 同步而不给 `--commit` 时**不写溯源**，
-脚本会明确告警：「同源」测试将 SKIP，不算通过。
+（字段 `{commit, ref, builtAt, sha256, bytes, imports, exports, hasMemory, ysVersion, headerLen, unpackV1Arity, hasSignDer, hasPackV1}`
+中，除 `commit`/`builtAt` 外全部从产物字节现算；`ref` 是 `commit` 的 7 位短 sha，与 `web/Dockerfile` 的口径一致）。
+`--commit` 会用 `git cat-file -e` 校验该 commit 在本仓存在（非 git 环境降级为告警）；覆盖已有溯源时会打印
+「旧 commit/sha → 新」，不静默改写。只给 `--expect-sha` 同步而不给 `--commit` 时**不写溯源**：
+脚本会明确告警「直接 `node --test` 时同源断言 SKIP；`npm test` / `npm run build` 会因缺溯源硬失败」。
 **页面底部会显示当前内核的 commit/版本/导出数/产物 sha256**（读不到就显示"来源未记录"），
 `tests/wasm-real.test.js` 会断言"wasm 的 sha256 == 溯源里的 sha256、版本/包头一致"——所以"产物是不是从那个 commit 编的"是可核对的，不靠记忆。
 （`ys_kernel.build.json` 是产物级元数据，按 `.gitignore` 不入库。）
