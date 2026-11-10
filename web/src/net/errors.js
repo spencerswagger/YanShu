@@ -32,6 +32,9 @@ const HTTP = {
   PAYLOAD_TOO_LARGE: { title: '单个请求体太大', hint: '减小切片后重传该块。' },
   SERVICE_UNAVAILABLE: { title: '服务暂时不可用', hint: '已按退避重试，稍后再说。', retry: true },
   INTERNAL: { title: '服务端内部错误', hint: '已按 5s→20s→60s 退避重试过。', retry: true },
+  // 路由级（§0.2 / ADR-0003）：路径或方法不在服务端接口表里 = 前后端版本没对齐，用户只需刷新
+  ROUTE_NOT_FOUND: { title: '页面版本不一致', hint: '这个地址服务端不认识，刷新页面后再试。' },
+  METHOD_NOT_ALLOWED: { title: '页面版本不一致', hint: '这个操作服务端不支持，刷新页面后再试。' },
   AUTH_MISSING: { title: '缺少鉴权头', hint: '内部错误，刷新页面重试。' },
   AUTH_SIGNATURE_INVALID: { title: '签名不被接受', hint: '挑战可能已作废，重新发起一次。', retry: true },
   AUTH_CODE_MISMATCH: { title: '码与签名不一致', hint: '内部状态异常：用同一个码重算签名后再试。' },
