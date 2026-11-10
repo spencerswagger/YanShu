@@ -4,7 +4,7 @@
 |---|---|
 | 状态 | **已采纳**（v5 口径，2026-11-10 夜班补） |
 | 日期 | 2026-11-10 |
-| 适用版本 | 服务端 v0.2.x 起（`GET /v1/stats`）、迁移 `0007` |
+| 适用版本 | 服务端 v0.2.x 起（`GET /v1/stats`）、迁移 `0007`–`0010` |
 | 关联文档 | `docs/API.md` §0.4（客户端时间基准）、§4.6（`/v1/stats`）、§5.2（保留与脱敏）、§12 |
 | 影响面 | 只补契约与决策记录；不改任何既有字段、不改包格式、不改文案 |
 
@@ -68,7 +68,7 @@ v5 加了两个长期行为：**终结元数据永久保留（+30 天脱敏）**
 ### 2.5 永久保留的边界（重申，不新增）
 
 - 永久保留的是**元数据**：时间、大小、块数、状态、码、计数。表里从来没有文件名/MIME/明文/密钥/密文，所以"永久"不涉及内容留存。
-- 30 天脱敏的三列（`uploader_ip`、`prelude_sm3`、`upload_token_sm3`）对客户端**不可观测**：tombstone 响应字段集本来就不含它们（§7.2）。
+- 30 天脱敏的四个字段（`transfers.uploader_ip`、`transfers.prelude_sm3`、`transfers.upload_token_sm3`、`transfer_chunks.ciphertext_sm3`）对客户端**不可观测**：tombstone 响应字段集本来就不含它们（§7.2）。
 - **残余风险（已知、接受）**：脱敏后 `sender_code`/`recipient_code` 仍在，长期可查"某码给某码发过多少次"。缓解是码可轮换（换密钥对即换码），历史码不指向具体人。若后续要求更严，再加"列表只展示 90 天、统计永久"，属产品决策，不在本 ADR 内。
 
 ---
@@ -80,7 +80,7 @@ v5 加了两个长期行为：**终结元数据永久保留（+30 天脱敏）**
 | 实现侧待办 | `/v1/stats` 失败码用 `503 SERVICE_UNAVAILABLE`（不是 500 `INTERNAL`）；日界显式 UTC 化；审计中间件按路由白名单跳过匿名只读端点；`audit_events` 加保留期清理；每日对账任务 |
 | 测试侧待办 | 非 UTC 会话下的日界用例；对账偏差用例；匿名请求不产生审计行的断言 |
 | 客户端影响 | 无。数值只做量级化展示，失败静默降级（整块隐藏） |
-| 迁移影响 | `0007` 只 `DROP NOT NULL` 两列 + 建计数器表 + 一次性回填；可重复执行（`ON CONFLICT DO UPDATE`） |
+| 迁移影响 | `0007` 建计数器表 + 一次性回填、放开两列 `NOT NULL`；`0008` 按 UTC 重建计数器（含 `TRUNCATE stats_counters`，取 `ACCESS EXCLUSIVE`，**需维护窗口**）；`0009` 加密文删除水位列、放开 `transfer_chunks.ciphertext_sm3` 的 `NOT NULL`、建脱敏与未删密文的部分索引；`0010` 用 `CREATE INDEX CONCURRENTLY` 建 5 个索引（`transfers_terminal_at_idx`、`transfers_created_at_idx`、`transfers_unpurged_terminal_idx`、`transfers_terminal_unredacted_idx`、`transfer_chunks_unredacted_idx`，非事务迁移，建前 `DROP INDEX CONCURRENTLY IF EXISTS` 清 INVALID 遗留）。回填用 `ON CONFLICT DO UPDATE`，可重复执行 |
 
 ---
 
