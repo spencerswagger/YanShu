@@ -301,6 +301,9 @@ func (a *API) handleHeadChunk(w http.ResponseWriter, r *http.Request) {
 
 // loadReadableTransfer 取传输并处理状态：终结 → 410，未就绪 → 409。
 func (a *API) loadReadableTransfer(w http.ResponseWriter, r *http.Request, id string) (store.Transfer, bool) {
+	// 先读一次（含过期租约回收），**只有 expires_at 到点才写库终结**：
+	// 1 GiB / 1 MiB 的包有 1024 次 chunk GET，无条件做一次到期终结（UPDATE + SELECT）
+	// 等于给正常下载路径凭空加一倍写。
 	t, err := a.store.ReclaimExpiredLease(r.Context(), id, a.now())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -309,6 +312,14 @@ func (a *API) loadReadableTransfer(w http.ResponseWriter, r *http.Request, id st
 		}
 		a.internalError(w, r, "get transfer", err)
 		return store.Transfer{}, false
+	}
+	if !t.ExpiresAt.After(a.now()) {
+		// 到点即终结：这一步之后 state 才可信（否则 expires_at 已过还能取件）。
+		fresh, ok := a.expireIfNeeded(w, r, id)
+		if !ok {
+			return store.Transfer{}, false
+		}
+		t = fresh
 	}
 	if spec.IsTerminalState(t.State) {
 		fail(w, r, spec.TerminalErrorCode(t.State))
@@ -336,6 +347,14 @@ func (a *API) startLease(w http.ResponseWriter, r *http.Request, t store.Transfe
 			fail(w, r, spec.ErrTransferNotReady)
 		case errors.Is(err, store.ErrTerminal):
 			fail(w, r, spec.ErrTransferStateConflict)
+		case errors.Is(err, store.ErrExpired):
+			// 与 checkLease 之间的竞态窗口：StartLease 在事务里已把它置 EXPIRED。
+			// 错误名按真实状态取（已 REVOKED/CONSUMED 且过期的行不该报 EXPIRED）。
+			fresh, ok := a.expireIfNeeded(w, r, t.ID)
+			if !ok {
+				return "", time.Time{}, false
+			}
+			fail(w, r, spec.TerminalErrorCode(fresh.State))
 		case errors.Is(err, store.ErrNotFound):
 			fail(w, r, spec.ErrTransferNotFound)
 		default:

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // 传输语义错误。
@@ -22,6 +24,9 @@ var (
 	ErrAlreadyAcked     = errors.New("store: download already acked")
 	ErrNotParty         = errors.New("store: credential is not a party of the transfer")
 	ErrIdempotencyMiss  = errors.New("store: idempotency record not found")
+	// ErrExpired 表示传输已过 expires_at（TTL 到点）。TTL 的判定在**读写路径上即时生效**，
+	// 不等清道夫的下一次 tick（否则 expires_at 已过、状态还是 READY，用户能继续取件）。
+	ErrExpired = errors.New("store: transfer expired")
 )
 
 // Transfer 是一条传输的元数据（**没有文件名、没有 MIME**）。
@@ -318,6 +323,16 @@ func (s *Store) StartLease(ctx context.Context, id, newDownloadID string, now ti
 		}
 		return Transfer{}, "", err
 	}
+	if !t.ExpiresAt.After(now) {
+		// TTL 到点优先于 READY/LEASED：此刻开始下载必须 410（API.md §5.2 / §7.3）。
+		if _, err := s.terminalizeExpiredID(ctx, tx, id, now); err != nil {
+			return Transfer{}, "", err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return Transfer{}, "", err
+		}
+		return Transfer{}, "", ErrExpired
+	}
 	if t.State == "UPLOADING" {
 		return Transfer{}, "", ErrTransferNotReady
 	}
@@ -463,6 +478,16 @@ func (s *Store) AckDownload(ctx context.Context, downloadID string, now time.Tim
 		}
 		return AckResult{Transfer: t, AlreadyAcked: true, Consumed: t.State == "CONSUMED"}, nil
 	}
+	if !t.ExpiresAt.After(now) {
+		// TTL 到点：同事务终结，ack 不计数（API.md §7.5：EXPIRED → 410）。
+		if _, err := s.terminalizeExpiredID(ctx, tx, t.ID, now); err != nil {
+			return AckResult{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return AckResult{}, err
+		}
+		return AckResult{}, ErrExpired
+	}
 	if t.State != "LEASED" {
 		return AckResult{}, ErrConflict
 	}
@@ -547,6 +572,40 @@ func (s *Store) RevokeTransfer(ctx context.Context, id, senderCode string, now t
 }
 
 // TerminalizeExpired 把 TTL 到期的非终结传输置为 EXPIRED。
+// TerminalizeExpiredID 把**这一条**已到 TTL 的传输置为 EXPIRED，并返回最新行。
+//
+// 这是读路径上的惰性判定：清道夫每 30 秒才扫一次，而 `expires_at` 一过就必须对外表现为
+// 已过期（GET 返回 EXPIRED tombstone、内容端点 410），否则「已过期」只是界面上的一句话。
+// 幂等：未到点或已终结时不改任何行，newly 为 false。
+func (s *Store) TerminalizeExpiredID(ctx context.Context, id string, now time.Time) (Transfer, bool, error) {
+	newly, err := s.terminalizeExpiredID(ctx, s.pool, id, now)
+	if err != nil {
+		return Transfer{}, false, err
+	}
+	t, err := s.GetTransfer(ctx, id)
+	if err != nil {
+		return Transfer{}, false, err
+	}
+	return t, newly, nil
+}
+
+// querier 是 pool 与 tx 的公共子集（终结逻辑在两条路径上共用）。
+type querier interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// terminalizeExpiredID 执行单条终结 UPDATE，返回本次是否真的改了行。
+func (s *Store) terminalizeExpiredID(ctx context.Context, q querier, id string, now time.Time) (bool, error) {
+	tag, err := q.Exec(ctx, `UPDATE transfers
+		SET state = 'EXPIRED', terminal_reason = 'EXPIRED', terminal_at = $2, updated_at = $2
+		WHERE transfer_id = $1 AND expires_at <= $2
+		  AND state IN ('UPLOADING', 'READY', 'LEASED')`, id, now)
+	if err != nil {
+		return false, fmt.Errorf("store: terminalize expired: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func (s *Store) TerminalizeExpired(ctx context.Context, now time.Time) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `UPDATE transfers
 		SET state = 'EXPIRED', terminal_reason = 'EXPIRED', terminal_at = $1, updated_at = $1
@@ -673,6 +732,8 @@ type InboxQuery struct {
 	Code   string
 	States []string
 	Limit  int
+	// Now 用来把「已到 TTL、但清道夫还没扫到」的行挡在列表外（API.md §7.1：永不返回 EXPIRED）。
+	Now time.Time
 	// Cursor 是 base64url("<created_at_unix_nano>|<transfer_id>")，空表示第一页。
 	BeforeCreatedAt time.Time
 	BeforeID        string
@@ -687,11 +748,16 @@ type InboxRow struct {
 
 // ListInbox 按接收码列出传输（keyset 分页）。
 func (s *Store) ListInbox(ctx context.Context, q InboxQuery) ([]InboxRow, error) {
-	args := []any{q.Code, q.States}
-	clause := `t.recipient_code = $1 AND t.state = ANY($2)`
+	if q.Now.IsZero() {
+		// 零值会让 `expires_at > $3` 静默失效（1970 年以前任何时刻都"未到期"），
+		// 把已到期的行漏回列表里；这里兜底成当前时刻。
+		q.Now = time.Now().UTC()
+	}
+	args := []any{q.Code, q.States, q.Now}
+	clause := `t.recipient_code = $1 AND t.state = ANY($2) AND t.expires_at > $3`
 	if q.HasCursor {
 		args = append(args, q.BeforeCreatedAt, q.BeforeID)
-		clause += ` AND (t.created_at, t.transfer_id) < ($3, $4)`
+		clause += ` AND (t.created_at, t.transfer_id) < ($4, $5)`
 	}
 	args = append(args, q.Limit)
 	query := `SELECT ` + prefixedTransfers("t") + `, COALESCE(c.nickname, '')

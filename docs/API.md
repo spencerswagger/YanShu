@@ -471,6 +471,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
   "max_plaintext_size": 4294967296,
   "max_ttl_seconds": 86400,
   "token_epoch": 1,
+  "server_time": "2026-11-02T14:00:00Z",
   "stun_urls": ["stun:stun.yan-shu.example:3478"],
   "ws_url": "wss://yan-shu.example/v1/ws",
   "limits": {
@@ -485,6 +486,8 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 **不返回**任何密钥、任何内部地址、任何 turn 配置（本项目**没有** TURN，见 §9.5）。
 
 **`token_epoch`**：只读整数，与 §1.7 的凭据版本 `KID` **同义**（对外沿用 `token_epoch` 这个字段名）；递增即吊销全部既有凭据。只用于观测与排查，客户端 MUST NOT 依赖它做鉴权判断。
+
+**`server_time`**：服务端当前时间（UTC，RFC 3339 秒级）。客户端用它算**时钟偏差**、作为 TTL 倒计时的基准（`剩余 = expires_at - (server_time + 本地单调流逝)`）。不能直接用设备时钟减 `expires_at`：设备差几分钟到几小时就会显示错的「还剩多久」。该字段与响应头 `Date` 同义，显式给出是为了不依赖中间层是否保留 `Date`（且不受秒级截断之外的影响）。
 
 **`stun_urls` / `ws_url` 的契约约束**：由部署注入，契约不给默认值。`stun_urls` MUST 至少 1 条且 MUST NOT 含 `turn:` / `turns:`；`ws_url` 允许为 `null`（表示该部署不提供信令），此时客户端 MUST 按 §9.6 降级；`config` 里 MUST NOT 出现密钥、TURN 凭据或内部地址。
 
@@ -800,9 +803,12 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**）；响�
   "bitmap": "wA",
   "missing": [ { "start": 2, "count": 1 } ],
   "uploaded_bytes": 96,
+  "expires_at": "2026-11-03T14:00:00Z",
   "updated_at": "2026-11-02T14:01:10Z"
 }
 ```
+
+- `expires_at`：与 §6.1 / §7.2 同一个值——发送方在上传过程中也能显示这条传输的剩余有效期，不必等 `complete`。
 
 - `bitmap`：每块 1 bit，**第 i 块的 bit 位于第 `i/8` 字节的 `bit (7 - i%8)`（MSB 优先）**，长度 `ceil(chunk_count/8)` 字节，base64url 无填充。示例 `"wA"` = `11000000` → 块 0、1 已收到。
 - `missing`：连续缺失区间，按 `start` 升序。
@@ -841,6 +847,8 @@ tombstone 只保留 §2.1 的元数据字段（**不含任何密文**）；响�
 |---|---|
 | `ready`（默认） | `READY` + `LEASED`（收件人现在就能取） |
 | `all` | 另含 `UPLOADING`（发送方还在传，仅供进度展示）；**永不返回** `REVOKED` / `EXPIRED` / `CONSUMED` |
+
+已到 `expires_at` 的行**不出现在任何一档里**（判定见 §5.2：TTL 在请求时刻即时生效，不等后台清理）。
 
 **响应 200**
 

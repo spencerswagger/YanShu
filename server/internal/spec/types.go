@@ -40,6 +40,9 @@ type ConfigResponse struct {
 	Limits            ConfigLimits `json:"limits"`
 	// TokenEpoch 是当前只读的密钥版本（递增即吊销全部旧 upload_token）。
 	TokenEpoch int64 `json:"token_epoch"`
+	// ServerTime 是服务端当前时间（UTC，秒级）：客户端据此算时钟偏差，
+	// TTL 倒计时用它做基准，避免设备时钟差几分钟就显示错「还剩多久」。
+	ServerTime string `json:"server_time"`
 	// 以下为运行时自检信息（只读，便于部署核对）。
 	Verifier      string `json:"verifier"`
 	Env           string `json:"env"`
@@ -194,7 +197,9 @@ type StatusResponse struct {
 	Bitmap          string         `json:"bitmap"`
 	Missing         []MissingRange `json:"missing"`
 	UploadedBytes   int64          `json:"uploaded_bytes"`
-	UpdatedAt       string         `json:"updated_at"`
+	// ExpiresAt 与其它读接口同义：发送方在上传过程中也能看到这条传输的剩余有效期。
+	ExpiresAt string `json:"expires_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // CompleteResponse 是完成标记响应（API.md §6.6）。

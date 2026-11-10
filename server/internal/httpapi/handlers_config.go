@@ -31,6 +31,11 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 		u := a.cfg.WSURL
 		wsURL = &u
 	}
+	// 这份响应里有 `server_time`（客户端算时钟偏差、做 TTL 倒计时的基准）。
+	// 一旦被 CDN/反代/浏览器缓存，基准就整体偏移，**所有倒计时静默算错**，
+	// 而且不会报任何错。配置本身也只在部署变更时才变，没有缓存的必要。
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("CDN-Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, spec.ConfigResponse{
 		APIVersion:        spec.APIVersion,
 		CryptoPackVersion: spec.CryptoPackVersion,
@@ -40,6 +45,7 @@ func (a *API) handleConfig(w http.ResponseWriter, r *http.Request) {
 		STUNURLs:          a.cfg.STUNURLs,
 		WSURL:             wsURL,
 		TokenEpoch:        epoch,
+		ServerTime:        spec.FormatTime(a.now()),
 		Verifier:          string(a.cfg.Verifier),
 		Env:               a.cfg.Env,
 		KernelSHA256:      kernelSHA,
