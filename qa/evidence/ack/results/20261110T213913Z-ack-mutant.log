@@ -1,0 +1,6 @@
+FAIL  A. REVOKED → 410 TRANSFER_REVOKED（3 种凭据）且不计数 revoke=200 有效=410:TRANSFER_REVOKED 无=409:DOWNLOAD_NOT_STARTED 伪造=409:DOWNLOAD_NOT_STARTED count=0->0
+FAIL  B. EXPIRED → 410 TRANSFER_EXPIRED（3 种凭据）且不计数 有效=410:TRANSFER_EXPIRED 无=409:DOWNLOAD_NOT_STARTED 伪造=409:DOWNLOAD_NOT_STARTED count=0->0
+PASS  C. 未终结缺/伪租约 → 409 DOWNLOAD_NOT_STARTED       无=409 DOWNLOAD_NOT_STARTED 伪=409 DOWNLOAD_NOT_STARTED
+PASS  D. CONSUMED + 同一租约重复 ack → 200 且只计一次         first=200 replay=200 count=0->1->1
+--------------------------------------------------------------------------------------
+2/4 通过　结论：FAIL

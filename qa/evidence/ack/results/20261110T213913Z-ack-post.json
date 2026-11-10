@@ -1,0 +1,27 @@
+{
+  "at": "2026-11-10T21:39:18+0000",
+  "binary": "/.octop/workspaces/0JXF1M/tmp/ackbin/post",
+  "rows": [
+    {
+      "name": "A. REVOKED → 410 TRANSFER_REVOKED（3 种凭据）且不计数",
+      "pass": true,
+      "evidence": "revoke=200 有效=410:TRANSFER_REVOKED 无=410:TRANSFER_REVOKED 伪造=410:TRANSFER_REVOKED count=0->0"
+    },
+    {
+      "name": "B. EXPIRED → 410 TRANSFER_EXPIRED（3 种凭据）且不计数",
+      "pass": true,
+      "evidence": "有效=410:TRANSFER_EXPIRED 无=410:TRANSFER_EXPIRED 伪造=410:TRANSFER_EXPIRED count=0->0"
+    },
+    {
+      "name": "C. 未终结缺/伪租约 → 409 DOWNLOAD_NOT_STARTED",
+      "pass": true,
+      "evidence": "无=409 DOWNLOAD_NOT_STARTED 伪=409 DOWNLOAD_NOT_STARTED"
+    },
+    {
+      "name": "D. CONSUMED + 同一租约重复 ack → 200 且只计一次",
+      "pass": true,
+      "evidence": "first=200 replay=200 count=0->1->1"
+    }
+  ],
+  "verdict": "PASS"
+}
