@@ -5,11 +5,20 @@
 
 ## 条件 1：内嵌内核 == 验收冻结产物
 
-- `server/kernel/yanshu_sm.wasm` 的 sha256 **必须**是
-  `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`（127,313 B）；
-- 二级校验：`ys_version() == 0x00010000`、34 个函数 + `memory`、0 import；
-- 检查：`python3 qa/evidence/check_server_kernel.py --server-dir <源码根> --vectors-dir <向量目录>`
-  （白名单含 Rune/Web 环境的 127,313 B 与 Core 环境的 130,653 B，但**必须同时过向量套件**才算同源）。
+- **机器判定（唯一权威）**：`server/kernel/yanshu_sm.wasm` 的 sha256 **必须命中**
+  `server/internal/auth/verifier.go` 的 `FrozenKernelSHA256` 白名单**首条**（首条 = 当前冻结产物；
+  现在 = `daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de`，**140,762 B**）。
+  白名单是运行期真正拦人的那一份 —— 不在里面服务端起不来，所以它才是门槛。
+- 二级校验：字节数 = `check_server_kernel.py` 的 `FROZEN_BYTES`（**140762**）、导出 =
+  `FROZEN_FUNCS`（**43**）个函数 + `memory`（合计 44 导出）、0 import、`ys_version() == 0x00010000`。
+- **白名单里另两条不是本轮的交付期望值**：`8766048f…`（140,742 B，回滚目标）与 `c1b87d0a…`
+  （127,313 B，灰度期旧镜像）只是"服务端允许加载"的历史产物；交付验收只认首条。
+  （`c1b87d0a…` / 127,313 B / 34 函数是 **v0.1.1** 的冻结值，不是当前门槛 —— 拿它验收会把
+  正确的当前内核判成"不可交付"。）
+- 检查：`python3 qa/evidence/check_server_kernel.py --server-dir <源码根> --repo <仓库根>
+  --vectors-dir <向量目录>`；期望 sha 由脚本从 `verifier.go` 首条**推导**，不在脚本里另写一份。
+- 人读的冻结记录在 `docs/CRYPTO-PACK.md` §18.2。**两者不一致时先修文档**（不要拿过期文档当门槛，
+  也不要把 `verifier.go` 改成迁就文档）。
 
 ## 条件 2：迁移对**已有库**幂等（含 ALTER）
 

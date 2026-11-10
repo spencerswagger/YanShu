@@ -1,6 +1,8 @@
 # qa/evidence · 验收证据脚本
 
 > **验收冻结 head：`031e95b`** —— wasm 127,313 B / sha256 `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`；一键重跑：`qa/evidence/check_all.sh <rune-crate> <workdir>`。
+> **（历史快照：上面这组是 v0.1.1 的冻结值，只作当时那轮验收的留档。当前内核是 140,762 B /
+> `daa94926…`，判定口径见 `DELIVERY-GATE.md` 条件 1；人读的当前值在 `docs/CRYPTO-PACK.md` §18.2。）**
 
 两条证据的**可复跑脚本**：① 服务端无明文/无文件名；② 密文篡改必报错。
 
