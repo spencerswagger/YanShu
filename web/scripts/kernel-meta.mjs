@@ -6,7 +6,16 @@
  * 等于静默换掉加密实现。这里把判定收敛成纯函数，任何不一致都报错，绝不"顺手换成缓存里的另一版"。
  */
 import { createHash } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync } from 'node:fs'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 
 export const WASM_NAME = 'ys_kernel.wasm'
@@ -62,6 +71,50 @@ export function atomicCopyFile(from, to) {
       /* 清理失败不掩盖原始错误 */
     }
     throw err
+  }
+}
+
+/** 原子写 JSON（先写临时文件再 rename），避免测试读到半截溯源 */
+export function atomicWriteJson(path, value) {
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = join(dirname(path), `.${basename(path)}.tmp-${process.pid}-${Date.now()}`)
+  try {
+    writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n')
+    renameSync(tmp, path)
+  } catch (err) {
+    try {
+      if (existsSync(tmp)) unlinkSync(tmp)
+    } catch {
+      /* 清理失败不掩盖原始错误 */
+    }
+    throw err
+  }
+}
+
+/**
+ * 实例化产物并读出**产物自身能证明的事实**（版本 / 包头 / 导出 / 是否 0 import）。
+ *
+ * 用途：`wasm:sync --commit` 写溯源时，sha256/bytes/版本/头长都从字节现算，
+ * 只有 commit 是调用方声明的（跟 Dockerfile 的 `YS_KERNEL_COMMIT` 同口径）——
+ * 绝不凭记忆写死"另一个版本"的字段。不是合法 wasm 时抛错，由调用方决定退出码。
+ */
+export function probeKernel(bytes) {
+  const module = new WebAssembly.Module(bytes)
+  const imports = WebAssembly.Module.imports(module).length
+  const e = new WebAssembly.Instance(module, {}).exports
+  const fns = Object.keys(e).filter((k) => typeof e[k] === 'function')
+  if (typeof e.ys_version !== 'function') {
+    throw new Error('产物没有 ys_version 导出（不是雁书端侧内核）')
+  }
+  return {
+    imports,
+    exports: fns.length,
+    hasMemory: !!e.memory,
+    ysVersion: `0x${(e.ys_version() >>> 0).toString(16)}`,
+    headerLen: typeof e.ys_header_len === 'function' ? e.ys_header_len() : null,
+    unpackV1Arity: typeof e.ys_unpack_v1 === 'function' ? e.ys_unpack_v1.length : null,
+    hasSignDer: typeof e.ys_sm2_sign_der === 'function',
+    hasPackV1: typeof e.ys_pack_v1 === 'function',
   }
 }
 

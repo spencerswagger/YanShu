@@ -24,7 +24,13 @@ npm install
 
 # 1) 端侧内核产物（不入库）：仓库根先构建，再同步到 web/public/
 #    cd ../crypto && CARGO_TARGET_DIR=/.cache/rust-web cargo build --release --target wasm32-unknown-unknown -p yanshu-sm
-npm run wasm:sync
+#    --commit 传这份产物对应的内核 commit（40 位）：给了它才会写 public/ys_kernel.build.json，
+#    「产物 ↔ commit 同源」那条测试才不会 SKIP。不给也能同步，但会明确告警。
+YS_WASM=/.cache/rust-web/wasm32-unknown-unknown/release/yanshu_sm.wasm \
+  npm run wasm:sync -- --commit <40 位内核 commit>
+
+#    用仓库里那份冻结内核（server/kernel/yanshu_sm.wasm，sha256 daa94926…31de）时：
+#    npm run wasm:sync -- --expect-sha daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de
 
 # 2) 本地中转（内存、不验签、只存不透明字节）
 npm run relay                 # http://127.0.0.1:8787
@@ -125,8 +131,11 @@ npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局�
 另外 `tests/legacy-reject.test.js` 用旧布局产物（HEADER 40）产一个包喂给默认解包入口，断言必须被拒
 （实测 `CRYPTO_VERSION_UNSUPPORTED`）——**默认路径不会静默接受两种布局**。
 
-产物落在 `public/ys_kernel.wasm`，同时写 `public/ys_kernel.build.json`：
-`{commit, builtAt, sha256, bytes, imports, exports, ysVersion, headerLen, unpackV1Arity}`。
+产物落在 `public/ys_kernel.wasm`；**溯源 `public/ys_kernel.build.json` 只在能确定来源时才写**——
+`npm run wasm:rebuild` 自动写，或 `wasm:sync --commit <40 位 commit>` 显式声明来源后写
+（字段 `{commit, builtAt, sha256, bytes, imports, exports, ysVersion, headerLen, unpackV1Arity}` 中，
+除 `commit`/`builtAt` 外全部从产物字节现算）。只给 `--expect-sha` 同步而不给 `--commit` 时**不写溯源**，
+脚本会明确告警：「同源」测试将 SKIP，不算通过。
 **页面底部会显示当前内核的 commit/版本/导出数/产物 sha256**（读不到就显示"来源未记录"），
 `tests/wasm-real.test.js` 会断言"wasm 的 sha256 == 溯源里的 sha256、版本/包头一致"——所以"产物是不是从那个 commit 编的"是可核对的，不靠记忆。
 （`ys_kernel.build.json` 是产物级元数据，按 `.gitignore` 不入库。）
