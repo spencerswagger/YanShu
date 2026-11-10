@@ -296,14 +296,21 @@ YANSHU_DATABASE_URL="$PG_DSN_WITH_SEARCH_PATH" ./bin/yanshu-server -migrate-only
 ## 元数据保留与统计（v5）
 
 - 终结（CONSUMED/REVOKED/EXPIRED）的传输元数据**永久保留**，不再按 7 天删除；
-  终结满 **30 天**后把 `uploader_ip`、`prelude_sm3`、`upload_token_sm3` 置 NULL（脱敏，幂等分批）。
+  终结满 **30 天**后把**内容指纹与身份列**置 NULL（脱敏，幂等分批）：`transfers.uploader_ip`、
+  `transfers.prelude_sm3`、`transfers.upload_token_sm3`、`transfer_chunks.ciphertext_sm3`。
+  尺寸 / 块数 / 状态 / 计数 / 时间与两个码**不脱敏**（聚合与审计要用；码的残余风险见 ADR-0002 §2.5）。
 - 全平台聚合 `GET /v1/stats`：返回 `today` / `total` 的 `consumed`、`consumed_bytes`、`created`；
   数据来自 `stats_counters`（按天累加，`ack`/建包同事务写入），**不扫 transfers**；响应 `Cache-Control: no-store`。
 
 ## 库表（表结构变更必须在 PR 描述写一行）
 
 `codes`、`auth_challenges`、`transfers`、`transfer_chunks`、`transfer_downloads`、
-`idempotency_keys`、`audit_events`（+ `schema_migrations`）。
+`idempotency_keys`、`audit_events`、`stats_counters`（+ `schema_migrations`）。
+
+**迁移执行方式**：默认整文件一个事务；文件头出现 `-- yanshu:no-transaction` 时改为
+**逐条语句自动提交**（`CREATE INDEX CONCURRENTLY` 不能在事务块内执行，见
+`migrations/0010_indexes_concurrently.sql`）。迁移期间全程复用一条连接并轮询
+`pg_try_advisory_lock` 互斥（阻塞式 `pg_advisory_lock` 会与 CIC 互相等成死锁）。
 
 白名单断言在 `internal/store/schema_test.go`：**多一列即失败**。改表结构时同步改断言，
 并在 PR 描述里写明新增/删除的表与列，否则白名单会静默失效（比漏检更危险）。

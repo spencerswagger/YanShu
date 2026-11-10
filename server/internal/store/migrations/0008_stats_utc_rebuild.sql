@@ -4,10 +4,11 @@
 -- 这两者在 `timestamptz → date` 截断时吃**会话 TimeZone**。任何已经执行过旧 0007 的库，
 -- 若当时会话不是 UTC，计数器就按本地日界分过桶，且不会自己修复。
 --
--- 本迁移做两件事：
--- 1) 按 UTC 日界**重算并覆盖** counters（派生数据，重建是安全的；transfers 是事实，不动）。
--- 2) 给每日对账加两个索引：对账按半开区间 [00:00Z, 次日 00:00Z) 扫一天的行，
---    没有索引时会退化成全表扫（表随年限线性变大）。
+-- 本迁移只做一件事：按 UTC 日界**重算并覆盖** counters（派生数据，重建是安全的；transfers 是事实，不动）。
+--
+-- 注意：`TRUNCATE` 取 `ACCESS EXCLUSIVE` 锁，**仍需维护窗口**（这一条无法并发化）。
+-- 索引不在本文件里建：`CREATE INDEX` 会取 `SHARE` 锁挡住写入，而 transfers 从 v5 起永久保留、
+-- 只会变大，所以建索引挪到 `0010_indexes_concurrently.sql`（`CREATE INDEX CONCURRENTLY`，不停写）。
 
 -- 1) UTC 重建计数器
 TRUNCATE TABLE stats_counters;
@@ -23,8 +24,3 @@ SELECT (created_at AT TIME ZONE 'UTC')::date, count(*)
 FROM transfers
 GROUP BY 1
 ON CONFLICT (day) DO UPDATE SET created = stats_counters.created + EXCLUDED.created;
-
--- 2) 对账索引
-CREATE INDEX IF NOT EXISTS transfers_terminal_at_idx
-    ON transfers (terminal_at) WHERE terminal_at IS NOT NULL;
-CREATE INDEX IF NOT EXISTS transfers_created_at_idx ON transfers (created_at);

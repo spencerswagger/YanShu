@@ -212,9 +212,9 @@ func TestCreateTransferRollsBackWhenStatsFails(t *testing.T) {
 		ID: id, SenderCode: "AAAA", RecipientCode: "BBBB",
 		PlaintextSize: 10, ChunkSize: 32, ChunkCount: 1, PreludeLen: 300,
 		PreludeSM3: make([]byte, 32), TotalCiphertextBytes: 506, MaxDownloads: 1,
-		CreatedAt: time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC),
-		UpdatedAt: time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC),
-		ExpiresAt: time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC),
+		CreatedAt:      time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC),
+		UpdatedAt:      time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC),
+		ExpiresAt:      time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC),
 		UploadTokenSM3: make([]byte, 32), UploadTokenKID: "1",
 	})
 	if err == nil {

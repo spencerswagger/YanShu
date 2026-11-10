@@ -8,7 +8,7 @@ import (
 	"github.com/spencerswagger/YanShu/server/internal/testutil"
 )
 
-// 脱敏：终结满 30 天的行保留、但三个关联字段置 NULL；幂等（第二次 0 行）。
+// 脱敏：终结满 30 天的行保留，身份列与**内容指纹列**（含块级 ciphertext_sm3）置 NULL；幂等（第二次 0 行）。
 func TestRedactOldTerminal(t *testing.T) {
 	st := testutil.NewStore(t, "store")
 	ctx := context.Background()
@@ -33,12 +33,40 @@ func TestRedactOldTerminal(t *testing.T) {
 	insert("0123456789abcdef0123456789abcdef", &old)
 	insert("fedcba9876543210fedcba9876543210", &recent)
 
+	// 两条块级指纹：老的那条要脱敏，近的那条不动。
+	for _, tc := range []struct{ tid string }{
+		{"0123456789abcdef0123456789abcdef"}, {"fedcba9876543210fedcba9876543210"},
+	} {
+		if _, err := st.Pool().Exec(ctx, `INSERT INTO transfer_chunks
+			(transfer_id, chunk_index, length, ciphertext_sm3, stored_at)
+			VALUES ($1, 0, 64, decode(repeat('ab',32),'hex'), now())`, tc.tid); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	n, err := st.RedactOldTerminal(ctx, now.Add(-30*24*time.Hour), 200)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("redacted = %d, want 1", n)
+	if n != 2 { // 1 条 transfers 行 + 1 条块级指纹
+		t.Fatalf("redacted = %d, want 2", n)
+	}
+
+	var chunkSM3 *string
+	if err := st.Pool().QueryRow(ctx, `SELECT ciphertext_sm3::text FROM transfer_chunks
+		WHERE transfer_id = '0123456789abcdef0123456789abcdef'`).Scan(&chunkSM3); err != nil {
+		t.Fatal(err)
+	}
+	if chunkSM3 != nil {
+		t.Fatalf("transfer_chunks.ciphertext_sm3 should be NULL after redact, got %v", *chunkSM3)
+	}
+	var recentChunk *string
+	if err := st.Pool().QueryRow(ctx, `SELECT ciphertext_sm3::text FROM transfer_chunks
+		WHERE transfer_id = 'fedcba9876543210fedcba9876543210'`).Scan(&recentChunk); err != nil {
+		t.Fatal(err)
+	}
+	if recentChunk == nil {
+		t.Fatal("recent chunk digest must not be redacted")
 	}
 
 	var ip, sm3, tok *string
@@ -75,18 +103,23 @@ func TestRedactOldTerminal(t *testing.T) {
 	}
 }
 
-// 迁移 0007 放开了两列 NOT NULL（否则脱敏置 NULL 会失败）。
+// 脱敏列必须可空（0007 放开 transfers 两列，0009 放开 transfer_chunks.ciphertext_sm3）。
 func TestRedactionColumnsNullable(t *testing.T) {
 	st := testutil.NewStore(t, "store")
 	ctx := context.Background()
-	for _, col := range []string{"prelude_sm3", "upload_token_sm3"} {
+	for _, tc := range []struct{ table, col string }{
+		{"transfers", "prelude_sm3"},
+		{"transfers", "upload_token_sm3"},
+		{"transfer_chunks", "ciphertext_sm3"}, // 0009 起可空（块级内容指纹也要能脱敏）
+	} {
 		var nullable string
 		if err := st.Pool().QueryRow(ctx, `SELECT is_nullable FROM information_schema.columns
-			WHERE table_schema = current_schema() AND table_name='transfers' AND column_name=$1`, col).Scan(&nullable); err != nil {
-			t.Fatalf("%s: %v", col, err)
+			WHERE table_schema = current_schema() AND table_name=$1 AND column_name=$2`,
+			tc.table, tc.col).Scan(&nullable); err != nil {
+			t.Fatalf("%s.%s: %v", tc.table, tc.col, err)
 		}
 		if nullable != "YES" {
-			t.Fatalf("%s must be nullable after 0007, got %s", col, nullable)
+			t.Fatalf("%s.%s must be nullable, got %s", tc.table, tc.col, nullable)
 		}
 	}
 }

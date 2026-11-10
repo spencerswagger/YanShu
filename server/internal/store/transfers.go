@@ -645,16 +645,6 @@ func (s *Store) CountUnpurgedTerminal(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
-// DeleteOldTerminal 删除保留期满（7 天）的终结传输元数据。
-func (s *Store) DeleteOldTerminal(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM transfers
-		WHERE state IN ('CONSUMED', 'REVOKED', 'EXPIRED') AND terminal_at < $1`, before)
-	if err != nil {
-		return 0, fmt.Errorf("store: delete terminal transfers: %w", err)
-	}
-	return tag.RowsAffected(), nil
-}
-
 // CountActiveByCode 统计某发送码当前未终结的传输数（§11.4：上限 20）。
 func (s *Store) CountActiveByCode(ctx context.Context, code string) (int, error) {
 	var n int
