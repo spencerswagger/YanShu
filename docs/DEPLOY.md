@@ -125,7 +125,7 @@ docker compose exec postgres psql -U yanshu -d yanshu \
 ### 4.2.1 `-- yanshu:no-transaction` 必须独占一行
 
 迁移器只把"去掉 `--` 后恰好等于 `yanshu:no-transaction`"的那一行当成指令（`store.isNoTxMigration`）。
-下面两种写法**不会**被识别，文件仍按事务式执行：
+识别这一步不报错、也没有告警；下面两种写法**不会**被识别，文件仍按事务式执行，错误要到执行 CIC 时才出现：
 
 ```sql
 -- 本文件用 yanshu:no-transaction 关掉事务
@@ -158,8 +158,16 @@ rc=1            # 该文件没有被记入 schema_migrations → 下次启动继
 - 建表 / 加列：`CREATE TABLE IF NOT EXISTS`、`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`；
 - 建索引：先 `DROP INDEX CONCURRENTLY IF EXISTS`，再 `CREATE INDEX CONCURRENTLY IF NOT EXISTS`（`0010` 即此写法）。
   原因：`CREATE INDEX CONCURRENTLY` 失败会留下一个 **INVALID** 索引（占名字、查询用不了），
-  而 `CREATE INDEX ... IF NOT EXISTS` 遇到同名 INVALID 索引会直接跳过 —— 不先删就永远修不好；
-- 数据回填：用 `INSERT ... ON CONFLICT DO UPDATE`，或先删后写；不要假设"只跑一次"。
+  而 `CREATE INDEX ... IF NOT EXISTS` 判断的是**同 schema 下的同名索引**（不是"同名表上的索引"），
+  命中 INVALID 的也会直接跳过 —— 同一条 `CREATE ... IF NOT EXISTS` 永远救不回来。
+  （`REINDEX INDEX CONCURRENTLY` 也能把 INVALID 索引重建好；本仓统一用"先删再建"，便于和重跑语义对齐。）
+- 数据回填：用 `INSERT ... ON CONFLICT DO UPDATE`，或先删后写；不要假设"只跑一次"；
+- **没有 `IF NOT EXISTS` 的 DDL 要先自己判存在**：`ALTER TABLE ... ADD CONSTRAINT`（先 `DROP CONSTRAINT IF EXISTS`）、
+  `CREATE TRIGGER`（先 `DROP TRIGGER IF EXISTS`）、`ALTER TYPE ... ADD VALUE`（PG 12+ 才有 `IF NOT EXISTS`；
+  更老的版本要用 `DO` 块吞 `duplicate_object`）。
+
+另外：**可重入 ≠ 无锁**。`ALTER TABLE ... ALTER COLUMN ... DROP NOT NULL` 天然可重入，但单条 DDL 仍取
+`ACCESS EXCLUSIVE`（`SET NOT NULL` 还要整表扫一遍）—— 幂等只解决"能重跑"，不解决"跑的时候锁写"。
 
 实测重跑：把 `0010` 的版本记录从 `schema_migrations` 删掉再跑 `-migrate-only` → `rc=0`，
 版本记录回到 9 条，`transfers` / `transfer_chunks` 上 **11/11 索引 `indisvalid = true`**。
@@ -170,20 +178,32 @@ rc=1            # 该文件没有被记入 schema_migrations → 下次启动继
 150 万行实测：事务式建索引期间单条写入最长阻塞 **1215.8 ms**（300 条并发 `UPDATE` 里 2 条 ≥1 s）；
 改成非事务 + `CONCURRENTLY` 后 **13.0 ms**、0 条，`pg_locks` 里只剩 `ShareUpdateExclusiveLock`。
 
-唯一例外是**同一份迁移里刚新建的表**（表必为空）。这条规则有可执行门禁：
+唯一例外是**同一份迁移里刚新建的表**：迁移自己在一个事务里建表、建索引，其它会话还看不见它，
+不会有人在这一刻写这张表（迁移自己先 `INSERT` 再建索引也是安全的）。反过来，在非事务迁移里新建的表
+对别人**立刻可见**，就不适用这条豁免。这条规则有可执行门禁：
 
 ```sh
 cd server && go test ./internal/store -run TestMigrationsCreateIndexesWithoutBlockingWrites
 ```
+
+脚注：PG 17 **不支持**对分区表建并发索引（`ERROR: cannot create index on partitioned table "..." concurrently`）。
+将来加分区表时，索引只能建在分区上（`ON ONLY`/逐分区），不能照抄 `CREATE INDEX CONCURRENTLY <分区表>`。
 
 ### 4.2.4 排查"迁移跑了一半"
 
 ```sql
 -- 已应用的版本
 select version, applied_at from schema_migrations order by version;
--- INVALID（CIC 失败留下的）索引
-select indexrelid::regclass as index, indrelid::regclass as table from pg_index where not indisvalid;
+
+-- INVALID（CIC 失败留下的）索引；排除"此刻正在建"的那些（进行中的 CIC 也是 indisvalid=false）
+select i.indexrelid::regclass as index, i.indrelid::regclass as tbl
+from pg_index i
+where not i.indisvalid
+  and not exists (select 1 from pg_stat_progress_create_index p where p.index_relid = i.indexrelid);
 ```
+
+`indexrelid::regclass` / `indrelid::regclass` 对不在 `search_path` 里的 schema 会自动带前缀，
+需要引号的怪名会自动加引号，分区与分区索引也能列出。
 
 INVALID 索引按 §4.2.2 的写法重跑对应迁移即可自愈（先 `DROP ... CONCURRENTLY IF EXISTS` 再建）。
 
