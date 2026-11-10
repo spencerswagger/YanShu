@@ -45,7 +45,7 @@ docker compose up -d
 | Go | 1.27 | 编译服务端（`server/go.mod` 声明 `go 1.27`） |
 | PostgreSQL | 16 | 存码、传输元数据、审计；**必须**，无内置存储替代 |
 | Docker | 24+（可选） | 只用容器部署时需要；构建镜像建议启用 BuildKit |
-| 冻结内核 | `server/kernel/yanshu_sm.wasm`，140,762 B，sha256 `daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de`（白名单另收 `8766048f…` 回滚版与 `c1b87d0a…` 灰度版） | `YANSHU_VERIFIER=sm2` 时必需，仓库已附带 |
+| 冻结内核 | `server/kernel/yanshu_sm.wasm`，140,762 B，sha256 `daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de`（白名单另收 `8766048f…` 回滚版与 `c1b87d0a…` 灰度版，**新部署一律用上面这版**） | `YANSHU_VERIFIER=sm2` 时必需，仓库已附带 |
 
 ## 4. 本地开发（从源码直接跑，不用 Docker）
 
@@ -75,7 +75,7 @@ curl -s http://127.0.0.1:8080/healthz
 
 ```
 msg="sm2 verifier loaded" kernel=./kernel/yanshu_sm.wasm version=0x00010000
-msg="kernel verified" sha256=daa94926…31de version=0x00010000 exports=44
+msg="kernel verified" sha256=daa94926…31de version=0x00010000 exports=44   # 43 个函数 + memory
 ```
 
 需要你改的地方：`YANSHU_DATABASE_URL`（换成真实 DSN）、`YANSHU_TOKEN_SECRET`（换成固定随机值并存好）。
@@ -92,7 +92,7 @@ YANSHU_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu?sslmode=disable" \
 
 # 校验内核（不连数据库，CI 可用）
 YANSHU_KERNEL_WASM=./kernel/yanshu_sm.wasm go run ./cmd/yanshu-server -verify-kernel
-# kernel_sha256=daa94926…31de / ys_version=0x00010000 / exports=44 / allowlisted=true
+# kernel_sha256=daa94926…31de / ys_version=0x00010000 / exports=44（43 函数 + memory）/ allowlisted=true
 
 # 起服务（stub-allow 只能本地调试：要求 YANSHU_ENV=local|test 且监听 loopback）
 YANSHU_VERIFIER=stub-allow YANSHU_ENV=local YANSHU_ADDR=127.0.0.1:8080 \
