@@ -154,15 +154,18 @@ test('只给 --expect-sha（不给 --commit）：同步成功但**不伪造溯�
 
 test('已有溯源 + 不给 --commit：沿用旧溯源摘要同步，字节数对不上时**拷贝前**就拒（不制造半坏状态）', () => {
   const kernel = buildTinyKernel()
+  // 关键：已安装的产物必须与候选**不是同一份字节**，否则"拒绝时产物没变"恒真（等于没测）
+  const installed = Buffer.concat([buildTinyKernel(), Buffer.from([0x00, 0x02, 0x01, 0x00])])
+  assert.notEqual(sha(installed), sha(kernel), '基线自检：已安装产物与候选必须不同字节')
   const staleBytesMeta = { commit: 'c'.repeat(40), sha256: sha(kernel), bytes: kernel.length + 10 }
-  const sb = sandbox({ wasm: buildTinyKernel({ version: 0x10000 }), meta: staleBytesMeta })
-  const cand = sb.cand(kernel)
-  const before = sha(readFileSync(sb.wasmPath))
+  const sb = sandbox({ wasm: installed, meta: staleBytesMeta })
 
-  const r = run(SYNC, { publicDir: sb.publicDir, env: { YS_WASM: cand } })
+  const r = run(SYNC, { publicDir: sb.publicDir, env: { YS_WASM: sb.cand(kernel) } })
   assert.equal(r.rc, 2, '字节数与溯源不符应拒绝')
   assert.match(r.stderr, /字节数/, '要说明是字节数不一致')
-  assert.equal(sha(readFileSync(sb.wasmPath)), before, '拒绝时必须保留原产物（不能先拷再报错）')
+  assert.equal(sha(readFileSync(sb.wasmPath)), sha(installed), '拒绝时必须保留原产物（不能先拷再报错）')
+  const metaAfter = JSON.parse(readFileSync(sb.metaPath, 'utf8'))
+  assert.equal(metaAfter.sha256, staleBytesMeta.sha256, '拒绝时也不许改写溯源')
 })
 
 // ── C. 真内核：写到能通过 ensure-wasm 的溯源 ─────────────────────────────────────

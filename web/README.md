@@ -142,7 +142,9 @@ npm run wasm:check     # 打印 commit/sha256/ys_version/HEADER + 四个布局�
 「旧 commit/sha → 新」，不静默改写。只给 `--expect-sha` 同步而不给 `--commit` 时**不写溯源**：
 脚本会明确告警「直接 `node --test` 时同源断言 SKIP；`npm test` / `npm run build` 会因缺溯源硬失败」。
 **页面底部会显示当前内核的 commit/版本/导出数/产物 sha256**（读不到就显示"来源未记录"），
-`tests/wasm-real.test.js` 会断言"wasm 的 sha256 == 溯源里的 sha256、版本/包头一致"——所以"产物是不是从那个 commit 编的"是可核对的，不靠记忆。
+`tests/wasm-real.test.js` 会断言"wasm 的 sha256 == 溯源里的 sha256、版本/包头一致"。
+**能核对的边界要说清**：可核对的是「这份字节 == 溯源里的 sha256/版本/头长」，以及「commit 至少在本仓存在」；
+至于"这份字节真的由那个 commit 编出来"仍由**声明者**负责（`wasm:rebuild` 自己构建所以能自证，手工声明不能）。
 （`ys_kernel.build.json` 是产物级元数据，按 `.gitignore` 不入库。）
 
 ## 端侧内核绑定（`crypto/include/yanshu_sm.h`）

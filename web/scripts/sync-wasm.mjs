@@ -90,6 +90,10 @@ if (existsSync(metaPath)) {
 // ── 3) 期望摘要：显式 --expect-sha > --commit + 显式 YS_WASM 现算 > 旧溯源 ─────────
 let expectSha = String(argVal('expect-sha') || '').trim().toLowerCase()
 let expectFrom = expectSha ? '--expect-sha' : ''
+if (hasFlag('expect-sha') && !expectSha) {
+  console.error('[sync-wasm] --expect-sha 需要值：<64 位十六进制 sha256>（悬空等于"我以为我指定了版本"，拒绝猜）')
+  process.exit(2)
+}
 if (expectSha && !/^[0-9a-f]{64}$/.test(expectSha)) {
   console.error(`[sync-wasm] --expect-sha 必须是 64 位十六进制 sha256（实际「${expectSha}」）——拒绝同步`)
   process.exit(2)
@@ -119,19 +123,9 @@ if (!expectSha) {
   )
   process.exit(2)
 }
-// 换版场景：旧溯源与期望不一致是**正常替换**，不是错误，只要不是"悄悄换"
+// 换版提示要放在**门禁通过之后**打（先打印"将被替换"再 exit 3 = 承诺了没做）
 const replacingMeta = Boolean(meta && meta.sha256 && String(meta.sha256).toLowerCase() !== expectSha)
-if (replacingMeta) {
-  console.log(
-    `[sync-wasm] 溯源将被替换：旧 ${String(meta.sha256).slice(0, 12)}…（commit ${String(meta.commit).slice(0, 7)}）` +
-      ` → 新 ${expectSha.slice(0, 12)}…（期望来源：${expectFrom}）`,
-  )
-} else if (wantCommit && meta && meta.commit && String(meta.commit) !== wantCommit) {
-  // 同一份字节、换一个 commit 声明：也要说出来（否则"同源"被悄悄改写）
-  console.log(
-    `[sync-wasm] 溯源里的 commit 声明变更：${String(meta.commit).slice(0, 7)} → ${wantCommit.slice(0, 7)}（产物字节不变）`,
-  )
-}
+const commitChanged = Boolean(wantCommit && meta && meta.commit && String(meta.commit) !== wantCommit)
 
 // ── 4) 候选（含仓库里的冻结内核；仍然只认同摘要的那一份） ───────────────────────────
 // 冻结内核按**目录布局**取（web/ 的上一级 server/kernel/），不依赖 git，tarball/CI 里也成立
@@ -188,7 +182,7 @@ let facts
 try {
   facts = probeKernel(readFileSync(hit.path))
 } catch (err) {
-  console.error(`[sync-wasm] 候选产物无法实例化（${err.message}）——拒绝同步：${hit.path}`)
+  console.error(`[sync-wasm] 候选产物不合格（${err.message}）——拒绝同步：${hit.path}`)
   process.exit(3)
 }
 const problems = []
@@ -208,6 +202,19 @@ if (problems.length) {
       problems.join('\n - '),
   )
   process.exit(3)
+}
+
+// 门禁过了才说"要换溯源"：不承诺做不到的事
+if (replacingMeta) {
+  console.log(
+    `[sync-wasm] 溯源将被替换：旧 ${String(meta.sha256).slice(0, 12)}…（commit ${String(meta.commit).slice(0, 7)}）` +
+      ` → 新 ${expectSha.slice(0, 12)}…（期望来源：${expectFrom}）`,
+  )
+} else if (commitChanged) {
+  // 同一份字节、换一个 commit 声明：也要说出来（否则"同源"被悄悄改写）
+  console.log(
+    `[sync-wasm] 溯源里的 commit 声明变更：${String(meta.commit).slice(0, 7)} → ${wantCommit.slice(0, 7)}（产物字节不变）`,
+  )
 }
 
 // ── 7) 拷贝 + 复验（旧溯源的字节数只在不替换它时才是一道硬门禁；一律在拷贝前判，免得留下"新产物 + 旧溯源"）──
