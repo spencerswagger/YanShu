@@ -1,0 +1,72 @@
+{
+  "title": "v5 ④ 全平台统计 · 计数器 / HTTP / 前端展示三处同数",
+  "verdict": 0,
+  "rows": [
+    {
+      "name": "空库基线全 0",
+      "kind": "PASS",
+      "evidence": "200 {\"today\": {\"consumed\": 0, \"consumed_bytes\": 0, \"created\": 0}, \"total\": {\"consumed\": 0, \"consumed_bytes\": 0, \"created\": 0}, \"generated_at\": \"2026-11-10T04:08:28Z\"}"
+    },
+    {
+      "name": "响应带三个 no-store 头",
+      "kind": "PASS",
+      "evidence": "{\"cache-control\": \"no-store\", \"cdn-cache-control\": \"no-store\", \"surrogate-control\": \"no-store\"}"
+    },
+    {
+      "name": "字段集精确（aggregate only，无个例信息）",
+      "kind": "PASS",
+      "evidence": "top=['generated_at', 'today', 'total'] leak=无"
+    },
+    {
+      "name": "建 3 条 + 取走 2 条（ok 前置）",
+      "kind": "PASS",
+      "evidence": "made=3 acked=2 明文合计=3145728B"
+    },
+    {
+      "name": "建/取 计数在 ≤60s 内可见（实测延迟）",
+      "kind": "PASS",
+      "evidence": "延迟=60.1s today={\"consumed\": 2, \"consumed_bytes\": 3145728, \"created\": 3} 期望 consumed_bytes=3145728"
+    },
+    {
+      "name": "计数器表 == transfers 直算（今日）",
+      "kind": "PASS",
+      "evidence": "counters=(2, 3145728, 3) transfers=(2, 3145728, 3)"
+    },
+    {
+      "name": "计数器表 == transfers 直算（累计）",
+      "kind": "PASS",
+      "evidence": "counters=(2, 3145728, 3) transfers=(2, 3145728, 3)"
+    },
+    {
+      "name": "HTTP JSON == 计数器表（今日/累计）",
+      "kind": "PASS",
+      "evidence": "http_today=(2,3145728,3) ctr_today=(2, 3145728, 3)"
+    },
+    {
+      "name": "today 按 UTC 日界（服务端会话时区必须 UTC）",
+      "kind": "PASS",
+      "evidence": "TimeZone=Etc/UTC 本地日=UTC日=True"
+    },
+    {
+      "name": "generated_at 与 Date 头一致（≤5s）",
+      "kind": "PASS",
+      "evidence": "generated_at=2026-11-10T04:09:29Z Δ=0.0s"
+    },
+    {
+      "name": "前端格式化真数字（非空、不塌成 0）",
+      "kind": "PASS",
+      "evidence": "{\"module\": \"net/stats.js\", \"today\": {\"consumed\": \"2\", \"consumed_bytes\": \"3 MB\", \"created\": \"3\"}, \"total\": {\"consumed\": \"2\", \"consumed_bytes\": \"3 MB\", \"created\": \"3\"}}"
+    },
+    {
+      "name": "另一客户端读到同一份数字（全平台共享）",
+      "kind": "PASS",
+      "evidence": "200 相同=True"
+    },
+    {
+      "name": "撤回不计入 consumed（created +1、consumed 不动）",
+      "kind": "PASS",
+      "evidence": "revoke=200 REVOKED counters (2, 3145728, 3)→(2, 3145728, 4)"
+    }
+  ],
+  "notes": []
+}

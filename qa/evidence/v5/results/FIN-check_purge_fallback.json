@@ -1,0 +1,47 @@
+{
+  "title": "v5 ③b 兜底删密文 · 超过一批的终结行必须被删、且每轮推进到不同行",
+  "verdict": 0,
+  "rows": [
+    {
+      "name": "已种 250 条终结行，且密文真实落盘",
+      "kind": "PASS",
+      "evidence": "盘上=250/250"
+    },
+    {
+      "name": "清道夫跑完：盘上残留必须为 0",
+      "kind": "PASS",
+      "evidence": "残留=0/250"
+    },
+    {
+      "name": "第 1 轮与第 2 轮删的是**不同批**行（交集为空）",
+      "kind": "PASS",
+      "evidence": "|第1轮|=200 |第2轮|=50 交集=0"
+    },
+    {
+      "name": "各轮覆盖并集 = 全部行（无重复删、无漏删）",
+      "kind": "PASS",
+      "evidence": "并集=250 / 250，轮次数=2"
+    },
+    {
+      "name": "日志 purged 不是常量（累计覆盖全部行、末批不足一批）",
+      "kind": "PASS",
+      "evidence": "非零序列=[200, 50] 累计=250"
+    },
+    {
+      "name": "日志 purgeRemaining 有非零值且最终归零（真实剩余，不是批次大小）",
+      "kind": "PASS",
+      "evidence": "序列=[50, 0]"
+    },
+    {
+      "name": "到期后取件（事务内终结、newly=false）：410 且密文当场删净",
+      "kind": "PASS",
+      "evidence": "410 TRANSFER_EXPIRED 目录已消失=True（sweep=600s，不可能靠兜底）"
+    },
+    {
+      "name": "ack 终结（事务内终结）：CONSUMED 且密文当场删净",
+      "kind": "PASS",
+      "evidence": "200 state=CONSUMED 目录已消失=True（sweep=600s）"
+    }
+  ],
+  "notes": []
+}

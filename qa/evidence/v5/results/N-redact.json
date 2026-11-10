@@ -1,0 +1,50 @@
+{
+  "title": "v5 ③c 脱敏扫描 · 20 万行稳态必须走部分索引",
+  "verdict": 0,
+  "rows": [
+    {
+      "name": "迁移建表（含 0009 脱敏索引）",
+      "kind": "PASS",
+      "evidence": "time=2026-11-09T19:14:36.840Z level=INFO msg=\"migrations applied\" logPath=\"\""
+    },
+    {
+      "name": "造 200000 行并 ANALYZE",
+      "kind": "PASS",
+      "evidence": "表内=200000 待脱敏候选=180000"
+    },
+    {
+      "name": "稳态：取 200 行的子查询走索引、且很便宜",
+      "kind": "PASS",
+      "evidence": "子查询 0.15ms / 309 buffers（Core 报 0.039ms 指的就是这一步）"
+    },
+    {
+      "name": "稳态：整条 UPDATE 的计划走索引（不是 Seq Scan）",
+      "kind": "PASS",
+      "evidence": "节点=Index Scan 时间=19.257ms buffers=377（UPDATE 含 200 行写 + 索引维护）"
+    },
+    {
+      "name": "稳态：整条 UPDATE ≤ 30 ms",
+      "kind": "PASS",
+      "evidence": "时间=19.257ms buffers=377"
+    },
+    {
+      "name": "模拟「清理刚跑完」：一次性脱敏全部候选行",
+      "kind": "PASS",
+      "evidence": "UPDATE 179800"
+    },
+    {
+      "name": "紧接着再跑：仍不应退化成 Seq Scan",
+      "kind": "PASS",
+      "evidence": "节点=Index Scan 时间=89.268ms buffers=378（死元组未回收时的高水位）"
+    },
+    {
+      "name": "VACUUM 后回落到 ≤ 30 ms（瞬时退化不是长期问题）",
+      "kind": "PASS",
+      "evidence": "VACUUM rc=0 → Index Scan 0.167ms / 383 buffers"
+    }
+  ],
+  "notes": [
+    "退化观察：稳态 19.257ms → 刚跑完 89.268ms（4.6×）→ VACUUM 后 0.167ms。成因是部分索引里的死项与堆页可见性未更新（180k 行刚被改），属瞬时；生产上自动 vacuum 会回收，若要避免这段抖动可把大批量脱敏分批摊到多 tick。",
+    "稳态计划尾部：Buffers: shared hit=377 / Planning Time: 1.520 ms / Execution Time: 19.257 ms"
+  ]
+}

@@ -1,0 +1,115 @@
+{
+  "out": "/worktrees/YS-QA/tmp/v5/results/rel-ui2",
+  "shots": [
+    "/worktrees/YS-QA/tmp/v5/results/rel-ui2/first-1440x900.png",
+    "/worktrees/YS-QA/tmp/v5/results/rel-ui2/ttl-after-expiry-1440x900.png",
+    "/worktrees/YS-QA/tmp/v5/results/rel-ui2/ttl-after-expiry-390x844.png"
+  ],
+  "beforeExpiry": [
+    {
+      "text": "1 分钟后过期",
+      "soon": true,
+      "expired": false,
+      "rowOpacity": "1",
+      "nameDecoration": "none",
+      "downloadDisabled": false
+    },
+    {
+      "text": "2 天后过期",
+      "soon": false,
+      "expired": false,
+      "rowOpacity": "1",
+      "nameDecoration": "none",
+      "downloadDisabled": false
+    },
+    {
+      "text": "41 分钟后过期",
+      "soon": true,
+      "expired": false,
+      "rowOpacity": "1",
+      "nameDecoration": "none",
+      "downloadDisabled": false
+    },
+    {
+      "text": "22 小时后过期",
+      "soon": false,
+      "expired": false,
+      "rowOpacity": "1",
+      "nameDecoration": "none",
+      "downloadDisabled": false
+    }
+  ],
+  "afterExpiry": [
+    {
+      "text": "已过期，无法取回",
+      "soon": false,
+      "expired": true,
+      "rowOpacity": "0.55",
+      "nameDecoration": "line-through",
+      "downloadDisabled": true
+    },
+    {
+      "text": "2 天后过期",
+      "soon": false,
+      "expired": false,
+      "rowOpacity": "1",
+      "nameDecoration": "none",
+      "downloadDisabled": false
+    },
+    {
+      "text": "41 分钟后过期",
+      "soon": true,
+      "expired": false,
+      "rowOpacity": "1",
+      "nameDecoration": "none",
+      "downloadDisabled": false
+    },
+    {
+      "text": "22 小时后过期",
+      "soon": false,
+      "expired": false,
+      "rowOpacity": "1",
+      "nameDecoration": "none",
+      "downloadDisabled": false
+    }
+  ],
+  "serverState": {
+    "status": 200,
+    "state": "EXPIRED",
+    "terminal_reason": "EXPIRED"
+  },
+  "failures": [],
+  "code": "DVFJ",
+  "seeds": {
+    "recipient": "DVFJ",
+    "shortTtlSec": 30,
+    "seeds": [
+      {
+        "name": "23h",
+        "transfer_id": "e9aeafd79ae98d34b3e7865093c2f678",
+        "expires_at": "2026-11-11 03:12:51.982197+00"
+      },
+      {
+        "name": "42m",
+        "transfer_id": "f97d139029882d7fe9fb09320bb567ba",
+        "expires_at": "2026-11-10 04:54:52.714777+00"
+      },
+      {
+        "name": "50h",
+        "transfer_id": "dbcb119571f9939d8e4dac853036ea79",
+        "expires_at": "2026-11-12 06:12:53.065692+00"
+      },
+      {
+        "name": "short",
+        "transfer_id": "cd2adb4bff8735440a54e30a1c345425",
+        "expires_at": "2026-11-10 04:13:23.488578+00"
+      }
+    ]
+  },
+  "inboxAuto": 4,
+  "stats": "今日发送0今日接收0成功率—今日已取走0今日流量0 MB今日新建4累计已取走0累计流量0 MB累计新建4",
+  "waitMs": 24069,
+  "styleLagMs": 1,
+  "rowsStillListed": 4,
+  "serverStateWaitMs": 10
+}

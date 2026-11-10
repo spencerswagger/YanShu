@@ -1,0 +1,58 @@
+{
+  "out": "/worktrees/YS-QA/tmp/v5/results/ui-before",
+  "shots": [
+    "/worktrees/YS-QA/tmp/v5/results/ui-before/first-1440x900.png",
+    "/worktrees/YS-QA/tmp/v5/results/ui-before/ttl-after-expiry-1440x900.png",
+    "/worktrees/YS-QA/tmp/v5/results/ui-before/ttl-after-expiry-390x844.png"
+  ],
+  "beforeExpiry": [],
+  "afterExpiry": [],
+  "serverState": {
+    "status": 200,
+    "state": "EXPIRED",
+    "terminal_reason": "EXPIRED"
+  },
+  "failures": [
+    "首屏未自动加载 4 行待收（实际 0）——InboxPanel 应在 api 注入后自动拉取",
+    "加载时缺「小时」级 TTL 行：",
+    "加载时缺「分钟」级 TTL 行：",
+    "加载时缺「天」级 TTL 行：",
+    "到点后应有且仅有 1 行变「已过期」（实际 0 行；说明界面没跟时间自翻，或翻错了行）",
+    "到点后的同一屏缺「小时」级 TTL 行：",
+    "到点后的同一屏缺「分钟」级 TTL 行：",
+    "到点后的同一屏缺「天」级 TTL 行：",
+    "到点后行数应为 4（行应留在列表里变灰，而不是消失）：实际 0"
+  ],
+  "code": "ECRZ",
+  "seeds": {
+    "recipient": "ECRZ",
+    "shortTtlSec": 30,
+    "seeds": [
+      {
+        "name": "23h",
+        "transfer_id": "3f44120cc05943788eca6c532d32c4f8",
+        "expires_at": "2026-11-10 18:05:38.06676+00"
+      },
+      {
+        "name": "42m",
+        "transfer_id": "bde894befdd893d06821c25136e64852",
+        "expires_at": "2026-11-09 19:47:38.907443+00"
+      },
+      {
+        "name": "50h",
+        "transfer_id": "a87a2cf22272b648bccc90ad3344427e",
+        "expires_at": "2026-11-11 21:05:39.745441+00"
+      },
+      {
+        "name": "short",
+        "transfer_id": "e752b5cdf7f0a996ae94f0b8c8c6a637",
+        "expires_at": "2026-11-09 19:06:10.107431+00"
+      }
+    ]
+  },
+  "inboxAuto": 0,
+  "stats": "今日发送0今日接收0成功率—今日已取走0今日流量0 MB今日新建4累计已取走0累计流量0 MB累计新建4",
+  "waitMs": 90253,
+  "styleLagMs": 40172,
+  "rowsStillListed": 0
+}

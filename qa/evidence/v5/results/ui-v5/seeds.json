@@ -1,0 +1,20 @@
+{
+  "recipient": "GEVX",
+  "seeds": [
+    {
+      "name": "23h",
+      "transfer_id": "e80670d468298d5cbd191cbf49ff467b",
+      "expires_at": "2026-11-10T16:49:24Z"
+    },
+    {
+      "name": "42m",
+      "transfer_id": "042a94e57a8752d6f93cd347376e19e1",
+      "expires_at": "2026-11-09 18:31:24.901518+00"
+    },
+    {
+      "name": "expired",
+      "transfer_id": "edaf4bd9523ec0ef9c30994d11815318",
+      "expires_at": "2026-11-09 17:49:24.256099+00"
+    }
+  ]
+}

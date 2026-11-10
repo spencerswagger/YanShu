@@ -1,0 +1,42 @@
+{
+  "title": "v5 ③d 块级指纹脱敏 · ciphertext_sm3 30 天后为 NULL，其余逐值不变",
+  "verdict": 0,
+  "rows": [
+    {
+      "name": "取件完成 → CONSUMED",
+      "kind": "PASS",
+      "evidence": "200 state=CONSUMED"
+    },
+    {
+      "name": "块行里 ciphertext_sm3 有值（真上传写入）",
+      "kind": "PASS",
+      "evidence": "4/4 块有指纹（期望 4）"
+    },
+    {
+      "name": "终结 40 天 → 该传输所有块 ciphertext_sm3 为 NULL",
+      "kind": "PASS",
+      "evidence": "仍有指纹的块=0"
+    },
+    {
+      "name": "块侧候选集只减不增（不会越扫越多）",
+      "kind": "PASS",
+      "evidence": "候选序列首/末=[524, 524, 524, 524, 524, 524]…[524, 524, 0]（峰值 524）"
+    },
+    {
+      "name": "transfers 其余列逐值不变（除三列）",
+      "kind": "PASS",
+      "evidence": "变化的列=无（比较了 20 列）"
+    },
+    {
+      "name": "transfer_chunks 除 ciphertext_sm3 外逐值不变",
+      "kind": "PASS",
+      "evidence": "块行 4 行一致=True"
+    },
+    {
+      "name": "块行本身仍在（永久保留的是行与计数）",
+      "kind": "PASS",
+      "evidence": "块行数=4"
+    }
+  ],
+  "notes": []
+}
