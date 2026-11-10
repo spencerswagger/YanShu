@@ -103,7 +103,8 @@ func TestWrongMethodKeepsContractEnvelope(t *testing.T) {
 	}
 	for _, c := range cases {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
+		req := httptest.NewRequest(c.method, c.path, nil)
+		h.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("%s %s: status = %d, want 405", c.method, c.path, rec.Code)
@@ -119,6 +120,11 @@ func TestWrongMethodKeepsContractEnvelope(t *testing.T) {
 			if !strings.Contains(allow, m) {
 				t.Fatalf("%s %s: Allow = %q, want 含 %s", c.method, c.path, allow, m)
 			}
+		}
+		// 405 必须把路由模板写回请求：否则审计行只能记 "unmatched"，
+		// "方法用错"在审计里彻底消失（契约 §2.1：审计只记路由模板）。
+		if pattern := req.Pattern; pattern == "" || pattern == "unmatched" {
+			t.Fatalf("%s %s: r.Pattern = %q, want 路由模板（审计要记模板）", c.method, c.path, pattern)
 		}
 	}
 }

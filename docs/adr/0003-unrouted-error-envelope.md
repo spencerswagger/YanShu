@@ -12,7 +12,8 @@
 
 `API.md` §0.2 写死一条全局规则：
 
-> **所有非 2xx 响应统一**：`{"error":{"code","message","scope","retry_after","request_id"}}`
+> **所有由 API 层产生的 4xx/5xx 响应统一**：`{"error":{"code","message","scope","retry_after","request_id"}}`
+> （3xx 路径规范化重定向与 `net/http` 传输层错误——畸形请求行 `400`、超大头 `431`——不在覆盖内，见 §0.2）
 
 §10 又写死客户端义务：「**客户端必须按 `code` 分支**；`message` 仅供开发者阅读」。
 

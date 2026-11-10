@@ -59,6 +59,9 @@ func (u *unrouted) handler() http.HandlerFunc {
 			if methods, ok := u.methods[pattern]; ok {
 				w.Header().Set("Allow", strings.Join(methods, ", "))
 			}
+			// 把路由模板写回请求：否则访问日志与审计行只能记 "unmatched"，
+			// "方法用错"这类问题在审计里彻底消失（API.md §2.1：审计只记路由模板）。
+			r.Pattern = pattern
 			fail(w, r, spec.ErrMethodNotAllowed)
 			return
 		}
