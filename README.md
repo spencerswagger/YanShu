@@ -45,7 +45,7 @@ docker compose up -d
 | Go | 1.27 | 编译服务端（`server/go.mod` 声明 `go 1.27`） |
 | PostgreSQL | 16 | 存码、传输元数据、审计；**必须**，无内置存储替代 |
 | Docker | 24+（可选） | 只用容器部署时需要；构建镜像建议启用 BuildKit |
-| 冻结内核 | `server/kernel/yanshu_sm.wasm`，127,313 B，sha256 `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f` | `YANSHU_VERIFIER=sm2` 时必需，仓库已附带 |
+| 冻结内核 | `server/kernel/yanshu_sm.wasm`，140,762 B，sha256 `daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de`（白名单另收 `8766048f…` 回滚版与 `c1b87d0a…` 灰度版） | `YANSHU_VERIFIER=sm2` 时必需，仓库已附带 |
 
 ## 4. 本地开发（从源码直接跑，不用 Docker）
 
@@ -75,7 +75,7 @@ curl -s http://127.0.0.1:8080/healthz
 
 ```
 msg="sm2 verifier loaded" kernel=./kernel/yanshu_sm.wasm version=0x00010000
-msg="kernel verified" sha256=c1b87d0a…7259f version=0x00010000 exports=35
+msg="kernel verified" sha256=daa94926…31de version=0x00010000 exports=44
 ```
 
 需要你改的地方：`YANSHU_DATABASE_URL`（换成真实 DSN）、`YANSHU_TOKEN_SECRET`（换成固定随机值并存好）。
@@ -92,7 +92,7 @@ YANSHU_DATABASE_URL="postgres://$USER@127.0.0.1:5432/yanshu?sslmode=disable" \
 
 # 校验内核（不连数据库，CI 可用）
 YANSHU_KERNEL_WASM=./kernel/yanshu_sm.wasm go run ./cmd/yanshu-server -verify-kernel
-# kernel_sha256=c1b87d0a…7259f / ys_version=0x00010000 / exports=35 / allowlisted=true
+# kernel_sha256=daa94926…31de / ys_version=0x00010000 / exports=44 / allowlisted=true
 
 # 起服务（stub-allow 只能本地调试：要求 YANSHU_ENV=local|test 且监听 loopback）
 YANSHU_VERIFIER=stub-allow YANSHU_ENV=local YANSHU_ADDR=127.0.0.1:8080 \
@@ -168,7 +168,7 @@ docker compose exec postgres psql -U yanshu -d yanshu \
 | 打开 `http://<host>:18080/` 是 **404** | 只起了服务端、没起 web 容器；或 nginx 配置未生效 | `docker compose ps` 确认 `web` 在跑（应为 3 个容器：postgres/server/web）；只 publish web 的 18080 端口 |
 | `docker compose pull` 报 `unauthorized` / `denied` | 仓库是私有的，未登录就匿名拉取 | `docker login swr.cn-east-5.myhuaweicloud.com`，或把仓库设为公开 |
 | `docker compose up` 直接退出，提示 `set YANSHU_TOKEN_SECRET` | `.env`/环境中缺 `YANSHU_TOKEN_SECRET`（必填，≥16 字节） | 补上该变量；compose 里用的是 `${YANSHU_TOKEN_SECRET:?…}`，缺失会立即失败 |
-| 启动即退出，`kernel sha256 … is not in the frozen allowlist`（或内核文件不存在） | 内核缺失，或不是冻结产物（从错误目录构建会得到不同字节） | 用仓库内 `server/kernel/yanshu_sm.wasm`（127,313 B / `c1b87d0a…7259f`）；镜像内应为 `/app/kernel/yanshu_sm.wasm`；可用 `-verify-kernel` 自检 |
+| 启动即退出，`kernel sha256 … is not in the frozen allowlist`（或内核文件不存在） | 内核缺失，或不是冻结产物（从错误目录构建会得到不同字节） | 用仓库内 `server/kernel/yanshu_sm.wasm`（140,762 B / `daa94926…31de`）；镜像内应为 `/app/kernel/yanshu_sm.wasm`；可用 `-verify-kernel` 自检 |
 | 启动即退出，`YANSHU_VERIFIER=stub-allow requires YANSHU_ENV=local\|test`（或要求 loopback） | 在容器/非本地环境开了全放行 | 容器部署一律 `YANSHU_VERIFIER=sm2`；`stub-allow` 只在 `local\|test` + loopback 调试用 |
 
 其余业务侧报错：
