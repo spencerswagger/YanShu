@@ -116,6 +116,77 @@ docker compose exec postgres psql -U yanshu -d yanshu \
 - 构建镜像需要 BuildKit（`docker buildx` 或 `DOCKER_BUILDKIT=1`）；Dockerfile 已避免 `COPY --chmod`
   这类仅 BuildKit 支持的写法，用 `RUN chmod` 代替。
 
+## 4.2 迁移约定（写迁移前必读）
+
+迁移文件在 `server/internal/store/migrations/`，按文件名升序应用；已应用的文件名记在 `schema_migrations`，
+**重跑会跳过**。镜像的 `ENTRYPOINT` 是
+`/app/yanshu-server -migrate-only && exec /app/yanshu-server` —— 迁移返回非 0，服务就不启动（fail-closed）。
+
+### 4.2.1 `-- yanshu:no-transaction` 必须独占一行
+
+迁移器只把"去掉 `--` 后恰好等于 `yanshu:no-transaction`"的那一行当成指令（`store.isNoTxMigration`）。
+下面两种写法**不会**被识别，文件仍按事务式执行：
+
+```sql
+-- 本文件用 yanshu:no-transaction 关掉事务
+```
+```sql
+-- 说明见 yanshu:no-transaction 段
+```
+
+而事务块里的 `CREATE INDEX CONCURRENTLY` 会被 PostgreSQL 直接拒绝。实测（v0.2.2 二进制 + PG 17.11）：
+
+```
+time=… level=ERROR msg=fatal err="store: apply 0011_sameline_directive.sql:
+  ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block (SQLSTATE 25001)"
+rc=1            # 该文件没有被记入 schema_migrations → 下次启动继续失败
+```
+
+正确写法（指令单独一行，放在文件头、第一条语句之前）：
+
+```sql
+-- yanshu:no-transaction
+```
+
+同一份 SQL 只把指令移到独占一行，实测 `rc=0`、索引 `indisvalid = true`。
+
+### 4.2.2 非事务迁移不原子，重跑必须幂等
+
+`-- yanshu:no-transaction` 的文件**逐条自动提交、没有回滚**：中途失败（进程被杀、锁等待超时、磁盘满）
+会留下"跑了一半"的库，且 `schema_migrations` 不记录 → 下次启动**从头再跑一遍**。所以每一句都要能重跑：
+
+- 建表 / 加列：`CREATE TABLE IF NOT EXISTS`、`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`；
+- 建索引：先 `DROP INDEX CONCURRENTLY IF EXISTS`，再 `CREATE INDEX CONCURRENTLY IF NOT EXISTS`（`0010` 即此写法）。
+  原因：`CREATE INDEX CONCURRENTLY` 失败会留下一个 **INVALID** 索引（占名字、查询用不了），
+  而 `CREATE INDEX ... IF NOT EXISTS` 遇到同名 INVALID 索引会直接跳过 —— 不先删就永远修不好；
+- 数据回填：用 `INSERT ... ON CONFLICT DO UPDATE`，或先删后写；不要假设"只跑一次"。
+
+实测重跑：把 `0010` 的版本记录从 `schema_migrations` 删掉再跑 `-migrate-only` → `rc=0`，
+版本记录回到 9 条，`transfers` / `transfer_chunks` 上 **11/11 索引 `indisvalid = true`**。
+
+### 4.2.3 事务迁移里不要建阻塞索引
+
+普通 `CREATE INDEX` 取 `SHARE` 锁，锁一直持到迁移事务提交；`transfers` 从 v5 起元数据永久保留、只会变大。
+150 万行实测：事务式建索引期间单条写入最长阻塞 **1215.8 ms**（300 条并发 `UPDATE` 里 2 条 ≥1 s）；
+改成非事务 + `CONCURRENTLY` 后 **13.0 ms**、0 条，`pg_locks` 里只剩 `ShareUpdateExclusiveLock`。
+
+唯一例外是**同一份迁移里刚新建的表**（表必为空）。这条规则有可执行门禁：
+
+```sh
+cd server && go test ./internal/store -run TestMigrationsCreateIndexesWithoutBlockingWrites
+```
+
+### 4.2.4 排查"迁移跑了一半"
+
+```sql
+-- 已应用的版本
+select version, applied_at from schema_migrations order by version;
+-- INVALID（CIC 失败留下的）索引
+select indexrelid::regclass as index, indrelid::regclass as table from pg_index where not indisvalid;
+```
+
+INVALID 索引按 §4.2.2 的写法重跑对应迁移即可自愈（先 `DROP ... CONCURRENTLY IF EXISTS` 再建）。
+
 ## 5. v1 限制
 
 - **单实例**：限速额度是进程内内存实现，多副本会让有效额度变成 N 倍且互不同步。
