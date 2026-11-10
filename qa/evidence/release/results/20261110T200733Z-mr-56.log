@@ -1,0 +1,10 @@
+== 合并期回归 @ 2026-11-10T20:07:33Z  ref=7385f8b (7385f8bc280a59ae806fe07df6b886cb786b1195)  only=56
+   work=/tmp/yanshu-mr-5-200733
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t200737_test?sslmode=disable
+--- #56 终结态 410 先于凭据 ---
+  --- PASS 2 条
+[PASS] #56 httpapi 门禁（Terminal + 阴性对照）
+
+结论：本轮要求的 2 项全部真跑且 PASS

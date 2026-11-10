@@ -110,6 +110,37 @@ httpapi 夹具用的是固定 schema 名，跟别人同时跑同一包会互删 
 退出码：0 = 三处全被抓；1 = 有变异没被抓（门禁假绿）；2 = 环境不成立（连不上库/并发踩踏，
 **不是**门禁结论）。
 
+## 合并期逐张回归（每合一张跑一次）
+
+```sh
+TEST_DATABASE_URL=... qa/evidence/release/merge_regression.sh --ref <合入后的 commit> --only 56|57|58|59|60|61|all
+```
+
+脚本自己 `git archive` 取那棵树、编二进制、建隔离库（`yanshu_mr_*`，跑完删），只跑这张 PR 守的那条：
+
+| PR | 最小回归 | 判据 |
+|---|---|---|
+| #56 | `go test ./internal/httpapi -run 'Terminal|NonTerminal'` | 2 条 PASS（主用例 + 阴性对照） |
+| #57 | store 两条门禁 + `-migrate-only` 连跑两遍 | 门禁 PASS；第二遍幂等、`schema_migrations` = 9 |
+| #58 | `qa/evidence/check_unrouted_envelope.sh` | 未路由 404 / 方法不符 405 都是信封 |
+| #59 | `ab_contract_envelope.py --expect after` | 4/4 信封 + 2 条对照组 |
+| #60 | `scripts/crosscheck/run.sh --no-local` | FAIL 0（SKIP 是缺 GmSSL/宿主对照值，不算失败） |
+| #61 | `node --test web/tests/wasm-sync-provenance.test.js` | fail 0（缺内核产物时 1 条 SKIP，不算通过） |
+| 全部 | `--only all` | 上面 7 项全跑，任一 FAIL 即整体 1 |
+
+判据（被 Owl 复审打回后收紧的）：
+
+- **go 门禁**：rc=0 **且** `--- PASS` 条数达标（#57 ≥2、#56 ≥2）**且**没有 `no tests to run`
+  —— `-run` 匹配不到时 go 会静默 exit 0、末行还是 `ok`，只看 `^ok` 会假绿。
+- **#58**：解析内层脚本的 `PASS=n FAIL=0` 且 rc=0；内层末行永远含 `PASS=`，`grep PASS` 会恒真。
+- **#60/#61**：要求汇总行 `FAIL 0` 且至少真跑了几条；`#61` 的 skipped >2 判 FAIL（缺产物不算通过）。
+- **SKIP / `--only` 非法** → 退出码 **2**，不能算"跑过"；`--only` 只接受 `56|57|58|59|60|61|all`。
+
+反向验证（门禁能红）：把 `api.go` 的 `guardUnrouted` 摘掉重编 → `check_unrouted_envelope.sh`
+输出 `PASS=4 FAIL=7`、内层 rc=1，本脚本按 `FAIL=0` 判据会红（不会再被 `grep PASS` 骗过）。
+
+`--only all` 适合合并收尾时跑一次。
+
 ## 已知边界
 
 - 沙盒无 docker，脚本走**原生进程**（二进制 + 真 PG + 独立数据目录），不跑 `docker compose`。

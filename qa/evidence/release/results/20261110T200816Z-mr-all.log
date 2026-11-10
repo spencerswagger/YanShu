@@ -1,0 +1,22 @@
+== 合并期回归 @ 2026-11-10T20:08:16Z  ref=origin/main (4479bd2f87d9bfdfaefb32fb84d404ad8e50938c)  only=all
+   work=/tmp/yanshu-mr-4-200816
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t200819_test?sslmode=disable
+--- #57 建索引锁写门禁 ---
+  --- PASS 2 条
+[PASS] #57 store 门禁（两条）
+[PASS] #57 迁移跑两遍幂等（schema_migrations=9）
+--- #56 终结态 410 先于凭据 ---
+  --- PASS 2 条
+[PASS] #56 httpapi 门禁（Terminal + 阴性对照）
+--- #58 契约 §0.2 路由信封 ---
+[PASS] #58 未路由信封（PASS=11 FAIL=0）
+--- #59 A/B 证据脚本 ---
+[PASS] #59 ab_contract_envelope --expect after
+--- #60 crosscheck 裸跑 ---
+[PASS] #60 crosscheck（PASS 6 / FAIL 0 / SKIP 69）
+--- #61 wasm:sync 溯源门禁 ---
+[PASS] #61 node --test（pass=6 fail=0 skipped=1）
+
+结论：本轮要求的 8 项全部真跑且 PASS
