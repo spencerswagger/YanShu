@@ -1,0 +1,22 @@
+== 合并期回归 @ 2026-11-10T22:57:59Z  ref=1f6b9e0 (1f6b9e05a51a5aea9bbee52f8fed0cae530f9d3d)  only=all
+   work=/tmp/yanshu-mr-1943-225759
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t225802_test?sslmode=disable
+--- #57 建索引锁写门禁 ---
+  --- PASS 2 条
+[PASS] #57 store 门禁（两条）
+[PASS] #57 迁移跑两遍幂等（schema_migrations=9）
+--- #56 终结态 410 先于凭据 ---
+  --- PASS 2 条
+[PASS] #56 httpapi 门禁（Terminal + 阴性对照）
+--- #58 契约 §0.2 路由信封 ---
+[SKIP] #58 脚本不在该 ref 上（该项没跑，不算通过）
+--- #59 A/B 证据脚本 ---
+[SKIP] #59 脚本不在该 ref 上（该项没跑，不算通过）
+--- #60 crosscheck 裸跑 ---
+[PASS] #60 crosscheck（PASS 6 / FAIL 0 / SKIP 69）
+--- #61 wasm:sync 溯源门禁 ---
+[SKIP] #61 测试不在该 ref 上（该项没跑，不算通过）
+
+结论：没有 FAIL，但有项没跑（SKIP/环境），不能算通过
