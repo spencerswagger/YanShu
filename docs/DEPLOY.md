@@ -163,8 +163,10 @@ rc=1            # 该文件没有被记入 schema_migrations → 下次启动继
   （`REINDEX INDEX CONCURRENTLY` 也能把 INVALID 索引重建好；本仓统一用"先删再建"，便于和重跑语义对齐。）
 - 数据回填：用 `INSERT ... ON CONFLICT DO UPDATE`，或先删后写；不要假设"只跑一次"；
 - **没有 `IF NOT EXISTS` 的 DDL 要先自己判存在**：`ALTER TABLE ... ADD CONSTRAINT`（先 `DROP CONSTRAINT IF EXISTS`）、
-  `CREATE TRIGGER`（先 `DROP TRIGGER IF EXISTS`）、`ALTER TYPE ... ADD VALUE`（PG 12+ 才有 `IF NOT EXISTS`；
-  更老的版本要用 `DO` 块吞 `duplicate_object`）。
+  `CREATE TRIGGER`（先 `DROP TRIGGER IF EXISTS`）。`ALTER TYPE ... ADD VALUE IF NOT EXISTS` 语法早在 PG 9.6 就有，
+  要注意的是**版本行为**：PG ≤11 不允许在事务块里 `ADD VALUE`，PG 12+ 允许（新值要到**提交后**才能使用）——
+  本仓跑 PG 16/17，属后者；实测同一事务内重复 `ADD VALUE IF NOT EXISTS` 只有
+  `NOTICE: enum label "b" already exists, skipping`，不报错。
 
 另外：**可重入 ≠ 无锁**。`ALTER TABLE ... ALTER COLUMN ... DROP NOT NULL` 天然可重入，但单条 DDL 仍取
 `ACCESS EXCLUSIVE`（`SET NOT NULL` 还要整表扫一遍）—— 幂等只解决"能重跑"，不解决"跑的时候锁写"。
@@ -186,8 +188,20 @@ rc=1            # 该文件没有被记入 schema_migrations → 下次启动继
 cd server && go test ./internal/store -run TestMigrationsCreateIndexesWithoutBlockingWrites
 ```
 
-脚注：PG 17 **不支持**对分区表建并发索引（`ERROR: cannot create index on partitioned table "..." concurrently`）。
-将来加分区表时，索引只能建在分区上（`ON ONLY`/逐分区），不能照抄 `CREATE INDEX CONCURRENTLY <分区表>`。
+脚注：PG 17 **不支持**对分区表建并发索引（`ERROR: cannot create index on partitioned table "..." concurrently`），
+不能照抄 `CREATE INDEX CONCURRENTLY <分区表>`。将来加分区表时按这个套路建：
+
+```sql
+-- 1) 每个分区各自并发建（不阻塞写）
+create index concurrently if not exists part_2026_11_created_idx on part_2026_11 (created_at);
+-- 2) 在父表上只建"空壳"索引（ON ONLY 不建物理索引）
+create index if not exists part_created_idx on only part (created_at);
+-- 3) 把分区索引挂到父索引上；全部分区挂完父索引才转为有效
+alter index part_created_idx attach partition part_2026_11_created_idx;
+```
+
+`ON ONLY` 建出来的父索引在挂完所有分区之前一直是 `indisvalid = false`（§4.2.4 的排查 SQL 会看到它，
+属于正常中间态）。
 
 ### 4.2.4 排查"迁移跑了一半"
 
