@@ -1,0 +1,195 @@
+{
+  "kind": "contract-1.7.4-terminal-before-credential",
+  "expect": "after",
+  "at": "2026-11-10T17:24:50+0000",
+  "binary": "/.octop/workspaces/0JXF1M/tmp/ab-round/runall4/bin/after",
+  "binary_sha256": "fc1d839bd0f080927c6e0fd0876a425c6a816c49b4c7631c4caaf6e5a89f2f9a",
+  "terminal_matrix": [
+    {
+      "path": "status",
+      "cred": "none",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "status",
+      "cred": "bogus",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "status",
+      "cred": "valid",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "prelude",
+      "cred": "none",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "prelude",
+      "cred": "bogus",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "prelude",
+      "cred": "valid",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "chunk",
+      "cred": "none",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "chunk",
+      "cred": "bogus",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "chunk",
+      "cred": "valid",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "complete",
+      "cred": "none",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "complete",
+      "cred": "bogus",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "complete",
+      "cred": "valid",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
+      "state": "CONSUMED"
+    },
+    {
+      "path": "status",
+      "cred": "none",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    },
+    {
+      "path": "status",
+      "cred": "bogus",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    },
+    {
+      "path": "status",
+      "cred": "valid",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    },
+    {
+      "path": "prelude",
+      "cred": "none",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    },
+    {
+      "path": "prelude",
+      "cred": "bogus",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    },
+    {
+      "path": "prelude",
+      "cred": "valid",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    },
+    {
+      "path": "chunk",
+      "cred": "none",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    },
+    {
+      "path": "chunk",
+      "cred": "bogus",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    },
+    {
+      "path": "chunk",
+      "cred": "valid",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    },
+    {
+      "path": "complete",
+      "cred": "none",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    },
+    {
+      "path": "complete",
+      "cred": "bogus",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    },
+    {
+      "path": "complete",
+      "cred": "valid",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
+      "state": "REVOKED"
+    }
+  ],
+  "negative_control": [
+    {
+      "path": "prelude",
+      "cred": "none",
+      "status": 401,
+      "code": "AUTH_MISSING",
+      "want": "AUTH_MISSING"
+    },
+    {
+      "path": "prelude",
+      "cred": "bogus",
+      "status": 401,
+      "code": "AUTH_TOKEN_INVALID",
+      "want": "AUTH_TOKEN_INVALID"
+    }
+  ],
+  "failures": [],
+  "pass": true
+}

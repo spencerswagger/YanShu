@@ -1,0 +1,89 @@
+{
+  "kind": "contract-envelope-0.2",
+  "expect": "before",
+  "at": "2026-11-10T17:24:44+0000",
+  "binary": "/.octop/workspaces/0JXF1M/tmp/ab-round/runall4/bin/before",
+  "binary_sha256": "483dd44db7a76e71be0eeb5967faa38750870d19ea680e26016b61ac7b1c1887",
+  "unrouted": [
+    {
+      "status": 404,
+      "content_type": "text/plain; charset=utf-8",
+      "code": "",
+      "request_id": "",
+      "allow": "",
+      "body_head": "404 page not found\\n",
+      "envelope": false,
+      "case": "未知路径",
+      "method": "GET",
+      "path": "/v1/definitely-not-an-endpoint"
+    },
+    {
+      "status": 404,
+      "content_type": "text/plain; charset=utf-8",
+      "code": "",
+      "request_id": "",
+      "allow": "",
+      "body_head": "404 page not found\\n",
+      "envelope": false,
+      "case": "未知路径(深层)",
+      "method": "GET",
+      "path": "/v1/transfers/abc/nope"
+    },
+    {
+      "status": 405,
+      "content_type": "text/plain; charset=utf-8",
+      "code": "",
+      "request_id": "",
+      "allow": "POST",
+      "body_head": "Method Not Allowed\\n",
+      "envelope": false,
+      "case": "方法不对(POST→GET)",
+      "method": "GET",
+      "path": "/v1/transfers"
+    },
+    {
+      "status": 405,
+      "content_type": "text/plain; charset=utf-8",
+      "code": "",
+      "request_id": "",
+      "allow": "GET, HEAD",
+      "body_head": "Method Not Allowed\\n",
+      "envelope": false,
+      "case": "方法不对(GET→DELETE)",
+      "method": "DELETE",
+      "path": "/healthz"
+    }
+  ],
+  "controls": [
+    {
+      "status": 404,
+      "content_type": "application/json; charset=utf-8",
+      "code": "TRANSFER_NOT_FOUND",
+      "request_id": "req_50050b2872eae62b",
+      "allow": "",
+      "body_head": "{\"error\":{\"code\":\"TRANSFER_NOT_FOUND\",\"message\":\"transfer not found\",\"request_id\":\"req_50050b2872eae62b\"}}\\n",
+      "envelope": true,
+      "case": "路径成立·对象不成立",
+      "method": "GET",
+      "path": "/v1/transfers/not-a-transfer-id",
+      "want_status": 404,
+      "want_code": "TRANSFER_NOT_FOUND"
+    },
+    {
+      "status": 400,
+      "content_type": "application/json; charset=utf-8",
+      "code": "BAD_REQUEST",
+      "request_id": "req_966b1b45bed967ca",
+      "allow": "",
+      "body_head": "{\"error\":{\"code\":\"BAD_REQUEST\",\"message\":\"request format or parameter is invalid\",\"request_id\":\"req_966b1b45bed967ca\"}}\\n",
+      "envelope": true,
+      "case": "坏 JSON",
+      "method": "POST",
+      "path": "/v1/challenges",
+      "want_status": 400,
+      "want_code": "BAD_REQUEST"
+    }
+  ],
+  "failures": [],
+  "pass": true
+}

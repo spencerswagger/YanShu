@@ -1,0 +1,49 @@
+{
+  "kind": "index-lock-write-ab",
+  "at": "2026-11-10T17:25:04+0000",
+  "rows": 600000,
+  "table_size": "113 MB",
+  "phase_a": {
+    "sql": "BEGIN; CREATE INDEX ...; COMMIT;",
+    "duration_ms": 795.6,
+    "locks": [
+      "ShareLock"
+    ],
+    "n": 2,
+    "max_ms": 720.6,
+    "p50_ms": 384.2,
+    "p95_ms": 47.7,
+    "over_200ms": 1,
+    "over_1000ms": 0
+  },
+  "phase_b": {
+    "sql": "CREATE INDEX CONCURRENTLY ...",
+    "duration_ms": 971.2,
+    "locks": [
+      "ShareUpdateExclusiveLock"
+    ],
+    "n": 14,
+    "max_ms": 79.7,
+    "p50_ms": 51.7,
+    "p95_ms": 58.9,
+    "over_200ms": 0,
+    "over_1000ms": 0
+  },
+  "baseline": {
+    "n": 30,
+    "max_ms": 74.2,
+    "p50_ms": 44.7,
+    "p95_ms": 49.5,
+    "over_200ms": 0,
+    "over_1000ms": 0,
+    "locks": [
+      "RowExclusiveLock"
+    ]
+  },
+  "writer_errors": [],
+  "verdict": {
+    "a_blocked": true,
+    "b_not_blocked": true,
+    "pass": true
+  }
+}
