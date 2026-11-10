@@ -1,12 +1,12 @@
 {
   "title": "干净环境真实收发自测",
-  "subtitle": "ref=origin/main work=/.octop/workspaces/0JXF1M/tmp/fmain db=yanshu_selftest_20261110t212446z at=2026-11-10T21:24:46+0000",
-  "at": "2026-11-10T21:25:00+0000",
+  "subtitle": "ref=v0.2.2^{} work=/.octop/workspaces/0JXF1M/tmp/g022 db=yanshu_selftest_20261110t212958z at=2026-11-10T21:29:58+0000",
+  "at": "2026-11-10T21:30:12+0000",
   "rows": [
     {
       "name": "纯净检出（无 .git、空数据目录）",
       "kind": "PASS",
-      "evidence": "commit=6bf88b85987a files=573"
+      "evidence": "commit=5028a257e7b4 files=535"
     },
     {
       "name": "新库是空的（迁移前 public 无表）",
@@ -16,17 +16,17 @@
     {
       "name": "secrets 首次生成（0600，hex）",
       "kind": "PASS",
-      "evidence": "sha256={'token_secret': 'b9adf33159ae', 'pg_password': 'c3a527f30fe3'} mode={'token_secret': '0o600', 'pg_password': '0o600'}"
+      "evidence": "sha256={'token_secret': 'c2573f12a841', 'pg_password': '9401740a5113'} mode={'token_secret': '0o600', 'pg_password': '0o600'}"
     },
     {
       "name": "首次启动（空数据目录 + 新库，迁移自动落库）",
       "kind": "PASS",
-      "evidence": "healthz=200 log=/.octop/workspaces/0JXF1M/tmp/fmain/logs/selftest-server.log"
+      "evidence": "healthz=200 log=/.octop/workspaces/0JXF1M/tmp/g022/logs/selftest-server.log"
     },
     {
       "name": "上传完成后密文确实落盘（ack 前）",
       "kind": "PASS",
-      "evidence": "87/87c6e8884e064cf721906a83874298c4 exists=True"
+      "evidence": "da/daed897b5bcf9c2a104152fcfcfa0a03 exists=True"
     },
     {
       "name": "真收真发 A：prelude+3 块逐字节一致 + ack→CONSUMED",
@@ -41,7 +41,7 @@
     {
       "name": "真收真发 B：留一条 READY 供 down/up 后比对",
       "kind": "PASS",
-      "evidence": "tid=f75079c10976 sha={'prelude': '88e785f8ea', 'chunk0': '041a1738ac'}"
+      "evidence": "tid=099c1c5e0165 sha={'prelude': '88e785f8ea', 'chunk0': '041a1738ac'}"
     },
     {
       "name": "契约 §1.7.4：终结态上传必须 410（且不返回 401）",
@@ -59,19 +59,19 @@
       "evidence": "404 ROUTE_NOT_FOUND"
     },
     {
-      "name": "契约 §1.7.4：REVOKED 终态上传必须 410 TRANSFER_REVOKED",
+      "name": "契约 §1.7.4：REVOKED 终态上传必须 410 TRANSFER_REVOKED（同一有效 token 前后对照）",
       "kind": "PASS",
-      "evidence": "revoke=200 probe=410 TRANSFER_REVOKED"
+      "evidence": "revoke 前 prelude=201 revoke=200 之后 probe=410 TRANSFER_REVOKED"
     },
     {
-      "name": "契约 §1.7.4：EXPIRED 终态上传必须 410 TRANSFER_EXPIRED",
+      "name": "契约 §1.7.4：EXPIRED 终态上传必须 410 TRANSFER_EXPIRED（同一有效 token 前后对照）",
       "kind": "PASS",
-      "evidence": "410 TRANSFER_EXPIRED"
+      "evidence": "回拨前 prelude=201 update_ok=True 之后 probe=410 TRANSFER_EXPIRED"
     },
     {
       "name": "建索引期间写入不被阻塞（普通 vs CONCURRENTLY 实测）",
       "kind": "PASS",
-      "evidence": "普通建索引 1150ms/写最长 1070.5ms（>300ms 1 条）；CONCURRENTLY 1284ms/写最长 120.0ms"
+      "evidence": "普通建索引 1201ms/写最长 1208.9ms（>300ms 1 条）；CONCURRENTLY 1343ms/写最长 84.8ms"
     },
     {
       "name": "down：进程正常退出",
@@ -81,7 +81,7 @@
     {
       "name": "down && up 后 secrets sha256 不变",
       "kind": "PASS",
-      "evidence": "token=b9adf33159ae… pg=c3a527f30fe3…"
+      "evidence": "token=c2573f12a841… pg=9401740a5113…"
     },
     {
       "name": "重启后取回同一密文 sha256 不变",
@@ -95,14 +95,14 @@
     }
   ],
   "notes": [
-    "binary sha256=2e24f511ffdbc9c3e6125d2021ebc14ae5026d4f4621ef22ddd0c363b6d79bc4"
+    "binary sha256=2bd2e548b3d0409c7222945550f3b86bf7fe1675f83220fda875d8cb6085285a"
   ],
   "raw": {
-    "ref": "origin/main",
-    "commit": "6bf88b85987aa7354ad8479775c04aa5ac29f60b",
-    "binary_sha256": "2e24f511ffdbc9c3e6125d2021ebc14ae5026d4f4621ef22ddd0c363b6d79bc4",
+    "ref": "v0.2.2^{}",
+    "commit": "5028a257e7b4fba778f55956fc1d0564e7719fd9",
+    "binary_sha256": "2bd2e548b3d0409c7222945550f3b86bf7fe1675f83220fda875d8cb6085285a",
     "transfer_a": {
-      "transfer_id": "87c6e8884e064cf721906a83874298c4",
+      "transfer_id": "daed897b5bcf9c2a104152fcfcfa0a03",
       "sha256": [
         "88e785f8ea2039c6d181b4f501ac3f4458b904dea280fe66f2d590d7c098db25",
         "041a1738aca218435e78de047281d34e6ed4791473ba4a950effa0294093cfad",
@@ -111,7 +111,7 @@
       ]
     },
     "transfer_b": {
-      "transfer_id": "f75079c1097656e3864bb1cd7eba2ebe",
+      "transfer_id": "099c1c5e0165ae6a22d2d04a6a628070",
       "sha256_before": {
         "prelude": "88e785f8ea2039c6d181b4f501ac3f4458b904dea280fe66f2d590d7c098db25",
         "chunk0": "041a1738aca218435e78de047281d34e6ed4791473ba4a950effa0294093cfad"
@@ -123,35 +123,35 @@
     },
     "index_lock": {
       "base": {
-        "n": 24,
-        "max_ms": 77.9,
-        "p50_ms": 73.4,
-        "over_300ms": 0
+        "n": 26,
+        "max_ms": 1208.9,
+        "p50_ms": 59.2,
+        "over_300ms": 1
       },
       "plain": {
-        "n": 2,
-        "max_ms": 1070.5,
-        "p50_ms": 572.8,
+        "n": 1,
+        "max_ms": 1208.9,
+        "p50_ms": 1208.9,
         "over_300ms": 1
       },
       "concurrent": {
-        "n": 16,
-        "max_ms": 120.0,
-        "p50_ms": 54.8,
+        "n": 19,
+        "max_ms": 84.8,
+        "p50_ms": 47.9,
         "over_300ms": 0
       },
-      "a_build_ms": 1150.3,
-      "b_build_ms": 1284.4,
+      "a_build_ms": 1201.1,
+      "b_build_ms": 1343.1,
       "writer_errors": []
     },
     "secrets_sha256": {
       "before": {
-        "token_secret": "b9adf33159ae881bf9c5bd139dcc3c331539bb2d5d9bbde47ac6df7194f454cd",
-        "pg_password": "c3a527f30fe3fb26144ffb62322910a8605fb62cfddb2f9365b708077d0f4257"
+        "token_secret": "c2573f12a841f26bb8621b16d0ef2c34cd9509c131e2f159987a72ce74ef523c",
+        "pg_password": "9401740a51131bf69e12dbc55e1e04ad562844fda623fc1b54758f6619dc03c8"
       },
       "up": {
-        "token_secret": "b9adf33159ae881bf9c5bd139dcc3c331539bb2d5d9bbde47ac6df7194f454cd",
-        "pg_password": "c3a527f30fe3fb26144ffb62322910a8605fb62cfddb2f9365b708077d0f4257"
+        "token_secret": "c2573f12a841f26bb8621b16d0ef2c34cd9509c131e2f159987a72ce74ef523c",
+        "pg_password": "9401740a51131bf69e12dbc55e1e04ad562844fda623fc1b54758f6619dc03c8"
       }
     }
   },
