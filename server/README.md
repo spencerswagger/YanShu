@@ -193,7 +193,21 @@ log_path=/var/log/yanshu/server.log
 | `YANSHU_WS_URL` | 否 | 空 | `/v1/config` 下发的 `ws_url` |
 | `YANSHU_STORAGE_QUOTA_BYTES` | 否 | `8GiB` | 单 IP 未取走密文总量上限（超出 → `507 INSUFFICIENT_STORAGE`） |
 | `YANSHU_SWEEP_INTERVAL` | 否 | `30s` | 清理任务周期（Go duration） |
+| `YANSHU_AUDIT_RETENTION_DAYS` | 否 | `90` | `audit_events` 保留天数（随清理任务分批删除，ADR-0002 §2.4）；匿名只读端点（`/v1/stats`、`/v1/config`、`/healthz`）不写审计行 |
 | `YANSHU_SHUTDOWN_TIMEOUT` | 否 | `10s` | 优雅退出超时（Go duration） |
+
+### 统计对账与告警
+
+清理任务每天对账一次（UTC 昨日）：把 `stats_counters`（派生）与 `transfers` 真实行比对
+（`consumed`/`consumed_bytes` 按 `terminal_at` 落桶，`created` 按 `created_at` 落桶），
+偏差 > **0.1%** 时打一条 ERROR 日志：
+
+```
+level=ERROR msg="stats drift alert" alert=stats_drift day=2026-11-09 deviation=...
+```
+
+部署方的告警通道按 **`alert=stats_drift`** 关键字抓这一行即可（也可在代码里接 `Sweeper.OnDrift`）。
+`GET /v1/stats` 的日界是 **UTC 00:00:00Z**，与数据库会话时区无关（日志里不会出现「本地日」桶）。
 
 **限速阈值目前没有 env 开关**：默认值在 `internal/spec/limits.go`（按 IP/按码/按传输各档），
 要线上调需要改代码发版；这是 v1 的已知限制，不是漏写。
@@ -279,10 +293,24 @@ YANSHU_DATABASE_URL="$PG_DSN_WITH_SEARCH_PATH" ./bin/yanshu-server -migrate-only
 （间隔 **≥ 30 秒**，失败退避至 **5 分钟**）。服务端不额外限制 inbox；每次轮询仍需
 一次 `INBOX_LIST` 挑战签名（受 IP 20/min 约束，30 秒一次约 2/min，不会误伤）。
 
+## 元数据保留与统计（v5）
+
+- 终结（CONSUMED/REVOKED/EXPIRED）的传输元数据**永久保留**，不再按 7 天删除；
+  终结满 **30 天**后把**内容指纹与身份列**置 NULL（脱敏，幂等分批）：`transfers.uploader_ip`、
+  `transfers.prelude_sm3`、`transfers.upload_token_sm3`、`transfer_chunks.ciphertext_sm3`。
+  尺寸 / 块数 / 状态 / 计数 / 时间与两个码**不脱敏**（聚合与审计要用；码的残余风险见 ADR-0002 §2.5）。
+- 全平台聚合 `GET /v1/stats`：返回 `today` / `total` 的 `consumed`、`consumed_bytes`、`created`；
+  数据来自 `stats_counters`（按天累加，`ack`/建包同事务写入），**不扫 transfers**；响应 `Cache-Control: no-store`。
+
 ## 库表（表结构变更必须在 PR 描述写一行）
 
 `codes`、`auth_challenges`、`transfers`、`transfer_chunks`、`transfer_downloads`、
-`idempotency_keys`、`audit_events`（+ `schema_migrations`）。
+`idempotency_keys`、`audit_events`、`stats_counters`（+ `schema_migrations`）。
+
+**迁移执行方式**：默认整文件一个事务；文件头出现 `-- yanshu:no-transaction` 时改为
+**逐条语句自动提交**（`CREATE INDEX CONCURRENTLY` 不能在事务块内执行，见
+`migrations/0010_indexes_concurrently.sql`）。迁移期间全程复用一条连接并轮询
+`pg_try_advisory_lock` 互斥（阻塞式 `pg_advisory_lock` 会与 CIC 互相等成死锁）。
 
 白名单断言在 `internal/store/schema_test.go`：**多一列即失败**。改表结构时同步改断言，
 并在 PR 描述里写明新增/删除的表与列，否则白名单会静默失效（比漏检更危险）。

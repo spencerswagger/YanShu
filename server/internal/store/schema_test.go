@@ -19,8 +19,8 @@ var expectedColumns = map[string][]string{
 	"codes":           {"code", "nickname", "public_key", "registered_at", "updated_at"},
 	"auth_challenges": {"challenge_id", "expires_at", "nonce", "purpose", "used"},
 	"transfers": {
-		"chunk_count", "chunk_size", "created_at", "download_count", "expires_at",
-		"max_downloads", "plaintext_size", "prelude_len", "prelude_received",
+		"chunk_count", "chunk_size", "ciphertext_purged_at", "created_at", "download_count",
+		"expires_at", "max_downloads", "plaintext_size", "prelude_len", "prelude_received",
 		"prelude_sm3", "received_chunks", "recipient_code", "sender_code", "state",
 		"terminal_at", "terminal_reason", "total_ciphertext_bytes", "transfer_id",
 		"updated_at", "upload_token_sm3", "upload_token_kid", "uploader_ip",
@@ -29,6 +29,7 @@ var expectedColumns = map[string][]string{
 	"transfer_downloads": {"acked_at", "created_at", "download_id", "lease_expires_at", "transfer_id"},
 	"idempotency_keys":   {"created_at", "expires_at", "key_hash", "request_fingerprint", "sender_code", "transfer_id"},
 	"audit_events":       {"bytes", "id", "ip", "method", "path", "request_id", "status", "ts"},
+	"stats_counters":     {"consumed", "consumed_bytes", "created", "day"},
 	"abuse_reports":      {"created_at", "note", "reason", "report_id", "reporter_code", "reporter_ip", "transfer_id"},
 	"token_kid_state":    {"id", "kid", "updated_at"},
 }

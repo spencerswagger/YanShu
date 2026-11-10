@@ -70,8 +70,17 @@ func scanTransfer(row interface{ Scan(...any) error }) (Transfer, error) {
 }
 
 // CreateTransfer 建传输，初始状态 UPLOADING。
+//
+// 建包行与 `created` 计数**同一个事务**：分成两句写时，统计写失败会让接口 500
+// 而传输行已经落库（客户端重试就多一条），两边口径也会永久漂移。
 func (s *Store) CreateTransfer(ctx context.Context, t Transfer) (Transfer, error) {
-	row := s.pool.QueryRow(ctx, `INSERT INTO transfers (`+transferColumns+`)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Transfer{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	row := tx.QueryRow(ctx, `INSERT INTO transfers (`+transferColumns+`)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false,0,$9,0,$10,'UPLOADING',NULL,NULL,$11,$11,$12,$13,$14,$15)
 		RETURNING `+transferColumns,
 		t.ID, t.SenderCode, t.RecipientCode, t.PlaintextSize, t.ChunkSize, t.ChunkCount,
@@ -80,6 +89,12 @@ func (s *Store) CreateTransfer(ctx context.Context, t Transfer) (Transfer, error
 	out, err := scanTransfer(row)
 	if err != nil {
 		return Transfer{}, fmt.Errorf("store: create transfer: %w", err)
+	}
+	if err := addCreatedStat(ctx, tx, t.CreatedAt); err != nil {
+		return Transfer{}, fmt.Errorf("store: stats created: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Transfer{}, fmt.Errorf("store: commit create transfer: %w", err)
 	}
 	return out, nil
 }
@@ -478,6 +493,11 @@ func (s *Store) AckDownload(ctx context.Context, downloadID string, now time.Tim
 	if err != nil {
 		return AckResult{}, fmt.Errorf("store: ack transfer: %w", err)
 	}
+	if consumed {
+		if err := addConsumedStat(ctx, tx, now, out.PlaintextSize); err != nil {
+			return AckResult{}, fmt.Errorf("store: stats consumed: %w", err)
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return AckResult{}, err
 	}
@@ -548,6 +568,9 @@ func (s *Store) TerminalizeExpired(ctx context.Context, now time.Time) ([]string
 }
 
 // ListTerminal 列出已终结的传输（清理密文用）。
+//
+// 注意：这个函数**会反复返回同一批最老的行**（终结行永久保留，集合不会因为删除而缩小）。
+// 兜底删密文必须用 ListUnpurgedTerminal 的水位语义，别再用它做"每次取 200 行"的批处理。
 func (s *Store) ListTerminal(ctx context.Context, limit int) ([]Transfer, error) {
 	rows, err := s.pool.Query(ctx, `SELECT `+transferColumns+` FROM transfers
 		WHERE state IN ('CONSUMED', 'REVOKED', 'EXPIRED')
@@ -567,14 +590,59 @@ func (s *Store) ListTerminal(ctx context.Context, limit int) ([]Transfer, error)
 	return out, rows.Err()
 }
 
-// DeleteOldTerminal 删除保留期满（7 天）的终结传输元数据。
-func (s *Store) DeleteOldTerminal(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM transfers
-		WHERE state IN ('CONSUMED', 'REVOKED', 'EXPIRED') AND terminal_at < $1`, before)
+// UnpurgedTerminal 是一条「已终结但密文还没确认删除」的行。
+type UnpurgedTerminal struct {
+	ID         string
+	TerminalAt time.Time
+}
+
+// ListUnpurgedTerminal 按水位（`ciphertext_purged_at IS NULL`）列出待删密文的终结行。
+//
+// 这是 P0 修复的核心：每删成功一批就把 `ciphertext_purged_at` 写上，这些行就**离开**了
+// 候选集合，下一批自然推进到更晚终结的行。用「ORDER BY terminal_at LIMIT n」的老写法，
+// 永久保留后每个 tick 都会拿回同一批最老的行，后面的行永远轮不到。
+func (s *Store) ListUnpurgedTerminal(ctx context.Context, limit int) ([]UnpurgedTerminal, error) {
+	rows, err := s.pool.Query(ctx, `SELECT transfer_id, COALESCE(terminal_at, updated_at) FROM transfers
+		WHERE state IN ('CONSUMED', 'REVOKED', 'EXPIRED') AND ciphertext_purged_at IS NULL
+		ORDER BY COALESCE(terminal_at, updated_at) ASC, transfer_id ASC
+		LIMIT $1`, limit)
 	if err != nil {
-		return 0, fmt.Errorf("store: delete terminal transfers: %w", err)
+		return nil, fmt.Errorf("store: list unpurged terminal: %w", err)
+	}
+	defer rows.Close()
+	var out []UnpurgedTerminal
+	for rows.Next() {
+		var row UnpurgedTerminal
+		if err := rows.Scan(&row.ID, &row.TerminalAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// MarkCiphertextPurged 记录这些行的密文已删除（幂等；已是非空的不重写）。
+func (s *Store) MarkCiphertextPurged(ctx context.Context, ids []string, now time.Time) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE transfers SET ciphertext_purged_at = $2
+		WHERE transfer_id = ANY($1) AND ciphertext_purged_at IS NULL`, ids, now)
+	if err != nil {
+		return 0, fmt.Errorf("store: mark ciphertext purged: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+// CountUnpurgedTerminal 返回还剩多少条终结行的密文没确认删除（日志/告警用真实数字）。
+func (s *Store) CountUnpurgedTerminal(ctx context.Context) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM transfers
+		WHERE state IN ('CONSUMED', 'REVOKED', 'EXPIRED') AND ciphertext_purged_at IS NULL`).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("store: count unpurged terminal: %w", err)
+	}
+	return n, nil
 }
 
 // CountActiveByCode 统计某发送码当前未终结的传输数（§11.4：上限 20）。

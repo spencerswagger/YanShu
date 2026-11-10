@@ -39,3 +39,22 @@ func (s *Store) Audit(ctx context.Context, ev AuditEvent) error {
 	}
 	return nil
 }
+
+// DeleteOldAudit 批量删除早于 before 的审计行（audit_events 必须有保留期：
+// 没有保留期的审计表迟早变成第二张大表，且带 IP，见 ADR-0002 §2.4）。
+func (s *Store) DeleteOldAudit(ctx context.Context, before time.Time, batch int) (int64, error) {
+	var total int64
+	for {
+		tag, err := s.pool.Exec(ctx, `
+			DELETE FROM audit_events WHERE id IN (
+				SELECT id FROM audit_events WHERE ts < $1 ORDER BY ts LIMIT $2
+			)`, before, batch)
+		if err != nil {
+			return total, fmt.Errorf("store: delete old audit: %w", err)
+		}
+		total += tag.RowsAffected()
+		if tag.RowsAffected() < int64(batch) {
+			return total, nil
+		}
+	}
+}

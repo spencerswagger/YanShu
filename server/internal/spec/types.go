@@ -71,6 +71,20 @@ type AbuseReportResponse struct {
 	DistinctReports int    `json:"distinct_reports"`
 }
 
+// StatsBucket 是一档聚合计数（今日 / 累计）。
+type StatsBucket struct {
+	Consumed      int64 `json:"consumed"`
+	ConsumedBytes int64 `json:"consumed_bytes"`
+	Created       int64 `json:"created"`
+}
+
+// StatsResponse 是 GET /v1/stats 的响应（匿名可读，聚合数字）。
+type StatsResponse struct {
+	Today       StatsBucket `json:"today"`
+	Total       StatsBucket `json:"total"`
+	GeneratedAt string      `json:"generated_at"`
+}
+
 // ChallengeRequest 只有 purpose（API.md §4.2：没有 code 字段）。
 type ChallengeRequest struct {
 	Purpose string `json:"purpose"`

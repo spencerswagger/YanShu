@@ -38,6 +38,8 @@ const (
 	PathWS         = Prefix + "/ws"
 	// PathTransferReport 是举报端点（API.md §11.5）。
 	PathTransferReport = Prefix + "/transfers/{transferId}/report"
+	// PathStats 是全平台聚合统计（匿名可读）。
+	PathStats = Prefix + "/stats"
 
 	// PathHealthz 是运维探活，不在 API 契约内。
 	PathHealthz = "/healthz"
@@ -198,8 +200,16 @@ const (
 	ChallengeTTL = 120 * time.Second
 	// ChallengeRetention 是挑战记录保留时长（API.md §1.2：10 分钟后失效）。
 	ChallengeRetention = 10 * time.Minute
-	// TombstoneTTL 是终结元数据保留时长（API.md §5.2：7 天）。
-	TombstoneTTL = 7 * 24 * time.Hour
+	// RedactAfter 是终结后**敏感列**的脱敏时限（v5）：到时把 uploader_ip /
+	// prelude_sm3 / upload_token_sm3 置 NULL。终结元数据本身**永久保留**（不再按时间删除）。
+	RedactAfter = 30 * 24 * time.Hour
+	// AuditRetention 是审计行保留期（ADR-0002 §2.4：90 天）。审计只覆盖有身份/有副作用的请求，
+	// 匿名只读端点（/v1/stats、/v1/config、/healthz）不落审计行，只留访问日志。
+	AuditRetention = 90 * 24 * time.Hour
+	// ReconcileInterval 是统计对账间隔（ADR-0002 §2.3：每日一次）。
+	ReconcileInterval = 24 * time.Hour
+	// DriftThreshold 是对账告警阈值（ADR-0002 §2.3：偏差 > 0.1% 报警）。
+	DriftThreshold = 0.001
 	// UploadTokenTTL 是 upload_token 的有效期（上传 6 小时）。
 	UploadTokenTTL = 6 * time.Hour
 	// IdempotencyWindow 是 POST /transfers 的幂等窗口（API.md §6.2：600 秒）。

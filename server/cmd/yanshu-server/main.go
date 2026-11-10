@@ -170,6 +170,7 @@ func run() error {
 	api := httpapi.New(cfg, st, blobs, verifier, tokens, ratelimit.NewMemory(), ratelimit.NewMemoryLockout(), log)
 
 	sweeper := cleanup.New(st, blobs, cfg.SweepInterval, log)
+	sweeper.AuditRetention = time.Duration(cfg.AuditRetentionDays) * 24 * time.Hour
 	go sweeper.Run(ctx)
 
 	srv := &http.Server{

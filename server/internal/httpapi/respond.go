@@ -152,11 +152,27 @@ func (a *API) allow(w http.ResponseWriter, r *http.Request, key, scope string, l
 	return false
 }
 
+// auditExemptRoutes 是**不写审计行**的路由（ADR-0002 §2.4）。
+//
+// 判据是三条同时成立：匿名可读、无副作用、响应不含任何个例信息。
+// 这类端点是首页轮询流量（/v1/stats 按 10 QPS 就是 86 万行/天），
+// 每请求落一行审计等于把读流量写进一张带 IP 的大表，且与业务量无关。
+// 它们仍保留访问日志（进程日志，按 YANSHU_LOG_RETENTION_DAYS 滚动）。
+// 有身份/有副作用的请求一律照常审计，不在此列。
+var auditExemptRoutes = map[string]struct{}{
+	"GET " + spec.PathStats:   {},
+	"GET " + spec.PathConfig:  {},
+	"GET " + spec.PathHealthz: {},
+}
+
 // audit 记一条审计（白名单字段）。失败只记日志，不影响响应。
 func (a *API) audit(r *http.Request, status int, bytes int64) {
 	path := r.Pattern
 	if path == "" {
 		path = "unmatched"
+	}
+	if _, exempt := auditExemptRoutes[path]; exempt {
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
 	defer cancel()
