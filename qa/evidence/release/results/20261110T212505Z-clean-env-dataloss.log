@@ -1,0 +1,24 @@
+PASS  纯净检出（无 .git、空数据目录）                             commit=6bf88b85987a files=573
+PASS  新库是空的（迁移前 public 无表）                           tables=0
+PASS  secrets 首次生成（0600，hex）                         sha256={'token_secret': 'ce19ba8c9fcf', 'pg_password': '7fa7ec099b54'} mode={'token_secret': '0o600', 'pg_pass
+PASS  首次启动（空数据目录 + 新库，迁移自动落库）                        healthz=200 log=/.octop/workspaces/0JXF1M/tmp/fdl/logs/selftest-server.log
+PASS  上传完成后密文确实落盘（ack 前）                             dc/dc8376895870278e91765e5cdd4fc1e7 exists=True
+PASS  真收真发 A：prelude+3 块逐字节一致 + ack→CONSUMED         sha256(prelude)=88e785f8ea20… blocks=['041a1738', '87b50d76', 'fa6dc282'] ack=200 CONSUMED
+PASS  ack 后密文物理删除                                    残留=False
+PASS  真收真发 B：留一条 READY 供 down/up 后比对                 tid=66afc2ff5879 sha={'prelude': '88e785f8ea', 'chunk0': '041a1738ac'}
+PASS  契约 §1.7.4：终结态上传必须 410（且不返回 401）                410 TRANSFER_CONSUMED
+PASS  契约 §1.7.4：未终结 + 伪造凭据必须 401 AUTH_TOKEN_INVALID  401 AUTH_TOKEN_INVALID
+PASS  契约 §0.2：未路由路径必须是错误信封                           404 ROUTE_NOT_FOUND
+PASS  契约 §1.7.4：REVOKED 终态上传必须 410 TRANSFER_REVOKED  revoke=200 probe=410 TRANSFER_REVOKED
+PASS  契约 §1.7.4：EXPIRED 终态上传必须 410 TRANSFER_EXPIRED  410 TRANSFER_EXPIRED
+WARN  建索引期间写入不被阻塞（跳过）                                --skip-index
+PASS  down：进程正常退出                                    exit=0
+note  --simulate-data-loss：已清空数据目录，模拟数据卷丢失
+PASS  down && up 后 secrets sha256 不变                 token=ce19ba8c9fcf… pg=7fa7ec099b54…
+PASS  数据卷清空后密钥仍不变（secrets 与数据卷解耦）                    token=ce19ba8c9fcf…（数据已丢，密文比对跳过）
+note  数据卷已模拟丢失：跳过「重启后密文 sha256 不变」
+PASS  数据丢失后旧 token 仍被识别（凭据与数据解耦）                     status=200
+note  binary sha256=4442b82d69b3d39d1ba604b69c5ca8a06f40cbea0b2e6ded87d3fb26d0f52d04
+------------------------------------------------------------------------------------------------
+PASS 17　WARN(SKIP) 1　FAIL 0　共 18 项　结论：PASS
+note  工作目录已删除：/.octop/workspaces/0JXF1M/tmp/fdl

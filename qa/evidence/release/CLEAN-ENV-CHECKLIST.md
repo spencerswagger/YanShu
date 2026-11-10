@@ -24,6 +24,8 @@ python3 qa/evidence/release/clean_env_selftest.py \
 | `--skip-index` | 关 | CI 快速跑时可跳过（约省 13s） |
 | `--skip-restart` | 关 | 跳过 down/up（不建议：那正是「密钥不变」的证明） |
 | `--keep` | 关 | 保留工作目录与新库，排障用；不加则结束时**真的删**（日志会打印） |
+| `--simulate-data-loss` | 关 | down 之后清空数据目录（模拟数据卷丢失），验证密钥仍不变（secrets 与数据解耦） |
+| `--allow-no-envelope` | 关 | 只在树里没有 #58（`fallback.go`）时允许把 §0.2 记 WARN；默认 FAIL |
 | `--selftest-break-keys` | 关 | 自检用：down 之后故意改写 `token_secret`，验证「密钥不变」那条会红 |
 | `--json-out` | 无 | 结构化结果（含每项证据、二进制 sha256、ref/commit） |
 
@@ -42,6 +44,7 @@ python3 qa/evidence/release/clean_env_selftest.py \
 | 7 | ack 后密文删除 | 块目录不存在 | 过而不留 |
 | 8 | 真收真发 B | 留一条 `READY`，记录 prelude/chunk sha256 | 给重启比对留样本 |
 | 9 | 契约 §1.7.4 | 终结态上传 = `410 TRANSFER_CONSUMED`（不是 401） | 规则真跑，不是文档写着 |
+| 9b | 契约 §1.7.4 | `REVOKED` → `410 TRANSFER_REVOKED`；`EXPIRED` → `410 TRANSFER_EXPIRED` | 三类终态各走一遍 |
 | 10 | 契约 §1.7.4 | 未终结 + 伪造凭据 = `401 AUTH_TOKEN_INVALID` | 阴性对照，防"一律 410" |
 | 11 | 契约 §0.2 | 未路由路径 = 404 JSON 信封 | 规则真跑；ref 未含 #58 时记 **WARN**（不算通过、也不算失败） |
 | 12 | 建索引锁写 | 普通 `CREATE INDEX` 期间单条写 >300ms；`CONCURRENTLY` <300ms | 迁移不会挡写 |

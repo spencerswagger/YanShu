@@ -289,6 +289,8 @@ def main(argv=None) -> int:
     ap.add_argument("--keep", action="store_true", help="保留工作目录与新库（排障用）")
     ap.add_argument("--allow-no-envelope", action="store_true",
                     help="树里没有 #58（fallback.go）时允许把 §0.2 记 WARN；默认按 FAIL（防空转）")
+    ap.add_argument("--simulate-data-loss", action="store_true",
+                    help="down 之后清空数据目录（模拟数据卷丢失），验证密钥仍不变（secrets 与数据解耦）")
     ap.add_argument("--selftest-break-keys", action="store_true",
                     help="自检用：down 之后偷偷换掉 token_secret，验证「secrets sha256 不变」会红")
     ap.add_argument("--json-out", default=None)
@@ -461,6 +463,34 @@ def main(argv=None) -> int:
             rep.add("契约 §0.2：未路由路径必须是错误信封", False,
                     f"{stx} text/plain（树里无 fallback.go；要放过请显式 --allow-no-envelope）")
 
+        # 6b) 410 两类：REVOKED / EXPIRED（#56 规则的两个终态入口）
+        rc_t, _ = c.json("POST", "/v1/challenges", {"purpose": "TRANSFER_REVOKE"})
+        ch_r = c.challenge("TRANSFER_REVOKE")
+        tc = c.create(sender, recipient, chunk_size, chunk_size, 1,
+                      bytes((i * 13 + 5) & 0xFF for i in range(96)))
+        tid_c, tok_c = tc["transfer_id"], tc["upload_token"]
+        st_rv, _ = c.json("POST", f"/v1/transfers/{tid_c}/revoke", None, c.auth(sender, ch_r))
+        st_rev, raw_rev = c.call("PUT", f"/v1/transfers/{tid_c}/prelude", tb["prelude"],
+                                 {"Content-Type": "application/octet-stream",
+                                  "X-YS-Upload-Token": tok_c})
+        code_rev = (raw_rev.get("error") or {}).get("code", "") if isinstance(raw_rev, dict) else ""
+        rep.add("契约 §1.7.4：REVOKED 终态上传必须 410 TRANSFER_REVOKED",
+                st_rv in (200, 201) and st_rev == 410 and code_rev == "TRANSFER_REVOKED",
+                f"revoke={st_rv} probe={st_rev} {code_rev}")
+
+        td = c.create(sender, recipient, chunk_size, chunk_size, 1,
+                      bytes((i * 7 + 3) & 0xFF for i in range(96)))
+        tid_d, tok_d = td["transfer_id"], td["upload_token"]
+        psql(dsn_db, f"update transfers set expires_at = now() - interval '2 seconds' "
+                     f"where transfer_id = '{tid_d}'")
+        st_exp, raw_exp = c.call("PUT", f"/v1/transfers/{tid_d}/prelude", tb["prelude"],
+                                 {"Content-Type": "application/octet-stream",
+                                  "X-YS-Upload-Token": tok_d})
+        code_exp = (raw_exp.get("error") or {}).get("code", "") if isinstance(raw_exp, dict) else ""
+        rep.add("契约 §1.7.4：EXPIRED 终态上传必须 410 TRANSFER_EXPIRED",
+                st_exp == 410 and code_exp == "TRANSFER_EXPIRED",
+                f"{st_exp} {code_exp}")
+
         # 7) 建索引锁写
         if args.skip_index:
             rep.add("建索引期间写入不被阻塞（跳过）", None, "--skip-index")
@@ -475,6 +505,10 @@ def main(argv=None) -> int:
         else:
             stopped, how = srv.stop()
             rep.add("down：进程正常退出", stopped, how)
+            if args.simulate_data_loss:
+                shutil.rmtree(blobs, ignore_errors=True)
+                blobs.mkdir(parents=True, exist_ok=True)
+                rep.note("--simulate-data-loss：已清空数据目录，模拟数据卷丢失")
             if args.selftest_break_keys:
                 (secrets / "token_secret").write_text(os.urandom(32).hex())
                 rep.note("--selftest-break-keys：已故意改写 token_secret，下面「secrets sha256 不变」应 FAIL")
@@ -487,6 +521,17 @@ def main(argv=None) -> int:
             rep.add("down && up 后 secrets sha256 不变",
                     key_sha1 == key_sha_up and ok2,
                     f"token={key_sha_up['token_secret'][:12]}… pg={key_sha_up['pg_password'][:12]}…")
+            if args.simulate_data_loss:
+                rep.add("数据卷清空后密钥仍不变（secrets 与数据卷解耦）",
+                        key_sha1 == key_sha_up,
+                        f"token={key_sha_up['token_secret'][:12]}…（数据已丢，密文比对跳过）")
+                rep.note("数据卷已模拟丢失：跳过「重启后密文 sha256 不变」")
+                sts, _ = c.json("GET", f"/v1/transfers/{tid_b}/status", None,
+                                {"X-YS-Upload-Token": tb["upload_token"]})
+                rep.add("数据丢失后旧 token 仍被识别（凭据与数据解耦）", sts in (200, 404, 410),
+                        f"status={sts}")
+                rep.note(f"binary sha256={bin_sha}")
+                return rep.emit(args.json_out)
             st, pb2 = c.get_prelude(tid_b)
             dl2 = c.headers.get("x-ys-download-id", "")
             stc2, cb2 = c.get_chunk(tid_b, 0, dl2)

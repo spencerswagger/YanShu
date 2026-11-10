@@ -1,0 +1,159 @@
+{
+  "title": "干净环境真实收发自测",
+  "subtitle": "ref=v0.2.2^{} work=/.octop/workspaces/0JXF1M/tmp/f022 db=yanshu_selftest_20261110t212431z at=2026-11-10T21:24:31+0000",
+  "at": "2026-11-10T21:24:46+0000",
+  "rows": [
+    {
+      "name": "纯净检出（无 .git、空数据目录）",
+      "kind": "PASS",
+      "evidence": "commit=5028a257e7b4 files=535"
+    },
+    {
+      "name": "新库是空的（迁移前 public 无表）",
+      "kind": "PASS",
+      "evidence": "tables=0"
+    },
+    {
+      "name": "secrets 首次生成（0600，hex）",
+      "kind": "PASS",
+      "evidence": "sha256={'token_secret': '29a548e0af87', 'pg_password': 'a81b061a9b80'} mode={'token_secret': '0o600', 'pg_password': '0o600'}"
+    },
+    {
+      "name": "首次启动（空数据目录 + 新库，迁移自动落库）",
+      "kind": "PASS",
+      "evidence": "healthz=200 log=/.octop/workspaces/0JXF1M/tmp/f022/logs/selftest-server.log"
+    },
+    {
+      "name": "上传完成后密文确实落盘（ack 前）",
+      "kind": "PASS",
+      "evidence": "05/05ffc436e406e601e9134d164fab8af6 exists=True"
+    },
+    {
+      "name": "真收真发 A：prelude+3 块逐字节一致 + ack→CONSUMED",
+      "kind": "PASS",
+      "evidence": "sha256(prelude)=88e785f8ea20… blocks=['041a1738', '87b50d76', 'fa6dc282'] ack=200 CONSUMED"
+    },
+    {
+      "name": "ack 后密文物理删除",
+      "kind": "PASS",
+      "evidence": "残留=False"
+    },
+    {
+      "name": "真收真发 B：留一条 READY 供 down/up 后比对",
+      "kind": "PASS",
+      "evidence": "tid=09ef0fa0a521 sha={'prelude': '88e785f8ea', 'chunk0': '041a1738ac'}"
+    },
+    {
+      "name": "契约 §1.7.4：终结态上传必须 410（且不返回 401）",
+      "kind": "PASS",
+      "evidence": "410 TRANSFER_CONSUMED"
+    },
+    {
+      "name": "契约 §1.7.4：未终结 + 伪造凭据必须 401 AUTH_TOKEN_INVALID",
+      "kind": "PASS",
+      "evidence": "401 AUTH_TOKEN_INVALID"
+    },
+    {
+      "name": "契约 §0.2：未路由路径必须是错误信封",
+      "kind": "PASS",
+      "evidence": "404 ROUTE_NOT_FOUND"
+    },
+    {
+      "name": "契约 §1.7.4：REVOKED 终态上传必须 410 TRANSFER_REVOKED",
+      "kind": "PASS",
+      "evidence": "revoke=200 probe=410 TRANSFER_REVOKED"
+    },
+    {
+      "name": "契约 §1.7.4：EXPIRED 终态上传必须 410 TRANSFER_EXPIRED",
+      "kind": "PASS",
+      "evidence": "410 TRANSFER_EXPIRED"
+    },
+    {
+      "name": "建索引期间写入不被阻塞（普通 vs CONCURRENTLY 实测）",
+      "kind": "PASS",
+      "evidence": "普通建索引 1182ms/写最长 1173.4ms（>300ms 1 条）；CONCURRENTLY 1486ms/写最长 93.7ms"
+    },
+    {
+      "name": "down：进程正常退出",
+      "kind": "PASS",
+      "evidence": "exit=0"
+    },
+    {
+      "name": "down && up 后 secrets sha256 不变",
+      "kind": "PASS",
+      "evidence": "token=29a548e0af87… pg=a81b061a9b80…"
+    },
+    {
+      "name": "重启后取回同一密文 sha256 不变",
+      "kind": "PASS",
+      "evidence": "before=88e785f8ea… after=88e785f8ea…"
+    },
+    {
+      "name": "重启后旧 upload_token 仍可用（凭据不因重启失效）",
+      "kind": "PASS",
+      "evidence": "status=200（secret 不作验签，密钥不变见上行）"
+    }
+  ],
+  "notes": [
+    "binary sha256=aab11005cc1065239d564d8fac1ed43332720c948319786347197a4e86ce679a"
+  ],
+  "raw": {
+    "ref": "v0.2.2^{}",
+    "commit": "5028a257e7b4fba778f55956fc1d0564e7719fd9",
+    "binary_sha256": "aab11005cc1065239d564d8fac1ed43332720c948319786347197a4e86ce679a",
+    "transfer_a": {
+      "transfer_id": "05ffc436e406e601e9134d164fab8af6",
+      "sha256": [
+        "88e785f8ea2039c6d181b4f501ac3f4458b904dea280fe66f2d590d7c098db25",
+        "041a1738aca218435e78de047281d34e6ed4791473ba4a950effa0294093cfad",
+        "87b50d76c7b6c5975d8e51ffe2c9525edfd3f1689f2a67edd62e4036b5f7e2b4",
+        "fa6dc28267bfd981961df74752a09494c8b8de87be12f0f3a875bcd55912f6db"
+      ]
+    },
+    "transfer_b": {
+      "transfer_id": "09ef0fa0a5217cb750c166dd217e12d3",
+      "sha256_before": {
+        "prelude": "88e785f8ea2039c6d181b4f501ac3f4458b904dea280fe66f2d590d7c098db25",
+        "chunk0": "041a1738aca218435e78de047281d34e6ed4791473ba4a950effa0294093cfad"
+      },
+      "sha256_after": {
+        "prelude": "88e785f8ea2039c6d181b4f501ac3f4458b904dea280fe66f2d590d7c098db25",
+        "chunk0": "041a1738aca218435e78de047281d34e6ed4791473ba4a950effa0294093cfad"
+      }
+    },
+    "index_lock": {
+      "base": {
+        "n": 22,
+        "max_ms": 120.4,
+        "p50_ms": 74.0,
+        "over_300ms": 0
+      },
+      "plain": {
+        "n": 1,
+        "max_ms": 1173.4,
+        "p50_ms": 1173.4,
+        "over_300ms": 1
+      },
+      "concurrent": {
+        "n": 20,
+        "max_ms": 93.7,
+        "p50_ms": 51.0,
+        "over_300ms": 0
+      },
+      "a_build_ms": 1182.0,
+      "b_build_ms": 1485.7,
+      "writer_errors": []
+    },
+    "secrets_sha256": {
+      "before": {
+        "token_secret": "29a548e0af876679b1d5aad2c21dcf2c472c0cb6718c038eaa09585886397996",
+        "pg_password": "a81b061a9b807a47fd725b38f47cf981315fef487bd958845be47328e472853d"
+      },
+      "up": {
+        "token_secret": "29a548e0af876679b1d5aad2c21dcf2c472c0cb6718c038eaa09585886397996",
+        "pg_password": "a81b061a9b807a47fd725b38f47cf981315fef487bd958845be47328e472853d"
+      }
+    }
+  },
+  "verdict": "PASS"
+}
