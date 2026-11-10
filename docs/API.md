@@ -321,9 +321,9 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 
 **为什么终结态排在凭据之前（写死）**：传输终结（TTL 到期 / 撤回 / 取走）**不可恢复**，重签发凭据也救不回来。若先回 `401`，客户端会按 §1.7.5 走一遍"重新挑战 → 签名 → 取新凭据"，拿到新凭据后仍然是 `410`——白跑一轮，还会让用户以为"再试一次就好"。因此：
 
-- 传输已终结 → 一律 `410 TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED`（按实际终态取对应码），**不返回**任何 `401 AUTH_TOKEN_*`，即使凭据同时不存在 / 已被轮换 / 已超期；
+- 传输已终结 → 一律 `410 TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED`（按实际终态取对应码），**不返回**任何 `401`（即 `AUTH_TOKEN_STALE` / `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` 一个都不出现），即使凭据同时不存在 / 已被轮换 / 已超期；
 - 传输未终结 → 上表优先级**原样生效**；`AUTH_TOKEN_STALE` 的「一律」只在资源未终结时成立，不得用来顶替 `410`；
-- 客户端按状态码分叉：`410 TRANSFER_*` → **停止重试、清理本地半成品，不要重取凭据**；`401 AUTH_TOKEN_*` → 才走重签 / 重取租约（§1.7.5）。两者处置互斥，把 `410` 当"凭据问题"重试会一直撞同一堵墙。
+- 客户端按状态码分叉：`410 TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED` → **停止重试、清理本地半成品，不要重取凭据**；`401 AUTH_TOKEN_STALE` / `AUTH_TOKEN_INVALID` / `AUTH_TOKEN_EXPIRED` → 才走重签 / 重取租约（§1.7.5）。两者处置互斥，把 `410` 当"凭据问题"重试会一直撞同一堵墙。
 
 **三码的触发位置（便于构造用例）**：`STALE` 在**第 ① 步**（比 `KID`）触发，需要一次版本轮换；`INVALID` 在**第 ② 步**（比 `SM3(token)`）触发，构造方式为错 token / 格式错 / 别的传输的 token；`EXPIRED` 在**第 ③ 步**（比有效期）触发，需把上传 6 h 或租约 30 min 调短、或构造过期记录。"在线路上正常流转的凭据**不会**触发 `INVALID`/`EXPIRED`，所以这两个码只能用针对性用例验证。
 
@@ -453,7 +453,7 @@ SIG_INPUT = "YSAUTH1"          (7 字节 ASCII)
 | 18 | POST | `/v1/transfers/{id}/token` | 签名 `UPLOAD_TOKEN_ISSUE` | 重签发 `upload_token`。**v1 定义并实现**；部署方可配置关闭（关闭返回 `501 FEATURE_DISABLED`，代价是吊销后需重建传输并重传）。细则见 §1.7.5 |
 | 19 | WS | `/v1/ws` | 首帧签名 `WS_HELLO` | 在线状态、收件通知、直传信令。**v1 已实现**：连接后 10 秒内必须发 `HELLO`（`WS_HELLO` 签名）进入已认证态；握手、帧类型与限速见 §9 |
 | 20 | GET | `/v1/stats` | 无 | 全站聚合计数（今日/累计的取走数与字节数、新建数）。**公开无鉴权**，响应禁止缓存（§4.6） |
-| 20 | POST | `/v1/transfers/{id}/report` | 签名 `ABUSE_REPORT` | 举报一条传输。**v1 定义并实现**：只记录、不改变传输状态，下架由运维执行（§11.5） |
+| 21 | POST | `/v1/transfers/{id}/report` | 签名 `ABUSE_REPORT` | 举报一条传输。**v1 定义并实现**：只记录、不改变传输状态，下架由运维执行（§11.5） |
 
 ---
 
@@ -1239,7 +1239,7 @@ Content-Type: application/json
 | 情形 | 响应 |
 |---|---|
 | 传输不存在 / `transfer_id` 格式错 | `404 TRANSFER_NOT_FOUND` |
-| 传输已终结（`REVOKED` / `EXPIRED` / `CONSUMED`） | `410` + 对应 `TRANSFER_*`（§5.2） |
+| 传输已终结（`REVOKED` / `EXPIRED` / `CONSUMED`） | `410` + 对应码（`TRANSFER_REVOKED` / `TRANSFER_EXPIRED` / `TRANSFER_CONSUMED`，§5.2） |
 | 举报自己发出的传输 | `202` 照常记录（不做特殊处理，避免泄露"请求者是不是发送方"） |
 | `reason` 非法 / `note` 超长或含控制字符 / 未知字段 | `400 BAD_REQUEST` / `400 FIELD_NOT_ALLOWED` |
 | 同一码 > 5 次/小时、同一 IP > 20 次/小时 | `429 RATE_LIMITED`（`scope: "code"` / `"ip"`，§11.1） |
