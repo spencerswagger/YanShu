@@ -134,15 +134,8 @@ if (replacingMeta) {
 }
 
 // ── 4) 候选（含仓库里的冻结内核；仍然只认同摘要的那一份） ───────────────────────────
-let repoRoot = null
-try {
-  repoRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: webDir, stdio: ['ignore', 'pipe', 'ignore'] })
-    .toString()
-    .trim()
-} catch {
-  repoRoot = null
-}
-const frozenKernel = repoRoot ? join(repoRoot, 'server/kernel/yanshu_sm.wasm') : null
+// 冻结内核按**目录布局**取（web/ 的上一级 server/kernel/），不依赖 git，tarball/CI 里也成立
+const frozenKernel = resolve(webDir, '../server/kernel/yanshu_sm.wasm')
 
 const candidates = [
   process.env.YS_WASM,
@@ -167,11 +160,19 @@ if (!hit) {
 
 // ── 5) 要写溯源时，先确认"声明的 commit"在本仓真的存在（非 git 环境降级为告警） ──────
 if (wantCommit) {
-  if (!repoRoot) {
+  let gitRoot = null
+  try {
+    gitRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: webDir, stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim()
+  } catch {
+    gitRoot = null
+  }
+  if (!gitRoot) {
     console.warn('[sync-wasm] 当前不在 git 仓库里，无法校验 --commit 是否真实存在（按声明写入，请自行确认）')
   } else {
     try {
-      execFileSync('git', ['cat-file', '-e', `${wantCommit}^{commit}`], { cwd: repoRoot, stdio: 'ignore' })
+      execFileSync('git', ['cat-file', '-e', `${wantCommit}^{commit}`], { cwd: gitRoot, stdio: 'ignore' })
     } catch {
       console.error(
         `[sync-wasm] --commit ${wantCommit.slice(0, 7)} 在本仓库不存在（git cat-file 失败）——拒绝写溯源：` +
@@ -242,7 +243,7 @@ if (wantCommit) {
     `[sync-wasm] 已写溯源：${metaPath}（commit=${wantCommit.slice(0, 7)} sha256=${got.slice(0, 12)}… ` +
       `${bytes} B / ysVersion=${facts.ysVersion} header=${facts.headerLen} exports=${facts.exports}）`,
   )
-  if (oldBytes !== bytes) console.log(`[sync-wasm] 产物字节数变化：${oldBytes} B → ${bytes} B`)
+  if (oldBytes > 0 && oldBytes !== bytes) console.log(`[sync-wasm] 产物字节数变化：${oldBytes} B → ${bytes} B`)
 } else if (!meta) {
   console.warn(
     [
