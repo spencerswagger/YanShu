@@ -114,6 +114,7 @@ jobs:
           echo "[kernel] computed at build time: sha256=${CALC} bytes=${BYTES}"
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -129,3 +130,42 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+
+      # 把本 leg 的镜像 digest 写进 Run Summary：SWR 是私有仓库（匿名拉取 401），
+      # 没有 SWR 只读凭据时，Run Summary 是**唯一免凭据**能拿到 digest 的地方。
+      # `if: always()` + 内层判空：构建失败/未推送时只打一行说明，不会让这一步变红，
+      # 也不会写进一个空 digest 让人误抄。
+      - name: Expose image digest in run summary
+        if: always()
+        env:
+          IMAGE: ${{ matrix.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+          PUSHED: ${{ steps.creds.outputs.push }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -eu
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          {
+            echo ""
+            echo "### ${IMAGE} · digest"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 镜像名 | \`${IMAGE}\` |"
+            echo "| 触发 | ${REF_TYPE} \`${REF_NAME}\` · commit \`${SHORT_SHA}\` |"
+            echo "| 推送 | ${PUSHED} |"
+            echo "| tags | \`${TAGS}\` |"
+            if [ -n "${DIGEST}" ]; then
+              echo "| digest | \`${DIGEST}\` |"
+              echo ""
+              echo "按 digest 固定引用（复制这一行）："
+              echo ""
+              echo '```'
+              echo "${REGISTRY}/${NAMESPACE}/${IMAGE}@${DIGEST}"
+              echo '```'
+            else
+              echo "| digest | （未产出：构建失败或未推送） |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
