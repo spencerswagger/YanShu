@@ -471,7 +471,8 @@ def main(argv=None) -> int:
             srv.env = build_env(port, keys_up, dsn_db, blobs, logs)
             ok2 = srv.start()
             key_sha_up = {k: sha256_file(p) for k, p in keys_up.items()}
-            rep.raw["secrets"] = {"before": key_sha1, "up": key_sha_up}
+            # 只存 sha256，绝不存密钥原值（secret scanner 会咬；行里也只打前 12 位）
+            rep.raw["secrets_sha256"] = {"before": key_sha1, "up": key_sha_up}
             rep.add("down && up 后 secrets sha256 不变",
                     key_sha1 == key_sha_up and ok2,
                     f"token={key_sha_up['token_secret'][:12]}… pg={key_sha_up['pg_password'][:12]}…")

@@ -11,7 +11,7 @@
 set -e
 
 REF=${1:-origin/main}
-WORK=${2:-/tmp/yanshu-negative}
+WORK=${2:-/tmp/yanshu-negative-$$}
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../../.." && pwd)
 
@@ -24,7 +24,7 @@ REV=$(git -C "$REPO" rev-parse "$REF") || { echo "[BLOCKED] 取不到 $REF" >&2;
 # 并发互删 schema 的根因已由 #68 消除（testutil 每次 NewStore 用唯一 schema），
 # 这里不再为"夹具撞名"重试。
 ADMIN_DSN=$TEST_DATABASE_URL
-NEGDB="yanshu_neg_$(date -u +%Y%m%dt%H%M%Sz | tr 'A-Z' 'a-z')"
+NEGDB="yanshu_neg_$(date -u +%Y%m%dt%H%M%S)_$$"
 psql -X -q "$ADMIN_DSN" -c "CREATE DATABASE \"$NEGDB\"" >/dev/null 2>&1 || {
   echo "[BLOCKED] 建隔离库失败（角色要能 CREATE DATABASE）" >&2; exit 2; }
 drop_db() { psql -X -q "$ADMIN_DSN" -c "DROP DATABASE IF EXISTS \"$NEGDB\" WITH (FORCE)" >/dev/null 2>&1 || true; }
@@ -72,7 +72,8 @@ fi
 # "no schema has been selected / migrate: …" 这种环境炸库也当成门禁有牙（假绿）。
 expect_fail() { # $1=名字 $2=输出文件 $3=命令函数 $4=必须出现的断言消息（固定串）
   if "$3" > "$2" 2>&1; then
-    echo "[FAIL] $1：变异后测试仍然绿（门禁没牙）"; rc_all=1; return
+    echo "[FAIL] $1：变异后测试仍然绿（门禁没牙）"
+    [ "$rc_all" -eq 2 ] || rc_all=1; return
   fi
   if grep -q 'no schema has been selected' "$2"; then
     echo "[BLOCKED] $1：连库/夹具异常（no schema selected），不是门禁结论" >&2; rc_all=2; return
