@@ -3,21 +3,23 @@
 """服务端内嵌内核（`server/kernel/yanshu_sm.wasm`）是否等于**验收过的那份产物**。
 
 为什么单独一条证据：同一 commit 在不同环境重建出的 wasm **sha256 可能不同**
-（本沙盒实测出现过 127,313 B / `c1b87d0a…` 与 130,653 B / `8b89dd7f…` 两种）。
+（本沙盒实测出现过 127,313 B / `c1b87d0a…` 与 130,653 B / `8b89dd7f…` 两种，都是 v0.1.1 时代）。
 如果服务端验签加载的不是验收过的那份字节，那"验签通过"这句话就没有验收基础。
 **同源不等于同字节** —— 这里比 sha256，不比 commit。
 
 检查项：
 
-1. `server/kernel/yanshu_sm.wasm` 的 sha256 **必须**等于冻结值
-   `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f`；
-   不等 → FAIL，并打印两侧字节数与 sha；
+1. `server/kernel/yanshu_sm.wasm` 的 sha256 **必须等于**
+   `server/internal/auth/verifier.go` 的 `FrozenKernelSHA256` 白名单**首条**
+   （首条 = 当前冻结产物；当前 = `daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de`）。
+   白名单是运行期真正拦人的那一份，所以它才是门槛；脚本不再另写一份期望值。
+   不等 → FAIL，并打印两侧字节数与 sha，以及白名单里**每一条**（含大小），不吃"白名单只有旧值"的亏；
 2. 二级校验：该产物的 `ys_version()` 必须是 `0x00010000`，导出必须是
-   34 个函数 + `memory`（0 import）—— 万一将来允许不同构建，也不能连版本/导出都对不上；
+   43 个函数 + `memory`（合计 44 导出、0 import）—— 万一将来允许不同构建，也不能连版本/导出都对不上；
 3. 文件不存在 → BLOCKED（说明拿不到可核对的产物，不能当作通过）。
 
-**内核升级时改这里的字节数与导出数，sha 从白名单推导**（`FROZEN_BYTES` / `FROZEN_FUNCS`），
-期望 sha 由 `server/internal/auth/verifier.go` 白名单**首条**自动推导（首条 = 当前冻结产物），
+**内核升级时改这里的字节数与导出数**（`FROZEN_BYTES` / `FROZEN_FUNCS`），期望 sha 由
+`server/internal/auth/verifier.go` 白名单**首条**自动推导（首条 = 当前冻结产物），
 不再在脚本里另写一份——避免"脚本写的和线上白名单不是同一份"这种过期问题。
 
 用法：
@@ -40,12 +42,17 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DRIVER = HERE / "adapters" / "wasm_pack_probe.mjs"
 
-# 白名单：跨环境构建出的两种字节都是"同源"（已实测）
-#   c1b87d0a… 127,313 B —— Rune/Web/Gate 在各自环境构建
-#   8b89dd7f… 130,653 B —— Core 环境构建（同 commit 031e95b）
-# 判定同源不看单一 sha，而是「sha 在白名单内 + 该产物通过冻结向量套件」。
+# sha → 字节数。**只用于报错/展示**，不参与判定（判定 = verifier.go 白名单首条 + 向量套件）。
+# 与 `server/internal/auth/verifier.go` 的 `FrozenKernelSHA256` 对齐；脚本运行时会自检覆盖率，
+# 白名单里出现这里没登记大小的 sha 会打 [warn]（判定不受影响，但报错信息会漏大小）。
 WHITELIST = {
+    # 当前流式内核（140,762 B / 43 函数 + memory = 44 导出）
+    "daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de": 140762,
+    # 上一版流式内核（140,742 B）：回滚目标
+    "8766048ffdd16b9de8c4f3fea49590ec0802418dea9ad0fdca68f0e05bb625f8": 140742,
+    # 初版内核（127,313 B / 34 函数）：灰度期旧镜像
     "c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f": 127313,
+    # v0.1.1 期 Core 环境从成员目录构建出的字节（130,653 B）：**不在现行白名单**，仅历史对照
     "8b89dd7fc033b9f4b316238d1d7507b161bbc74ff3547643d00981ed8da154f9": 130653,
 }
 # 当前冻结（v0.1.2）：140,762 B / 43 函数 + memory / 0 import；sha 从 verifier.go 白名单首条推导
@@ -77,6 +84,15 @@ def frozen_sha_from_whitelist(server_dir: Path) -> tuple[str, list[str]]:
         if m:
             shas.append(m.group(1))
     return (shas[0] if shas else ""), shas
+
+
+def whitelist_rows(all_shas: list[str]) -> list[tuple[str, str, str]]:
+    """把 verifier.go 白名单翻成展示行：(sha, 大小串, 标签)，顺序即 verifier.go 里的顺序。"""
+    rows: list[tuple[str, str, str]] = []
+    for i, s in enumerate(all_shas):
+        size = WHITELIST.get(s)
+        rows.append((s, f"{size:,} B" if size else "大小未登记", "当前" if i == 0 else "允许加载"))
+    return rows
 
 
 def sha256_of(path: Path) -> str:
@@ -216,24 +232,44 @@ def main(argv=None) -> int:
     expect = args.expect_sha or derived or FROZEN_SHA_FALLBACK
     if not derived and not args.expect_sha:
         print(f"[warn] 未能从 verifier.go 推导白名单，回落到兜底常量 {FROZEN_SHA_FALLBACK[:12]}…")
-    if len(all_shas) > 1:
+    if args.expect_sha:
+        print(f"[note] 用 --expect-sha 覆盖期望值：{args.expect_sha}（不是白名单首条；"
+              f"白名单首条是 {derived or '解析失败'}）")
+    elif len(all_shas) > 1:
         print(f"[note] verifier.go 白名单共 {len(all_shas)} 条，取**首条**为当前期望：{expect[:12]}…")
+    if all_shas:
+        unknown = [s for s in all_shas if s not in WHITELIST]
+        if unknown:
+            print("[warn] verifier.go 白名单有 %d 条没在本脚本 WHITELIST 登记大小（判定不受影响，"
+                  "但下次报错会漏大小，记得补）：%s"
+                  % (len(unknown), ", ".join(s[:12] + "…" for s in unknown)))
     if args.expect_sha:
         ok_sha = got_sha == args.expect_sha
     else:
         ok_sha = got_sha == expect
     if not ok_sha:
-        print(f"[note] 白名单里的 sha：")
-        for k, v in WHITELIST.items():
-            print(f"        {k}  {v:,} B")
+        # 报错信息不能骗人：列的是 verifier.go 里**真正**的白名单（首条才是期望值），
+        # 而不是脚本里那张只供展示的表（历史上就是这张表漏了新 sha，让人以为"白名单只有旧值"）。
+        print("[note] verifier.go 白名单（首条 = 当前期望；白名单不只一条，别只看这个列表判断对错）：")
+        if all_shas:
+            for s, size, tag in whitelist_rows(all_shas):
+                print(f"        {s}  {size}  [{tag}]")
+        else:
+            print("        （解析不到 verifier.go，回落到脚本静态表，仅供参照）：")
+            for s, size in WHITELIST.items():
+                print(f"        {s}  {size:,} B")
 
     print("=" * 88)
     print("服务端内嵌内核 vs 验收冻结产物")
     print("=" * 88)
     print(f"文件     ：{wasm}")
     print(f"实际     ：{got_bytes:,} 字节  sha256={got_sha}")
-    print(f"冻结期望 ：{FROZEN_BYTES:,} 字节  sha256={expect}  （来自 verifier.go 白名单首条）")
+    print(f"冻结期望 ：{FROZEN_BYTES:,} 字节  sha256={expect}  "
+          f"（{'--expect-sha 覆盖' if args.expect_sha else '来自 verifier.go 白名单首条'}）")
     print(f"{'PASS' if ok_sha else 'FAIL'}  内核 sha256 {'一致' if ok_sha else '不一致——服务端验的不是验收过的那份产物'}")
+    ok_bytes = got_bytes == FROZEN_BYTES
+    print(f"{'PASS' if ok_bytes else 'FAIL'}  字节数 {got_bytes:,}（期望 {FROZEN_BYTES:,}，"
+          f"check_server_kernel.py 的 FROZEN_BYTES）")
 
     ok_meta = True
     p = subprocess.run(["node", str(DRIVER), "--wasm", str(wasm), "exports"],
@@ -266,7 +302,7 @@ def main(argv=None) -> int:
     else:
         print("SKIP  向量套件（未给 --vectors-dir）")
 
-    ok = ok_sha and ok_meta and ok_vec and ok_git
+    ok = ok_sha and ok_bytes and ok_meta and ok_vec and ok_git
     print("-" * 88)
     print("结论：" + ("PASS —— 服务端加载的就是验收过的那份产物" if ok else
                     "FAIL —— 内嵌内核与冻结产物不一致（先换成冻结产物，再看其他证据）"))
