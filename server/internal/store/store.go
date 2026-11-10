@@ -177,6 +177,10 @@ const migrationNoTxDirective = "yanshu:no-transaction"
 
 // applyMigration 应用一个迁移：默认整文件包在一个事务里（失败即整体回滚）；
 // 文件里出现 `-- yanshu:no-transaction` 时改为**逐条语句自动提交**（每条各自一个隐式事务）。
+//
+// ⚠ 改这里要同步改 `migrations_lock_guard_test.go`：那条门禁的前提就是"整文件一个事务"——
+// 普通 `CREATE INDEX` 的 `SHARE` 锁会一直持到提交，所以事务迁移里不许建阻塞索引。
+// 如果哪天改成逐句提交，断言会变成误报（不是漏洞），改之前先读那段注释。
 func (s *Store) applyMigration(ctx context.Context, conn *pgxpool.Conn, name, src string) error {
 	if !isNoTxMigration(src) {
 		tx, err := conn.Begin(ctx)
@@ -214,17 +218,23 @@ func (s *Store) applyMigration(ctx context.Context, conn *pgxpool.Conn, name, sr
 	return nil
 }
 
-// isNoTxMigration 判断迁移头部（第一条语句之前）是否带 no-transaction 指令。
+// isNoTxMigration 判断迁移头部（第一条语句之前）是否有**独占一行**的 no-transaction 指令。
+//
+// 只认"整行就是指令"。早先是"注释里出现这个字样就算"，后果是**反向的**：一份普通事务迁移
+// 只要在说明文字里提一句 `-- yanshu:no-transaction`，就会静默变成逐条自动提交——
+// 中途失败留下半截 schema，而事务原子性没了谁也没提示。
 func isNoTxMigration(src string) bool {
 	for _, line := range strings.Split(src, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
-			if strings.Contains(trimmed, migrationNoTxDirective) {
-				return true
-			}
+		if trimmed == "" {
 			continue
 		}
-		return false // 已经进入第一条语句，指令只能写在文件头
+		if !strings.HasPrefix(trimmed, "--") {
+			return false // 已经进入第一条语句，指令只能写在文件头
+		}
+		if strings.TrimSpace(strings.TrimPrefix(trimmed, "--")) == migrationNoTxDirective {
+			return true
+		}
 	}
 	return false
 }
