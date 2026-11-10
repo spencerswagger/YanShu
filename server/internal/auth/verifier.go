@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // 验签错误。对外只暴露"签名不合法"或"验签不可用"，不区分内部原因（不给 oracle）。
@@ -29,26 +30,73 @@ type Verifier interface {
 	Verify(pubKey, message, signature []byte) error
 }
 
-// FrozenKernelSHA256 是允许加载的内核白名单（冻结产物）。
-// 新增内核时必须显式登记，避免"同源不同字节"的产物被静默采用。
-var FrozenKernelSHA256 = map[string]bool{
-	// 当前流式内核（140,762 B，43+memory=44 导出）：修掉 ys_alloc/ys_free 的长度依赖导致的
-	// 堆损坏（≥80 MiB 的 prelude 触发 unreachable）；字节兼容 YSPK/1.0。
-	"daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de": true,
-	// 上一版流式内核（140,742 B，同 44 导出）：保留作**回滚目标**——若新内核在目标环境暴露问题，
-	// 把镜像里的 wasm 换回这份即可启动；确认无需回滚后由单独 PR 移除。
-	"8766048ffdd16b9de8c4f3fea49590ec0802418dea9ad0fdca68f0e05bb625f8": true,
-	// 初版内核（127,313 B，34+memory=35 导出）：保留用于**灰度期**（仍在跑旧镜像的实例）；
-	// 全部环境切换并确认无需回滚后，与上一条一并移除。
-	"c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f": true,
+// frozenKernel 是白名单的一条：字节数与用途都写在这里，供展示与自检使用。
+type frozenKernel struct {
+	SHA256 string
+	Bytes  int
+	Role   string // "当前" / "回滚" / "灰度"
 }
 
-// FrozenKernelSHA256List 返回白名单的展示串。
-func FrozenKernelSHA256List() string {
-	for k := range FrozenKernelSHA256 {
-		return k
+// frozenKernelOrder 是白名单的**有序**视图：首条必须是当前内核。
+//
+// 为什么不能用 map 当唯一来源：map 迭代顺序随机，`FrozenKernelSHA256List()` 早先是
+// "range 到第一个就 return"，于是同一份输入两次跑会打印不同的"期望 sha"（实测 2/3 概率
+// 给出回滚版或灰度版），既把人往错方向指、也没法 grep。顺序在此显式钉住。
+var frozenKernelOrder = []frozenKernel{
+	// 当前流式内核（140,762 B，43+memory=44 导出）：修掉 ys_alloc/ys_free 的长度依赖导致的
+	// 堆损坏（≥80 MiB 的 prelude 触发 unreachable）；字节兼容 YSPK/1.0。
+	{
+		SHA256: "daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de",
+		Bytes:  140762,
+		Role:   "当前",
+	},
+	// 上一版流式内核（140,742 B，同 44 导出）：保留作**回滚目标**——若新内核在目标环境暴露问题，
+	// 把镜像里的 wasm 换回这份即可启动；确认无需回滚后由单独 PR 移除。
+	{
+		SHA256: "8766048ffdd16b9de8c4f3fea49590ec0802418dea9ad0fdca68f0e05bb625f8",
+		Bytes:  140742,
+		Role:   "回滚",
+	},
+	// 初版内核（127,313 B，34+memory=35 导出）：保留用于**灰度期**（仍在跑旧镜像的实例）；
+	// 全部环境切换并确认无需回滚后，与上一条一并移除。
+	{
+		SHA256: "c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f",
+		Bytes:  127313,
+		Role:   "灰度",
+	},
+}
+
+// FrozenKernelSHA256 是允许加载的内核白名单（冻结产物）。由 frozenKernelOrder 派生，
+// 新增内核时必须显式登记，避免"同源不同字节"的产物被静默采用。
+var FrozenKernelSHA256 = func() map[string]bool {
+	m := make(map[string]bool, len(frozenKernelOrder))
+	for _, k := range frozenKernelOrder {
+		m[k.SHA256] = true
 	}
-	return ""
+	return m
+}()
+
+// CurrentFrozenKernelSHA256 返回"当前内核"的 sha256（即 frozenKernelOrder 首条）。
+//
+// 约定：白名单首条 = 当前应该用的那一版；另两条只是"允许加载"（回滚 / 灰度）。
+// 仓库里的 `server/kernel/yanshu_sm.wasm` 必须等于它（有测试钉住）。
+func CurrentFrozenKernelSHA256() string {
+	return frozenKernelOrder[0].SHA256
+}
+
+// FrozenKernelSHA256List 返回白名单的确定性展示串，顺序固定、首条为当前内核，例如
+// `daa94926…(当前)、8766048f…(回滚)、c1b87d0a…(灰度)`。
+// 用于错误文案（"not in the frozen allowlist (expected …)"），同一输入两次跑必然一致。
+func FrozenKernelSHA256List() string {
+	parts := make([]string, 0, len(frozenKernelOrder))
+	for _, k := range frozenKernelOrder {
+		short := k.SHA256
+		if len(short) > 8 {
+			short = short[:8] + "…"
+		}
+		parts = append(parts, short+"("+k.Role+")")
+	}
+	return strings.Join(parts, "、")
 }
 
 // KernelInfo 由验签器实现，供 /v1/config 与启动自检使用。

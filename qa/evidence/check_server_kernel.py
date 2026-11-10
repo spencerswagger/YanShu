@@ -13,6 +13,9 @@
    `server/internal/auth/verifier.go` 的 `FrozenKernelSHA256` 白名单**首条**
    （首条 = 当前冻结产物；当前 = `daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de`）。
    白名单是运行期真正拦人的那一份，所以它才是门槛；脚本不再另写一份期望值。
+   两种写法都认：`SHA256: "<64hex>"`（#80 起的有序切片，带 `Bytes`/`Role`）与
+   `"<64hex>": true`（旧的 map 字面量）。**一条都解析不到时直接 BLOCKED（exit 2），不回落常量**
+   —— 回落会让"解析器坏了"伪装成 PASS。确实要指定一次期望值用 `--expect-sha <hex>`。
    不等 → FAIL，并打印两侧字节数与 sha，以及白名单里**每一条**（含大小），不吃"白名单只有旧值"的亏；
 2. 二级校验：该产物的 `ys_version()` 必须是 `0x00010000`，导出必须是
    43 个函数 + `memory`（合计 44 导出、0 import）—— 万一将来允许不同构建，也不能连版本/导出都对不上；
@@ -26,7 +29,7 @@
     python3 qa/evidence/check_server_kernel.py --server-dir <含 server/kernel 的源码根> \
         [--expect-sha <hex>] [--json-out out.json]
 
-退出码：0 一致；1 不一致（FAIL）；2 缺参数/缺产物（BLOCKED）。
+退出码：0 一致；1 不一致（FAIL）；2 缺参数/缺产物/白名单解析不出来（BLOCKED）。
 """
 
 from __future__ import annotations
@@ -65,33 +68,61 @@ FROZEN_FUNCS = 43
 #   FROZEN_BYTES = 127313
 #   FROZEN_FUNCS = 34
 
-# 兜底：白名单解析失败时才用它（正常路径不读这个常量）
-FROZEN_SHA_FALLBACK = "daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de"
+# 白名单在 verifier.go 里的两种写法都要认（#80 起改成有序切片，之前是 map 字面量）：
+#   SHA256: "<64hex>",   —— frozenKernel{SHA256, Bytes, Role} 的有序切片，首条 = 当前内核
+#   "<64hex>": true,     —— map[string]bool 字面量（旧写法）
+# 两种都按**文件里的顺序**收集：切片的顺序就是顺序，map 的写法当初也是按登记顺序排的。
+RE_SLICE_SHA = re.compile(r'SHA256:\s*"([0-9a-f]{64})"')
+RE_MAP_SHA = re.compile(r'"([0-9a-f]{64})"\s*:\s*true')
+RE_BYTES = re.compile(r'^\s*Bytes:\s*(\d+)\s*,?\s*$')
+RE_ROLE = re.compile(r'^\s*Role:\s*"([^"]+)"')
 
 
-def frozen_sha_from_whitelist(server_dir: Path) -> tuple[str, list[str]]:
-    """从 server/internal/auth/verifier.go 的 sha256 白名单推导期望 sha（首条 = 当前）。
+def frozen_kernels_from_source(server_dir: Path) -> list[dict]:
+    """从 server/internal/auth/verifier.go 解析白名单，保持文件顺序（首条 = 当前内核）。
 
-    返回 (期望 sha, 白名单全部条目)。解析不到就返回 ("", [])，由调用方报歧义。
+    返回 [{"sha": str, "bytes": int|None, "role": str|None}, ...]；解析不到返回 []。
+    `bytes` / `role` 只有有序切片写法才带（#80 起），map 写法下为 None，由 WHITELIST 兜展示。
     """
     src = server_dir / "server" / "internal" / "auth" / "verifier.go"
     if not src.is_file():
-        return "", []
-    text = src.read_text(encoding="utf-8", errors="replace")
-    shas: list[str] = []
-    for line in text.splitlines():
-        m = re.search(r'"([0-9a-f]{64})"\s*:\s*true', line)
+        return []
+    out: list[dict] = []
+    for line in src.read_text(encoding="utf-8", errors="replace").splitlines():
+        m = RE_SLICE_SHA.search(line) or RE_MAP_SHA.search(line)
         if m:
-            shas.append(m.group(1))
+            out.append({"sha": m.group(1), "bytes": None, "role": None})
+            continue
+        if not out:
+            continue
+        b = RE_BYTES.match(line)
+        if b:
+            out[-1]["bytes"] = int(b.group(1))
+            continue
+        r = RE_ROLE.match(line)
+        if r:
+            out[-1]["role"] = r.group(1)
+    return out
+
+
+def frozen_sha_from_whitelist(server_dir: Path) -> tuple[str, list[str]]:
+    """便捷包装：返回 (期望 sha, 白名单全部 sha)。解析不到返回 ("", [])。"""
+    kernels = frozen_kernels_from_source(server_dir)
+    shas = [k["sha"] for k in kernels]
     return (shas[0] if shas else ""), shas
 
 
-def whitelist_rows(all_shas: list[str]) -> list[tuple[str, str, str]]:
-    """把 verifier.go 白名单翻成展示行：(sha, 大小串, 标签)，顺序即 verifier.go 里的顺序。"""
+def whitelist_rows(kernels: list[dict]) -> list[tuple[str, str, str]]:
+    """把白名单翻成展示行：(sha, 大小串, 标签)，顺序即 verifier.go 里的顺序。
+
+    大小/用途优先用源码里带的（#80 起 `Bytes` / `Role`），没有再回落到脚本静态表。
+    """
     rows: list[tuple[str, str, str]] = []
-    for i, s in enumerate(all_shas):
-        size = WHITELIST.get(s)
-        rows.append((s, f"{size:,} B" if size else "大小未登记", "当前" if i == 0 else "允许加载"))
+    for i, k in enumerate(kernels):
+        sha = k["sha"]
+        size = k["bytes"] or WHITELIST.get(sha)
+        role = k["role"] or ("当前" if i == 0 else "允许加载")
+        rows.append((sha, f"{size:,} B" if size else "大小未登记", role))
     return rows
 
 
@@ -228,21 +259,33 @@ def main(argv=None) -> int:
 
     got_sha = sha256_of(wasm)
     got_bytes = wasm.stat().st_size
-    derived, all_shas = frozen_sha_from_whitelist(Path(args.server_dir))
-    expect = args.expect_sha or derived or FROZEN_SHA_FALLBACK
-    if not derived and not args.expect_sha:
-        print(f"[warn] 未能从 verifier.go 推导白名单，回落到兜底常量 {FROZEN_SHA_FALLBACK[:12]}…")
+    kernels = frozen_kernels_from_source(Path(args.server_dir))
+    all_shas = [k["sha"] for k in kernels]
+    src_path = Path(args.server_dir) / "server" / "internal" / "auth" / "verifier.go"
     if args.expect_sha:
+        expect = args.expect_sha
         print(f"[note] 用 --expect-sha 覆盖期望值：{args.expect_sha}（不是白名单首条；"
-              f"白名单首条是 {derived or '解析失败'}）")
-    elif len(all_shas) > 1:
-        print(f"[note] verifier.go 白名单共 {len(all_shas)} 条，取**首条**为当前期望：{expect[:12]}…")
-    if all_shas:
-        unknown = [s for s in all_shas if s not in WHITELIST]
-        if unknown:
-            print("[warn] verifier.go 白名单有 %d 条没在本脚本 WHITELIST 登记大小（判定不受影响，"
-                  "但下次报错会漏大小，记得补）：%s"
-                  % (len(unknown), ", ".join(s[:12] + "…" for s in unknown)))
+              f"白名单首条是 {all_shas[0] if all_shas else '解析失败'}）")
+    elif all_shas:
+        expect = all_shas[0]
+        if len(all_shas) > 1:
+            print(f"[note] verifier.go 白名单共 {len(all_shas)} 条，取**首条**为当前期望：{expect[:12]}…")
+    else:
+        # 显式失败，不回落（#79 建立的"期望值只从 verifier.go 推导"就是这条的意义）。
+        # 回落一个常量会让"解析器坏了"伪装成 PASS —— 今天常量恰好等于当前 sha，下次换内核就假红/假绿。
+        print("[BLOCKED] 推导不出期望 sha：从 verifier.go 白名单里一条都没解析到。", file=sys.stderr)
+        print(f"          文件：{src_path}"
+              f"{'（不存在）' if not src_path.is_file() else '（存在，但格式不认识）'}", file=sys.stderr)
+        print("          认得的写法：`SHA256: \"<64hex>\"`（有序切片）或 `\"<64hex>\": true`（map 字面量）。",
+              file=sys.stderr)
+        print("          格式真的变了就修本脚本的解析；只想指定一次期望值就加 `--expect-sha <hex>`。",
+              file=sys.stderr)
+        return 2
+    missing_size = [k["sha"] for k in kernels if k["bytes"] is None and k["sha"] not in WHITELIST]
+    if missing_size:
+        print("[warn] verifier.go 白名单有 %d 条没带大小（也没在脚本 WHITELIST 登记）：%s"
+              "——判定不受影响，但报错信息会漏大小" %
+              (len(missing_size), ", ".join(s[:12] + "…" for s in missing_size)))
     if args.expect_sha:
         ok_sha = got_sha == args.expect_sha
     else:
@@ -251,11 +294,11 @@ def main(argv=None) -> int:
         # 报错信息不能骗人：列的是 verifier.go 里**真正**的白名单（首条才是期望值），
         # 而不是脚本里那张只供展示的表（历史上就是这张表漏了新 sha，让人以为"白名单只有旧值"）。
         print("[note] verifier.go 白名单（首条 = 当前期望；白名单不只一条，别只看这个列表判断对错）：")
-        if all_shas:
-            for s, size, tag in whitelist_rows(all_shas):
+        if kernels:
+            for s, size, tag in whitelist_rows(kernels):
                 print(f"        {s}  {size}  [{tag}]")
         else:
-            print("        （解析不到 verifier.go，回落到脚本静态表，仅供参照）：")
+            print("        （verifier.go 解析不到；下面是脚本静态表，仅供参照 — 已用 --expect-sha 才走到这里）：")
             for s, size in WHITELIST.items():
                 print(f"        {s}  {size:,} B")
 
