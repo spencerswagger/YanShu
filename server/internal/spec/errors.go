@@ -44,6 +44,12 @@ const (
 	ErrCodeNotFound     ErrorCode = "CODE_NOT_FOUND"
 	ErrTransferNotFound ErrorCode = "TRANSFER_NOT_FOUND"
 	ErrChunkNotFound    ErrorCode = "CHUNK_NOT_FOUND"
+	// ErrRouteNotFound：请求路径不在 §3 接口总表里（ADR-0003）。
+	// 与 ERR_CODE/TRANSFER/CHUNK_NOT_FOUND 分界：那三个是"路径成立、对象不存在"，
+	// 本码是"路径本身不存在"——客户端据此把"我调错地址了"和"码/传输没了"分开处置。
+	ErrRouteNotFound ErrorCode = "ROUTE_NOT_FOUND"
+	// ErrMethodNotAllowed：路径在 §3 表里，但方法不在该行的定义内（ADR-0003）。
+	ErrMethodNotAllowed ErrorCode = "METHOD_NOT_ALLOWED"
 
 	// 409
 	ErrCodeTaken             ErrorCode = "CODE_TAKEN"
@@ -105,6 +111,8 @@ var errStatus = map[ErrorCode]int{
 	ErrCodeNotFound:     http.StatusNotFound,
 	ErrTransferNotFound: http.StatusNotFound,
 	ErrChunkNotFound:    http.StatusNotFound,
+	ErrRouteNotFound:    http.StatusNotFound,
+	ErrMethodNotAllowed: http.StatusMethodNotAllowed,
 
 	ErrCodeTaken:             http.StatusConflict,
 	ErrPubkeyTaken:           http.StatusConflict,
@@ -160,6 +168,8 @@ var errMessage = map[ErrorCode]string{
 	ErrCodeNotFound:     "code is not registered",
 	ErrTransferNotFound: "transfer not found",
 	ErrChunkNotFound:    "chunk not found",
+	ErrRouteNotFound:    "no such endpoint; see the interface table in the contract",
+	ErrMethodNotAllowed: "method is not defined for this endpoint",
 
 	ErrCodeTaken:             "code is already bound to another public key",
 	ErrPubkeyTaken:           "public key is already registered under another code",
