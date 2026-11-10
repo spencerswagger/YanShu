@@ -39,7 +39,8 @@ const add = (name, ok, ev) => {
 for (const [code, status] of [['ROUTE_NOT_FOUND', 404], ['METHOD_NOT_ALLOWED', 405]]) {
   const d = describeError(new ApiError({ code, status, message: 'raw message from server' }))
   add(`${code} 有中文文案且不落兜底`,
-    d.title !== `请求失败（${code}）` && noAsciiLetters(d.title) && noAsciiLetters(d.hint)
+    String(d.title ?? '').trim().length > 0 && String(d.hint ?? '').trim().length > 0
+      && d.title !== `请求失败（${code}）` && noAsciiLetters(d.title) && noAsciiLetters(d.hint)
       && d.terminal === false && !d.retry,
     `title=${JSON.stringify(d.title)} terminal=${d.terminal} retry=${!!d.retry}`)
 }
@@ -64,7 +65,8 @@ for (const [code, status] of [['ROUTE_NOT_FOUND', 404], ['METHOD_NOT_ALLOWED', 4
 {
   const d = describeError(new ApiError({ code: 'CODE_NOT_FOUND', status: 404, message: 'not registered' }))
   add('CODE_NOT_FOUND 仍归自己的文案',
-    d.title !== '请求失败（CODE_NOT_FOUND）' && noAsciiLetters(d.title),
+    String(d.title ?? '').trim().length > 0
+      && d.title !== '请求失败（CODE_NOT_FOUND）' && noAsciiLetters(d.title),
     `title=${JSON.stringify(d.title)}`)
 }
 
