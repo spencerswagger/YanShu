@@ -69,7 +69,7 @@ export function buildMetaOrSkip(t) {
   const meta = readBuildMeta()
   if (meta) return BUILD_META_PATH
   if (process.env.CI) assert.fail(`CI 下缺构建溯源：${BUILD_META_PATH}`)
-  t.skip(`没有可解析的 ys_kernel.build.json：${BUILD_META_PATH}（npm run wasm:rebuild / wasm:sync 生成；`
+  t.skip(`没有可解析的 ys_kernel.build.json：${BUILD_META_PATH}（npm run wasm:rebuild 或 wasm:sync --commit 生成；`
     + '文件缺失或正在被改写都算"环境未就绪"，不计入通过）')
   return null
 }
