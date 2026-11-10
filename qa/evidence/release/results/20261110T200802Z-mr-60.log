@@ -1,0 +1,9 @@
+== 合并期回归 @ 2026-11-10T20:08:03Z  ref=200d26b (200d26b350c34c5d3b7e163a381fa78d72473f03)  only=60
+   work=/tmp/yanshu-mr-527-200803
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t200806_test?sslmode=disable
+--- #60 crosscheck 裸跑 ---
+[PASS] #60 crosscheck（PASS 6 / FAIL 0 / SKIP 69）
+
+结论：本轮要求的 2 项全部真跑且 PASS

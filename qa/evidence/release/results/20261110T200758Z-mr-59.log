@@ -1,0 +1,9 @@
+== 合并期回归 @ 2026-11-10T20:07:59Z  ref=47b7740 (47b7740cecf576803dbcbf5949cb2134e9230702)  only=59
+   work=/tmp/yanshu-mr-4-200758
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t200802_test?sslmode=disable
+--- #59 A/B 证据脚本 ---
+[PASS] #59 ab_contract_envelope --expect after
+
+结论：本轮要求的 2 项全部真跑且 PASS

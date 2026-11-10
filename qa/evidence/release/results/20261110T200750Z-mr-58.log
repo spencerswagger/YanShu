@@ -1,0 +1,9 @@
+== 合并期回归 @ 2026-11-10T20:07:50Z  ref=091997a (091997a9f536cb766707f8ec261326dc8517b303)  only=58
+   work=/tmp/yanshu-mr-1325-200750
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t200753_test?sslmode=disable
+--- #58 契约 §0.2 路由信封 ---
+[PASS] #58 未路由信封（PASS=11 FAIL=0）
+
+结论：本轮要求的 2 项全部真跑且 PASS
