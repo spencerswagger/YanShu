@@ -1,0 +1,52 @@
+{
+  "title": "v0.2.0 发布自测（本地二进制；沙箱无 docker，容器部署未验）",
+  "verdict": 0,
+  "rows": [
+    {
+      "name": "/healthz 200",
+      "kind": "PASS",
+      "evidence": "status=200"
+    },
+    {
+      "name": "/v1/config 有 server_time 且与 Date 一致",
+      "kind": "PASS",
+      "evidence": "server_time=2026-11-10T05:38:32Z date=tue, 10 nov 2026 05:38:32 gmt"
+    },
+    {
+      "name": "/v1/config 两个 no-store 头",
+      "kind": "PASS",
+      "evidence": "cache-control='no-store' cdn='no-store'"
+    },
+    {
+      "name": "/v1/stats 三个 no-store + 字段集精确",
+      "kind": "PASS",
+      "evidence": "200 {\"today\": {\"consumed\": 0, \"consumed_bytes\": 0, \"created\": 0}, \"total\": {\"consumed\": 0, \"consumed_bytes\": 0, \"created\": 0"
+    },
+    {
+      "name": "一次完整真实收发（3 块逐字节一致 + ack → CONSUMED）",
+      "kind": "PASS",
+      "evidence": "prelude=200 块一致=[True, True, True] ack=200 state=CONSUMED"
+    },
+    {
+      "name": "ack 后密文物理删除",
+      "kind": "PASS",
+      "evidence": "目录残留=False"
+    },
+    {
+      "name": "到期件 GET /prelude = 410 TRANSFER_EXPIRED（且密文当场删）",
+      "kind": "PASS",
+      "evidence": "GET state=EXPIRED prelude=410 TRANSFER_EXPIRED"
+    },
+    {
+      "name": "清理日志 purgeRemaining 最终为 0",
+      "kind": "PASS",
+      "evidence": "序列=[0]"
+    },
+    {
+      "name": "清理日志无 sweep failed",
+      "kind": "PASS",
+      "evidence": "出现次数=0"
+    }
+  ],
+  "notes": []
+}

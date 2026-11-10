@@ -1,0 +1,101 @@
+{
+  "kind": "contract-envelope-0.2",
+  "expect": "after",
+  "at": "2026-11-10T17:52:37+0000",
+  "binary": "/.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/bin/env-after",
+  "binary_sha256": "a39902f8fa4a2813b03c8e650289f7e3c7aca20a8fdd6fc48507389cb6e9a210",
+  "unrouted": [
+    {
+      "status": 404,
+      "content_type": "application/json; charset=utf-8",
+      "code": "ROUTE_NOT_FOUND",
+      "request_id": "req_0285968f798b9be6",
+      "allow": "",
+      "body_head": "{\"error\":{\"code\":\"ROUTE_NOT_FOUND\",\"message\":\"no such endpoint; see the interface table in the contract\",\"request_id\":\"r",
+      "envelope": true,
+      "case": "未知路径",
+      "method": "GET",
+      "path": "/v1/definitely-not-an-endpoint",
+      "want_status": 404,
+      "want_code": "ROUTE_NOT_FOUND",
+      "want_allow": ""
+    },
+    {
+      "status": 404,
+      "content_type": "application/json; charset=utf-8",
+      "code": "ROUTE_NOT_FOUND",
+      "request_id": "req_430b544a14aea8b5",
+      "allow": "",
+      "body_head": "{\"error\":{\"code\":\"ROUTE_NOT_FOUND\",\"message\":\"no such endpoint; see the interface table in the contract\",\"request_id\":\"r",
+      "envelope": true,
+      "case": "未知路径(深层)",
+      "method": "GET",
+      "path": "/v1/transfers/abc/nope",
+      "want_status": 404,
+      "want_code": "ROUTE_NOT_FOUND",
+      "want_allow": ""
+    },
+    {
+      "status": 405,
+      "content_type": "application/json; charset=utf-8",
+      "code": "METHOD_NOT_ALLOWED",
+      "request_id": "req_b0f56057f0a4031e",
+      "allow": "POST",
+      "body_head": "{\"error\":{\"code\":\"METHOD_NOT_ALLOWED\",\"message\":\"method is not defined for this endpoint\",\"request_id\":\"req_b0f56057f0a4",
+      "envelope": true,
+      "case": "方法不对(POST→GET)",
+      "method": "GET",
+      "path": "/v1/transfers",
+      "want_status": 405,
+      "want_code": "METHOD_NOT_ALLOWED",
+      "want_allow": "POST"
+    },
+    {
+      "status": 405,
+      "content_type": "application/json; charset=utf-8",
+      "code": "METHOD_NOT_ALLOWED",
+      "request_id": "req_1546a1a7cb3c8fcc",
+      "allow": "GET, HEAD",
+      "body_head": "{\"error\":{\"code\":\"METHOD_NOT_ALLOWED\",\"message\":\"method is not defined for this endpoint\",\"request_id\":\"req_1546a1a7cb3c",
+      "envelope": true,
+      "case": "方法不对(GET→DELETE)",
+      "method": "DELETE",
+      "path": "/healthz",
+      "want_status": 405,
+      "want_code": "METHOD_NOT_ALLOWED",
+      "want_allow": "GET"
+    }
+  ],
+  "controls": [
+    {
+      "status": 404,
+      "content_type": "application/json; charset=utf-8",
+      "code": "TRANSFER_NOT_FOUND",
+      "request_id": "req_c8368caa4a172704",
+      "allow": "",
+      "body_head": "{\"error\":{\"code\":\"TRANSFER_NOT_FOUND\",\"message\":\"transfer not found\",\"request_id\":\"req_c8368caa4a172704\"}}\\n",
+      "envelope": true,
+      "case": "路径成立·对象不成立",
+      "method": "GET",
+      "path": "/v1/transfers/not-a-transfer-id",
+      "want_status": 404,
+      "want_code": "TRANSFER_NOT_FOUND"
+    },
+    {
+      "status": 400,
+      "content_type": "application/json; charset=utf-8",
+      "code": "BAD_REQUEST",
+      "request_id": "req_bf0aaf132a2abf40",
+      "allow": "",
+      "body_head": "{\"error\":{\"code\":\"BAD_REQUEST\",\"message\":\"request format or parameter is invalid\",\"request_id\":\"req_bf0aaf132a2abf40\"}}\\n",
+      "envelope": true,
+      "case": "坏 JSON",
+      "method": "POST",
+      "path": "/v1/challenges",
+      "want_status": 400,
+      "want_code": "BAD_REQUEST"
+    }
+  ],
+  "failures": [],
+  "pass": true
+}

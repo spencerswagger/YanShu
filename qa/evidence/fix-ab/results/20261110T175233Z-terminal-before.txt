@@ -1,0 +1,45 @@
+===== terminal-before @ 2026-11-10T17:52:39Z =====
+[cmd] python3 /worktrees/YS-QA/qa/evidence/fix-ab/ab_terminal_410.py --binary /.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/bin/before --dsn postgres://yanshu_test:***@127.0.0.1:56377/yanshu_test?sslmode=disable --expect before --work /.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/term-before --json-out /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T175233Z-terminal-before.json
+== 契约 §1.7.4 终结态 410 先于凭据 401（expect=before）@ 2026-11-10T17:52:40+0000
+binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/bin/before  sha256 = 69d8d5c63bfeb57025d1a43ab4c1e345a85fb59ec4bc5581cdc4e9f5e5c64a49
+
+[矩阵] 终态 × 路径 × 凭据
+  ----  CONSUMED status   cred=none  → 401 AUTH_MISSING
+  ----  CONSUMED status   cred=bogus → 401 AUTH_TOKEN_INVALID
+  ----  CONSUMED status   cred=valid → 409 TRANSFER_STATE_CONFLICT
+  ----  CONSUMED prelude  cred=none  → 401 AUTH_MISSING
+  ----  CONSUMED prelude  cred=bogus → 401 AUTH_TOKEN_INVALID
+  ----  CONSUMED prelude  cred=valid → 409 TRANSFER_STATE_CONFLICT
+  ----  CONSUMED chunk    cred=none  → 401 AUTH_MISSING
+  ----  CONSUMED chunk    cred=bogus → 401 AUTH_TOKEN_INVALID
+  ----  CONSUMED chunk    cred=valid → 409 TRANSFER_STATE_CONFLICT
+  ----  CONSUMED complete cred=none  → 401 AUTH_MISSING
+  ----  CONSUMED complete cred=bogus → 401 AUTH_TOKEN_INVALID
+  ----  CONSUMED complete cred=valid → 409 TRANSFER_STATE_CONFLICT
+  ----  REVOKED  status   cred=none  → 401 AUTH_MISSING
+  ----  REVOKED  status   cred=bogus → 401 AUTH_TOKEN_INVALID
+  ----  REVOKED  status   cred=valid → 409 TRANSFER_STATE_CONFLICT
+  ----  REVOKED  prelude  cred=none  → 401 AUTH_MISSING
+  ----  REVOKED  prelude  cred=bogus → 401 AUTH_TOKEN_INVALID
+  ----  REVOKED  prelude  cred=valid → 409 TRANSFER_STATE_CONFLICT
+  ----  REVOKED  chunk    cred=none  → 401 AUTH_MISSING
+  ----  REVOKED  chunk    cred=bogus → 401 AUTH_TOKEN_INVALID
+  ----  REVOKED  chunk    cred=valid → 409 TRANSFER_STATE_CONFLICT
+  ----  REVOKED  complete cred=none  → 401 AUTH_MISSING
+  ----  REVOKED  complete cred=bogus → 401 AUTH_TOKEN_INVALID
+  ----  REVOKED  complete cred=valid → 409 TRANSFER_STATE_CONFLICT
+
+[阴性对照] 未终结传输必须仍是 401（不能被 410 吞掉）
+  PASS  status   cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
+  PASS  status   cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
+  PASS  prelude  cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
+  PASS  prelude  cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
+  PASS  chunk    cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
+  PASS  chunk    cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
+  PASS  complete cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
+  PASS  complete cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
+
+结论：24 例中 0 例回了 410 —— 终结态判定存在缺口（修前问题复现）
+
+[json] /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T175233Z-terminal-before.json
+[exit=0] terminal-before
