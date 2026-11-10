@@ -1124,15 +1124,15 @@ cd crypto && cargo build --release --target wasm32-unknown-unknown -p yanshu-sm
 ```
 
 - 必须在 **workspace 根的 `crypto/` 目录**执行，并用 `-p yanshu-sm` 指定成员 crate。
-- **MUST NOT** 从成员目录（如 `crypto/sm`）构建：那会绕过 workspace 的 `Cargo.lock` 与 `[profile.release]`（`opt-level=3`、`lto=true`、`codegen-units=1`），产出字节与冻结产物不同（实测 130,653 B / `8b89dd7f…` 对 127,313 B / `c1b87d0a…`）。行为可能一致，但**验收不可信**。
+- **MUST NOT** 从成员目录（如 `crypto/sm`）构建：那会绕过 workspace 的 `Cargo.lock` 与 `[profile.release]`（`opt-level=3`、`lto=true`、`codegen-units=1`），产出字节与冻结产物不同（v0.1.1 实测：130,653 B / `8b89dd7f…` 对当时的冻结产物 127,313 B / `c1b87d0a…`；当前冻结产物见 §18.2）。行为可能一致，但**验收不可信**。
 
 ### 18.2 冻结产物
 
 | 项 | 值 |
 |---|---|
-| `sha256` | `c1b87d0ad9a847fa04e2f4517e3a10c2150de008772f8b985dcc1f0cfc97259f` |
-| 大小 | `127313` 字节 |
-| 目标 | `wasm32-unknown-unknown`，**0 import**，§2.3 所列必需导出齐备 |
+| `sha256` | `daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de` |
+| 大小 | `140762` 字节 |
+| 目标 | `wasm32-unknown-unknown`，**0 import**，43 个函数 + `memory` = 44 导出，§2.3 所列必需导出齐备 |
 | 自报版本 | `ys_version() == 0x00010000`，`ys_header_len() == 112` |
 
 ### 18.3 判定方式（唯一可靠）
