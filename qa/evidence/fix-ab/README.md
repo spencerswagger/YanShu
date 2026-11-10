@@ -31,6 +31,9 @@ python3 qa/evidence/fix-ab/ab_index_lock_write.py --rows 600000
 ```
 
 退出码：0 = 与 `--expect` 相符；1 = 不符；2 = 环境/前置失败（BLOCKED）。
+`run_all.sh` 会聚合：**任何一项非 0 → 整体 exit 1**（`results/*.rc` 逐项记录；验证方式是
+把 `--after-ref/--envelope-after-ref/--guard-ref` 全换成 `origin/main`，整体必须非 0，
+留档见 `results/*-negative-run-rc.txt`）。
 每份脚本都会把结构化结果写成 JSON（含 `at` 时间戳、二进制 `sha256`、逐例原始状态码与
 错误名），可直接给评审看。
 
@@ -46,7 +49,8 @@ python3 qa/evidence/fix-ab/ab_index_lock_write.py --rows 600000
 
 - `ab_terminal_410.py` 的 CONSUMED 用例是**真的走完**取件：complete → GET prelude 拿租约
   → 取两块 → ack（只取件不 ack 只到 READY，不是终态）。
-- `ab_index_lock_write.py` 的绝对值随机器/数据量变化（本机 60 万行 / 113 MB：A 808 ms 建
+- `ab_index_lock_write.py` 在 phase A 建索引 <300ms 时会直接 BLOCKED（窗口太短、判定不可靠），
+  默认 60 万行约 800ms；绝对值随机器/数据量变化（本机 60 万行 / 113 MB：A 808 ms 建
   索引、单条写最长 778.9 ms；B 886 ms、最长 55.3 ms）。结论看**相对关系**与锁模式，不看
   某个固定毫秒数。
 - `run_all.sh` 需要本地 git 仓库（用 `git archive` 取两棵树），不需要切分支、不动工作树。

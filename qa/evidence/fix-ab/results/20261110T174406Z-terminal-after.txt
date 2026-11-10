@@ -1,7 +1,7 @@
-===== terminal-after @ 2026-11-10T17:24:49Z =====
-[cmd] python3 /worktrees/YS-QA/qa/evidence/fix-ab/ab_terminal_410.py --binary /.octop/workspaces/0JXF1M/tmp/ab-round/runall4/bin/after --dsn postgres://yanshu_test:ac050b1bd85a80f17ced2e78dd206eb6@127.0.0.1:51285/yanshu_test?sslmode=disable --expect after --work /.octop/workspaces/0JXF1M/tmp/ab-round/runall4/term-after --json-out /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T172442Z-terminal-after.json
-== 契约 §1.7.4 终结态 410 先于凭据 401（expect=after）@ 2026-11-10T17:24:50+0000
-binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runall4/bin/after  sha256 = fc1d839bd0f080927c6e0fd0876a425c6a816c49b4c7631c4caaf6e5a89f2f9a
+===== terminal-after @ 2026-11-10T17:44:14Z =====
+[cmd] python3 /worktrees/YS-QA/qa/evidence/fix-ab/ab_terminal_410.py --binary /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/after --dsn postgres://yanshu_test:***@127.0.0.1:55217/yanshu_test?sslmode=disable --expect after --work /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/term-after --json-out /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T174406Z-terminal-after.json
+== 契约 §1.7.4 终结态 410 先于凭据 401（expect=after）@ 2026-11-10T17:44:14+0000
+binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/after  sha256 = d8e73daf0b657f3fc946876c7ce075d1d5f591c291028c3edbabf772533696f7
 
 [矩阵] 终态 × 路径 × 凭据
   410✓  CONSUMED status   cred=none  → 410 TRANSFER_CONSUMED
@@ -30,10 +30,16 @@ binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runall4/bin/after  sha256 = fc1d
   410✓  REVOKED  complete cred=valid → 410 TRANSFER_REVOKED
 
 [阴性对照] 未终结传输必须仍是 401（不能被 410 吞掉）
+  PASS  status   cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
+  PASS  status   cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
   PASS  prelude  cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
   PASS  prelude  cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
+  PASS  chunk    cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
+  PASS  chunk    cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
+  PASS  complete cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
+  PASS  complete cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
 
 结论：24 例中 24 例为 410 + 对应终态码 → 修后达标
 
-[json] /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T172442Z-terminal-after.json
+[json] /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T174406Z-terminal-after.json
 [exit=0] terminal-after

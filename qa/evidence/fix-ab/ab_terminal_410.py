@@ -147,10 +147,12 @@ def main(argv=None) -> int:
                     terminal.append(r)
 
         fresh_tid, fresh_token = make_fresh(c, sender, recipient)
-        for cred in ("none", "bogus"):
-            r = do_probe(c, fresh_tid, fresh_token, "prelude", cred)
-            r["want"] = "AUTH_MISSING" if cred == "none" else "AUTH_TOKEN_INVALID"
-            negative.append(r)
+        # 阴性对照覆盖 4 条上传路径 × 2 种缺/错凭据（只打 1 条路径会漏掉"某条路径被一律 410"）
+        for path in PATHS:
+            for cred in ("none", "bogus"):
+                r = do_probe(c, fresh_tid, fresh_token, path, cred)
+                r["want"] = "AUTH_MISSING" if cred == "none" else "AUTH_TOKEN_INVALID"
+                negative.append(r)
 
     print(f"== 契约 §1.7.4 终结态 410 先于凭据 401（expect={args.expect}）@ {C.now_iso()}")
     print(f"binary = {args.binary}  sha256 = {C.sha256_file(args.binary)}")

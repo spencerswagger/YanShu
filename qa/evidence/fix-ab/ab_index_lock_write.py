@@ -198,10 +198,21 @@ ANALYZE {TABLE};
     show("B CONCURRENTLY", b, b_locks, b_dur)
 
     if writer.errors:
+        # writer 报错会让延迟样本失真 —— 直接判不成立，不再往下给结论
         print(f"  writer 报错 {len(writer.errors)} 次，首条：{writer.errors[0]}")
+        failures_note = f"writer 失败 {len(writer.errors)} 次，样本不可信"
+    else:
+        failures_note = ""
+
+    if a_dur < 0.3:
+        print(f"\n[BLOCKED] phase A 建索引只用了 {a_dur * 1000:.0f} ms（<300ms），"
+              f"阻塞窗口太短、判定不可靠：加大 --rows 再来（默认 60 万行约 800ms）", file=sys.stderr)
+        return C.EXIT_BLOCKED
 
     a_blocked = a.get("max_ms", 0) >= 300 and "ShareLock" in a_locks
     b_ok = b.get("max_ms", 99999) < 300 and "ShareLock" not in b_locks
+    if failures_note:
+        a_blocked = b_ok = False
     print(f"\n结论：A（事务+普通 CREATE INDEX）"
           f"{'写入被挡住（最长 ' + str(a.get('max_ms')) + ' ms，锁 ' + ','.join(a_locks) + '）' if a_blocked else '未复现写阻塞'}"
           f"；B（CONCURRENTLY）"
@@ -219,6 +230,7 @@ ANALYZE {TABLE};
                     "locks": b_locks, **b},
         "baseline": {**base, "locks": base_locks},
         "writer_errors": writer.errors[:5],
+        "writer_error_note": failures_note,
         "verdict": {"a_blocked": a_blocked, "b_not_blocked": b_ok,
                     "pass": a_blocked and b_ok},
     })

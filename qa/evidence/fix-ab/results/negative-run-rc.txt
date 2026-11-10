@@ -1,0 +1,16 @@
+反证：--after-ref / --envelope-after-ref / --guard-ref 全部换成 origin/main（必然失败）
+命令：qa/evidence/fix-ab/run_all.sh --before-ref origin/main --after-ref origin/main \
+        --envelope-after-ref origin/main --guard-ref origin/main --rows 100000
+
+各项退出码：
+[exit=0] envelope-before
+[exit=1] envelope-after
+[exit=0] terminal-before
+[exit=1] terminal-after
+[exit=1] guard-teeth
+[exit=2] index-lock
+
+run_all 总退出码：1（期望非 0；修复前这里是 0，因为 rc 取的是 tee 的退出码）
+
+各实验结论/失败行：
+[FAIL] 有实验不符合预期（见上面 exit!=0 的项与 .rc 文件）

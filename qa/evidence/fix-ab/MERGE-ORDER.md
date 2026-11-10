@@ -10,10 +10,12 @@
 | #58 | `fix/contract-envelope-fallback` | 未匹配路由 / 未定义方法也走 §0.2 错误信封（`ROUTE_NOT_FOUND` / `METHOD_NOT_ALLOWED`） | `api.go`、`fallback.go`、`spec/errors.go` + 测试 + 文档 + 脚本 |
 | #56 | `fix/terminal-410-before-token` | §1.7.4 终结态 410 先于凭据 401（四条上传路径） | `handlers_transfers.go` + 新增测试 |
 
-**与"8 张"的出入（必须点明）**：`gh pr list --state open` 只有上面 **3 张**。#47–#55 已 MERGED；
-`docs/readme-rewrite`、`feat/web-image-nginx`、`fix/compose-volume-perms`、`docs/contract-clarify`
-是没建 PR 的旧分支（最后提交 2026-11-02/03，`contract-clarify` 已落后 main 37 个提交），
-不算待合。若主持人手上另有 5 张单，说明它们还没推上来。
+**与"8 张"的出入（必须点明）**：`gh pr list --state open` 只有上面 **3 张**。#47–#55 已 MERGED。
+剩下能对得上"待合"的只有两笔：本 PR cherry-pick 的 `qa/v5-evidence` 2 个未合提交（v0.2.0 核验留档）。
+另有 4 个**没建 PR**的旧分支（最后提交 2026-11-02/03）：`docs/readme-rewrite`、`feat/web-image-nginx`、
+`fix/compose-volume-perms`、`docs/contract-clarify`（`main..branch` **领先** 37 个提交、`branch..main`
+落后 357 个，属 stale）。3 + 1（QA 两笔）+ 4 = 8 能对上账，但其中 5 项不是"待合 PR"。
+若主持人手上另有 PR 单，说明它们还没推上来。
 
 ## 1. 顺序：没有硬依赖，这是**风险序**
 
@@ -45,6 +47,7 @@
 ```sh
 cd server && go build ./... && go vet ./... && gofmt -l .        # 期望：无输出
 go test ./internal/store -run 'TestMigrationsCreateIndexesWithoutBlockingWrites|TestNoTxMigrationHasConcurrentIndex' -v
+go build -o ./yanshu-server ./cmd/yanshu-server                          # -migrate-only 用的二进制
 YANSHU_DATABASE_URL="$TEST_DATABASE_URL" ./yanshu-server -migrate-only   # 期望：9 份迁移全过
 YANSHU_DATABASE_URL="$TEST_DATABASE_URL" ./yanshu-server -migrate-only   # 期望：重跑幂等、不报错
 ```
@@ -54,7 +57,9 @@ YANSHU_DATABASE_URL="$TEST_DATABASE_URL" ./yanshu-server -migrate-only   # 期�
 ```sh
 qa/evidence/fix-ab/ab_contract_envelope.py --binary ./yanshu-server --expect after
 # 期望 4/4 信封（404 ROUTE_NOT_FOUND / 405 METHOD_NOT_ALLOWED，带 request_id）+ 两条对照组 PASS
-cd server && go test ./internal/httpapi -run 'Routes|Unrouted|Fallback' -v
+cd server && go test ./internal/httpapi \
+  -run 'TestUnroutedPathKeepsContractEnvelope|TestWrongMethodKeepsContractEnvelope|TestRoutedRequestsAreNotSwallowed' -v
+# 期望：3 条 --- PASS（少一条就是没跑到，`-run` 匹配不到会静默 exit 0）
 ```
 
 ### #56 合入后
@@ -75,8 +80,11 @@ qa/evidence/fix-ab/run_all.sh --before-ref origin/main~3 --after-ref origin/main
 
 ## 3. 两处观察（不影响合入，供提交人决定）
 
-1. **`Allow` 头少 `HEAD`**：修前 `DELETE /healthz` 的 405 回 `Allow: GET, HEAD`（Go ServeMux
-   对 GET 隐式放行 HEAD），修后只回 `Allow: GET`。客户端若按 `Allow` 判断能不能探活/取块，
-   这是可观测差异（不影响 `code` 分支）。
-2. **`DELETE /healthz` 走 404 而不是 405**：`/healthz` 不在 `/v1` 前缀下，属"路径不存在"，
-   这条按 404 处理是对的；列在这里只是防止别人用 `/v1/healthz` 复现出相反结论（那是真 404）。
+1. **`Allow` 头与修前一致**：`DELETE /healthz` 修前 `Allow: GET, HEAD`、修后同样是 `GET, HEAD`
+   （#58 在 17:39 的复审修复里补齐了 HEAD）。此前一版只回 `GET`，已复测不再存在，本条留档防止
+   有人拿旧结论复核。
+2. **`/healthz` 不在 `/v1` 前缀下**：`DELETE /v1/healthz` 属"路径不存在"，按 404 处理是对的；
+   要复现 405 必须用 `DELETE /healthz`。列在这里只是防止别人用错路径得出相反结论。
+
+> 说明：本轮的 A/B 结果对应 #58 `760dfdb`（17:39）、#57 `f941589`（17:21）、#56 `884fbe4`（14:26）。
+> 提交人后续再推，回归项要按同一组脚本重跑。

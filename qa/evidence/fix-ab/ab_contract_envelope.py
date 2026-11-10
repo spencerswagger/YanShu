@@ -31,12 +31,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ab_common as C  # noqa: E402
 
-# (名字, method, path, body)
+# (名字, method, path, body, 期望状态, 期望 code, Allow 里必须出现的 method)
+#
+# 「方法不符」必须硬断言 405：实现用独立 pathOnly mux 判定，结果是确定的；
+# 留白成"状态与 code 自洽"会让"405 分支被删掉、全部回 404"也变绿（复审 P1-2）。
 UNROUTED = [
-    ("未知路径", "GET", "/v1/definitely-not-an-endpoint", None),
-    ("未知路径(深层)", "GET", "/v1/transfers/abc/nope", None),
-    ("方法不对(POST→GET)", "GET", "/v1/transfers", None),
-    ("方法不对(GET→DELETE)", "DELETE", "/healthz", None),
+    ("未知路径", "GET", "/v1/definitely-not-an-endpoint", None, 404, "ROUTE_NOT_FOUND", ""),
+    ("未知路径(深层)", "GET", "/v1/transfers/abc/nope", None, 404, "ROUTE_NOT_FOUND", ""),
+    ("方法不对(POST→GET)", "GET", "/v1/transfers", None, 405, "METHOD_NOT_ALLOWED", "POST"),
+    ("方法不对(GET→DELETE)", "DELETE", "/healthz", None, 405, "METHOD_NOT_ALLOWED", "GET"),
 ]
 
 CONTROLS = [
@@ -82,9 +85,10 @@ def main(argv=None) -> int:
     rows, controls, failures = [], [], []
     with C.Server(args.binary, dsn, args.schema, work) as srv:
         client = C.Client(srv.base)
-        for name, method, path, body in UNROUTED:
+        for name, method, path, body, want_st, want_code, want_allow in UNROUTED:
             r = probe(client, method, path, body)
-            r.update({"case": name, "method": method, "path": path})
+            r.update({"case": name, "method": method, "path": path,
+                      "want_status": want_st, "want_code": want_code, "want_allow": want_allow})
             rows.append(r)
         for name, method, path, body, want_st, want_code in CONTROLS:
             r = probe(client, method, path, body)
@@ -115,29 +119,30 @@ def main(argv=None) -> int:
 
     if args.expect == "before":
         verdict_ok = len(bad) > 0
+        for r in rows:
+            if r["status"] != r["want_status"]:
+                failures.append(f"{r['method']} {r['path']} 修前状态 {r['status']}，期望 {r['want_status']}（复现条件不对）")
         print(f"\n结论：{len(bad)}/{len(rows)} 条未被路由接住的请求**没有**错误信封"
               f"（text/plain）→ 修前问题复现{'成功' if verdict_ok else '失败'}")
         if not verdict_ok:
             failures.append("期望修前「无信封」，实测全部有信封 —— 树选错了，或修复已在基线里")
     else:
-        # 只要求「状态码与 code 自洽、且是信封」：404→ROUTE_NOT_FOUND、405→METHOD_NOT_ALLOWED。
-        # 具体哪条走 404 哪条走 405 由 ADR-0003 的实现决定（Go 的 ServeMux 对
-        # 「路径存在但方法不符」并不总是给 405），这里不越位替实现选边。
-        want_codes = {404: "ROUTE_NOT_FOUND", 405: "METHOD_NOT_ALLOWED"}
+        # 逐条硬断言：未知路径 404 ROUTE_NOT_FOUND；方法不符 405 METHOD_NOT_ALLOWED + Allow。
         for r in rows:
             if not r["envelope"]:
                 failures.append(f"{r['method']} {r['path']} 仍无信封（{r['content_type']}）")
                 continue
-            want = want_codes.get(r["status"])
-            if want is None:
-                failures.append(f"{r['method']} {r['path']} 状态码 {r['status']} 不在预期（404/405）")
-            elif r["code"] != want:
-                failures.append(f"{r['method']} {r['path']} status={r['status']} 但 code={r['code']}，期望 {want}")
+            if r["status"] != r["want_status"]:
+                failures.append(f"{r['method']} {r['path']} status={r['status']}，期望 {r['want_status']}")
+            elif r["code"] != r["want_code"]:
+                failures.append(f"{r['method']} {r['path']} code={r['code']}，期望 {r['want_code']}")
             elif not r["request_id"]:
                 failures.append(f"{r['method']} {r['path']} 信封缺 request_id")
+            elif r["want_allow"] and r["want_allow"] not in [m.strip() for m in r["allow"].split(",")]:
+                failures.append(f"{r['method']} {r['path']} Allow={r['allow']!r} 里没有 {r['want_allow']}")
         verdict_ok = not failures
         print(f"\n结论：{len(good)}/{len(rows)} 条未被路由接住的请求回了错误信封"
-              f"（ROUTE_NOT_FOUND / METHOD_NOT_ALLOWED）→ 修后{'达标' if verdict_ok else '未达标'}")
+              f"（404 ROUTE_NOT_FOUND / 405 METHOD_NOT_ALLOWED）→ 修后{'达标' if verdict_ok else '未达标'}")
 
     for f in failures:
         print(f"  [FAIL] {f}")

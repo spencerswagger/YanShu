@@ -51,17 +51,27 @@ build() { # $1=ref  $2=name
   echo "[build] $name ← $ref ($(sha256sum "$WORK/bin/$name" | cut -d' ' -f1))"
 }
 
+mask() { # 结果文件要入库：把 DSN 里的口令打码
+  printf '%s' "$*" | sed -E 's#://([^:/@]+):[^@]*@#://\1:***@#g'
+}
+
+RC_TOTAL=0
 run() { # $1=name  $2...=command
   local name=$1; shift
   local log=$OUT/$STAMP-$name.txt
+  local tmp=$OUT/.$STAMP-$name.out
   echo "===== $name @ $(date -u +%Y-%m-%dT%H:%M:%SZ) =====" | tee "$log"
-  echo "[cmd] $*" | tee -a "$log"
+  echo "[cmd] $(mask "$@")" | tee -a "$log"
+  # 关键：不能 `"$@" | tee`，那样 $? 是 tee 的退出码（复审 P0-1 实测：全挂也 rc=0）
   set +e
-  "$@" 2>&1 | tee -a "$log"
+  "$@" >"$tmp" 2>&1
   local rc=$?
   set -e
+  cat "$tmp" >>"$log"
+  rm -f "$tmp"
   echo "[exit=$rc] $name" | tee -a "$log"
   echo "$rc" > "$OUT/$STAMP-$name.rc"
+  [ "$rc" -eq 0 ] || RC_TOTAL=1
 }
 
 set -- 
@@ -101,3 +111,5 @@ run index-lock python3 "$HERE/ab_index_lock_write.py" --dsn "$DSN" --rows "$ROWS
   --json-out "$OUT/$STAMP-index-lock.json"
 
 echo "结果目录：$OUT（前缀 $STAMP）"
+[ "$RC_TOTAL" -eq 0 ] || { echo "[FAIL] 有实验不符合预期（见上面 exit!=0 的项与 .rc 文件）" >&2; exit 1; }
+exit 0

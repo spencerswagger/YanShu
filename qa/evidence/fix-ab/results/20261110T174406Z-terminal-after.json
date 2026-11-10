@@ -1,180 +1,194 @@
 {
   "kind": "contract-1.7.4-terminal-before-credential",
-  "expect": "before",
-  "at": "2026-11-10T17:24:49+0000",
-  "binary": "/.octop/workspaces/0JXF1M/tmp/ab-round/runall4/bin/before",
-  "binary_sha256": "483dd44db7a76e71be0eeb5967faa38750870d19ea680e26016b61ac7b1c1887",
+  "expect": "after",
+  "at": "2026-11-10T17:44:14+0000",
+  "binary": "/.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/after",
+  "binary_sha256": "d8e73daf0b657f3fc946876c7ce075d1d5f591c291028c3edbabf772533696f7",
   "terminal_matrix": [
     {
       "path": "status",
       "cred": "none",
-      "status": 401,
-      "code": "AUTH_MISSING",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "status",
       "cred": "bogus",
-      "status": 401,
-      "code": "AUTH_TOKEN_INVALID",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "status",
       "cred": "valid",
-      "status": 409,
-      "code": "TRANSFER_STATE_CONFLICT",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "prelude",
       "cred": "none",
-      "status": 401,
-      "code": "AUTH_MISSING",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "prelude",
       "cred": "bogus",
-      "status": 401,
-      "code": "AUTH_TOKEN_INVALID",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "prelude",
       "cred": "valid",
-      "status": 409,
-      "code": "TRANSFER_STATE_CONFLICT",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "chunk",
       "cred": "none",
-      "status": 401,
-      "code": "AUTH_MISSING",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "chunk",
       "cred": "bogus",
-      "status": 401,
-      "code": "AUTH_TOKEN_INVALID",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "chunk",
       "cred": "valid",
-      "status": 409,
-      "code": "TRANSFER_STATE_CONFLICT",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "complete",
       "cred": "none",
-      "status": 401,
-      "code": "AUTH_MISSING",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "complete",
       "cred": "bogus",
-      "status": 401,
-      "code": "AUTH_TOKEN_INVALID",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "complete",
       "cred": "valid",
-      "status": 409,
-      "code": "TRANSFER_STATE_CONFLICT",
+      "status": 410,
+      "code": "TRANSFER_CONSUMED",
       "state": "CONSUMED"
     },
     {
       "path": "status",
       "cred": "none",
-      "status": 401,
-      "code": "AUTH_MISSING",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     },
     {
       "path": "status",
       "cred": "bogus",
-      "status": 401,
-      "code": "AUTH_TOKEN_INVALID",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     },
     {
       "path": "status",
       "cred": "valid",
-      "status": 409,
-      "code": "TRANSFER_STATE_CONFLICT",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     },
     {
       "path": "prelude",
       "cred": "none",
-      "status": 401,
-      "code": "AUTH_MISSING",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     },
     {
       "path": "prelude",
       "cred": "bogus",
-      "status": 401,
-      "code": "AUTH_TOKEN_INVALID",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     },
     {
       "path": "prelude",
       "cred": "valid",
-      "status": 409,
-      "code": "TRANSFER_STATE_CONFLICT",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     },
     {
       "path": "chunk",
       "cred": "none",
-      "status": 401,
-      "code": "AUTH_MISSING",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     },
     {
       "path": "chunk",
       "cred": "bogus",
-      "status": 401,
-      "code": "AUTH_TOKEN_INVALID",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     },
     {
       "path": "chunk",
       "cred": "valid",
-      "status": 409,
-      "code": "TRANSFER_STATE_CONFLICT",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     },
     {
       "path": "complete",
       "cred": "none",
-      "status": 401,
-      "code": "AUTH_MISSING",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     },
     {
       "path": "complete",
       "cred": "bogus",
-      "status": 401,
-      "code": "AUTH_TOKEN_INVALID",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     },
     {
       "path": "complete",
       "cred": "valid",
-      "status": 409,
-      "code": "TRANSFER_STATE_CONFLICT",
+      "status": 410,
+      "code": "TRANSFER_REVOKED",
       "state": "REVOKED"
     }
   ],
   "negative_control": [
+    {
+      "path": "status",
+      "cred": "none",
+      "status": 401,
+      "code": "AUTH_MISSING",
+      "want": "AUTH_MISSING"
+    },
+    {
+      "path": "status",
+      "cred": "bogus",
+      "status": 401,
+      "code": "AUTH_TOKEN_INVALID",
+      "want": "AUTH_TOKEN_INVALID"
+    },
     {
       "path": "prelude",
       "cred": "none",
@@ -184,6 +198,34 @@
     },
     {
       "path": "prelude",
+      "cred": "bogus",
+      "status": 401,
+      "code": "AUTH_TOKEN_INVALID",
+      "want": "AUTH_TOKEN_INVALID"
+    },
+    {
+      "path": "chunk",
+      "cred": "none",
+      "status": 401,
+      "code": "AUTH_MISSING",
+      "want": "AUTH_MISSING"
+    },
+    {
+      "path": "chunk",
+      "cred": "bogus",
+      "status": 401,
+      "code": "AUTH_TOKEN_INVALID",
+      "want": "AUTH_TOKEN_INVALID"
+    },
+    {
+      "path": "complete",
+      "cred": "none",
+      "status": 401,
+      "code": "AUTH_MISSING",
+      "want": "AUTH_MISSING"
+    },
+    {
+      "path": "complete",
       "cred": "bogus",
       "status": 401,
       "code": "AUTH_TOKEN_INVALID",

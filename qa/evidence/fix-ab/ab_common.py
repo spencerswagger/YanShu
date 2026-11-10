@@ -123,19 +123,20 @@ def free_port() -> int:
     return port
 
 
-def psql(dsn: str, sql: str, schema: str | None = None, timeout: float = 120) -> tuple[int, str]:
-    """跑一条 psql。返回 (rc, stdout-or-stderr)。
+def with_search_path(dsn: str, schema: str) -> str:
+    """把 search_path 作为 conninfo 参数追到 DSN 上（不改原有参数顺序）。
 
-    schema 用 PGOPTIONS 注入；DSN 里若已有 options=，把 search_path 追进同一个 options
-    （否则 conninfo 会盖掉 PGOPTIONS，查询静默落到 public —— 这是踩过的坑）。
+    为什么不用 PGOPTIONS：DSN 里若有 options=，conninfo 会盖掉环境变量，查询会静默落到
+    public（踩过）。这里统一走 DSN，且补 `?`/`&` 分隔符，避免"原串必须自带 ?"的隐含前提。
     """
+    sep = "&" if "?" in dsn else "?"
+    return f"{dsn}{sep}options=-c%20search_path%3D{schema}"
+
+
+def psql(dsn: str, sql: str, schema: str | None = None, timeout: float = 120) -> tuple[int, str]:
+    """跑一条 psql。返回 (rc, stdout-or-stderr)。"""
     env = dict(os.environ)
-    conn = dsn
-    if schema:
-        if "options=" in dsn:
-            conn = dsn + "%20-c%20search_path%3D" + schema
-        else:
-            env["PGOPTIONS"] = f"-c search_path={schema}"
+    conn = with_search_path(dsn, schema) if schema else dsn
     p = subprocess.run(["psql", "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1", conn, "-c", sql],
                        capture_output=True, text=True, env=env, timeout=timeout)
     out = (p.stdout or "").strip() or (p.stderr or "").strip()
@@ -160,7 +161,7 @@ class Server:
         return dict(
             os.environ,
             YANSHU_ENV="test",
-            YANSHU_DATABASE_URL=f"{self.dsn}&search_path={self.schema}",
+            YANSHU_DATABASE_URL=with_search_path(self.dsn, self.schema),
             YANSHU_BLOB_DIR=str(self.work / "blobs"),
             YANSHU_ADDR=f"127.0.0.1:{self.port}",
             YANSHU_VERIFIER="stub-allow",
@@ -176,7 +177,8 @@ class Server:
         psql(self.dsn, f'drop schema if exists "{self.schema}" cascade')
         rc, out = psql(self.dsn, f'create schema "{self.schema}"')
         if rc != 0:
-            raise SystemExit(f"[BLOCKED] 建 schema 失败：{out}")
+            print(f"[BLOCKED] 建 schema 失败：{out}", file=sys.stderr)
+            raise SystemExit(EXIT_BLOCKED)
         self.proc = subprocess.Popen([self.binary], env=self._env(),
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         for _ in range(150):
@@ -191,7 +193,8 @@ class Server:
         tail = ""
         if self.proc.poll() is not None:
             tail = (self.proc.stdout.read() or "")[-800:] if self.proc.stdout else ""
-        raise SystemExit(f"[BLOCKED] 服务未起来（{self.base}/healthz）：{tail}")
+        print(f"[BLOCKED] 服务未起来（{self.base}/healthz）：{tail}", file=sys.stderr)
+        raise SystemExit(EXIT_BLOCKED)
 
     def close(self) -> None:
         if self.proc and self.proc.poll() is None:

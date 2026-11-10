@@ -1,7 +1,7 @@
-===== terminal-before @ 2026-11-10T17:24:48Z =====
-[cmd] python3 /worktrees/YS-QA/qa/evidence/fix-ab/ab_terminal_410.py --binary /.octop/workspaces/0JXF1M/tmp/ab-round/runall4/bin/before --dsn postgres://yanshu_test:ac050b1bd85a80f17ced2e78dd206eb6@127.0.0.1:51285/yanshu_test?sslmode=disable --expect before --work /.octop/workspaces/0JXF1M/tmp/ab-round/runall4/term-before --json-out /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T172442Z-terminal-before.json
-== 契约 §1.7.4 终结态 410 先于凭据 401（expect=before）@ 2026-11-10T17:24:49+0000
-binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runall4/bin/before  sha256 = 483dd44db7a76e71be0eeb5967faa38750870d19ea680e26016b61ac7b1c1887
+===== terminal-before @ 2026-11-10T17:44:13Z =====
+[cmd] python3 /worktrees/YS-QA/qa/evidence/fix-ab/ab_terminal_410.py --binary /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/before --dsn postgres://yanshu_test:***@127.0.0.1:55217/yanshu_test?sslmode=disable --expect before --work /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/term-before --json-out /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T174406Z-terminal-before.json
+== 契约 §1.7.4 终结态 410 先于凭据 401（expect=before）@ 2026-11-10T17:44:13+0000
+binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/before  sha256 = c28c599d9be152d30e5f706a63e43f7bc498983e88bc0bfe20cc6f2ec6073347
 
 [矩阵] 终态 × 路径 × 凭据
   ----  CONSUMED status   cred=none  → 401 AUTH_MISSING
@@ -30,10 +30,16 @@ binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runall4/bin/before  sha256 = 483
   ----  REVOKED  complete cred=valid → 409 TRANSFER_STATE_CONFLICT
 
 [阴性对照] 未终结传输必须仍是 401（不能被 410 吞掉）
+  PASS  status   cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
+  PASS  status   cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
   PASS  prelude  cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
   PASS  prelude  cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
+  PASS  chunk    cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
+  PASS  chunk    cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
+  PASS  complete cred=none  → 401 AUTH_MISSING（期望 401 AUTH_MISSING）
+  PASS  complete cred=bogus → 401 AUTH_TOKEN_INVALID（期望 401 AUTH_TOKEN_INVALID）
 
 结论：24 例中 0 例回了 410 —— 终结态判定存在缺口（修前问题复现）
 
-[json] /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T172442Z-terminal-before.json
+[json] /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T174406Z-terminal-before.json
 [exit=0] terminal-before

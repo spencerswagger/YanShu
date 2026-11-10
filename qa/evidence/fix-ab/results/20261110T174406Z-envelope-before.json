@@ -1,9 +1,9 @@
 {
   "kind": "contract-envelope-0.2",
   "expect": "before",
-  "at": "2026-11-10T17:24:44+0000",
-  "binary": "/.octop/workspaces/0JXF1M/tmp/ab-round/runall4/bin/before",
-  "binary_sha256": "483dd44db7a76e71be0eeb5967faa38750870d19ea680e26016b61ac7b1c1887",
+  "at": "2026-11-10T17:44:08+0000",
+  "binary": "/.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/before",
+  "binary_sha256": "c28c599d9be152d30e5f706a63e43f7bc498983e88bc0bfe20cc6f2ec6073347",
   "unrouted": [
     {
       "status": 404,
@@ -15,7 +15,10 @@
       "envelope": false,
       "case": "未知路径",
       "method": "GET",
-      "path": "/v1/definitely-not-an-endpoint"
+      "path": "/v1/definitely-not-an-endpoint",
+      "want_status": 404,
+      "want_code": "ROUTE_NOT_FOUND",
+      "want_allow": ""
     },
     {
       "status": 404,
@@ -27,7 +30,10 @@
       "envelope": false,
       "case": "未知路径(深层)",
       "method": "GET",
-      "path": "/v1/transfers/abc/nope"
+      "path": "/v1/transfers/abc/nope",
+      "want_status": 404,
+      "want_code": "ROUTE_NOT_FOUND",
+      "want_allow": ""
     },
     {
       "status": 405,
@@ -39,7 +45,10 @@
       "envelope": false,
       "case": "方法不对(POST→GET)",
       "method": "GET",
-      "path": "/v1/transfers"
+      "path": "/v1/transfers",
+      "want_status": 405,
+      "want_code": "METHOD_NOT_ALLOWED",
+      "want_allow": "POST"
     },
     {
       "status": 405,
@@ -51,7 +60,10 @@
       "envelope": false,
       "case": "方法不对(GET→DELETE)",
       "method": "DELETE",
-      "path": "/healthz"
+      "path": "/healthz",
+      "want_status": 405,
+      "want_code": "METHOD_NOT_ALLOWED",
+      "want_allow": "GET"
     }
   ],
   "controls": [
@@ -59,9 +71,9 @@
       "status": 404,
       "content_type": "application/json; charset=utf-8",
       "code": "TRANSFER_NOT_FOUND",
-      "request_id": "req_50050b2872eae62b",
+      "request_id": "req_a07ae1325eb903f4",
       "allow": "",
-      "body_head": "{\"error\":{\"code\":\"TRANSFER_NOT_FOUND\",\"message\":\"transfer not found\",\"request_id\":\"req_50050b2872eae62b\"}}\\n",
+      "body_head": "{\"error\":{\"code\":\"TRANSFER_NOT_FOUND\",\"message\":\"transfer not found\",\"request_id\":\"req_a07ae1325eb903f4\"}}\\n",
       "envelope": true,
       "case": "路径成立·对象不成立",
       "method": "GET",
@@ -73,9 +85,9 @@
       "status": 400,
       "content_type": "application/json; charset=utf-8",
       "code": "BAD_REQUEST",
-      "request_id": "req_966b1b45bed967ca",
+      "request_id": "req_cefe2691bb91852b",
       "allow": "",
-      "body_head": "{\"error\":{\"code\":\"BAD_REQUEST\",\"message\":\"request format or parameter is invalid\",\"request_id\":\"req_966b1b45bed967ca\"}}\\n",
+      "body_head": "{\"error\":{\"code\":\"BAD_REQUEST\",\"message\":\"request format or parameter is invalid\",\"request_id\":\"req_cefe2691bb91852b\"}}\\n",
       "envelope": true,
       "case": "坏 JSON",
       "method": "POST",
