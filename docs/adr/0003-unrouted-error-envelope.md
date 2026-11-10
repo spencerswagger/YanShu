@@ -72,10 +72,19 @@
 
 `server/internal/httpapi/fallback_test.go`（不依赖 PG，纯路由门禁）：
 
-- `TestUnroutedPathKeepsContractEnvelope`：5 条不存在路径 × 断言 `404` + JSON 信封 + `code == ROUTE_NOT_FOUND`；
-- `TestWrongMethodKeepsContractEnvelope`：4 组"路径成立、方法不对" × 断言 `405` + 信封 + `code == METHOD_NOT_ALLOWED` + `Allow` 含正确方法；
-- `TestRoutedRequestsAreNotSwallowed`（**阴性对照**）：§3 表里每一行都必须走到真 handler，
-  否则"兜底"会退化成"一律 404 也算通过"；同时登记路由条数下限，漏注册会被点名。
+| 用例 | 断言什么 | 挡的是哪种假绿 |
+|---|---|---|
+| `TestUnroutedPathKeepsContractEnvelope` | 6 条不存在路径 → `404` + JSON + `code == ROUTE_NOT_FOUND` | 兜底退化成 text/plain |
+| `TestWrongMethodKeepsContractEnvelope` | 4 组"路径成立、方法不对" → `405` + 信封 + `code == METHOD_NOT_ALLOWED` + `Allow` 含正确方法（含 HEAD） | 405 靠 Go 默认抢答 |
+| `TestHandlerWiresUnroutedFallback` | 走 `(*API).Handler()` 真链路：信封 + `request_id` 非空 | **兜底没接线**（把 `guardUnrouted` 换回裸 mux） |
+| `TestRoutesMatchContractTable` | 直接解析 `docs/API.md` §3，与 `routes()` **逐行**双向比对；再逐条真打 | **路由漏注册**（只数条数抓不到：21 = §3 的 20 行 + `/healthz`） |
+| `TestPathCleanRedirectIsLeftAlone` | `//v1/config` 仍是 `307` | 兜底把 3xx 也改写成 404，打断重定向链路 |
+| `TestHeadIsRoutedWhereGetIs` | `HEAD /v1/config` 走到 handler | `Allow` 与实际可达方法不一致 |
+
+反向验证（证明门禁有牙，两条各自都会红）：删掉 `routes()` 的 `{POST /v1/transfers/{transferId}/ack}`
+→ `TestRoutesMatchContractTable` 点名 `契约 §3 有、routes() 没有`；把 `Handler()` 的
+`guardUnrouted(mux, routes)` 换回裸 `mux` → `TestHandlerWiresUnroutedFallback` 报
+`Content-Type = "text/plain; charset=utf-8", want JSON 信封`。
 
 A/B 判据：把同一份用例打回 `origin/main`（修前）——`guardUnrouted` 不存在，
 `GET /v1/nope` 实测 `404 text/plain`、`DELETE /v1/config` 实测 `405 text/plain`（原始输出见 PR）。

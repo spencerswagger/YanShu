@@ -61,12 +61,14 @@ check() {
   ctype=$(tr -d '\r' <"$WORK/hdr" | sed -n 's/^[Cc]ontent-[Tt]ype: //p' | head -1)
   got_code=$(sed -n 's/.*"code":"\([A-Z_]*\)".*/\1/p' "$WORK/body" | head -1)
   case "$ctype" in application/json*) json=1 ;; *) json=0 ;; esac
-  if [ "$code" = "$want_status" ] && [ "$json" = 1 ] && [ "$got_code" = "$want_code" ]; then
-    PASS=$((PASS+1)); printf 'PASS  %-42s %s %s -> %s %s\n' "$desc" "$method" "$path" "$code" "$got_code"
+  # §0.2 的另一半：request_id 必须存在（没有它运维无法与服务端日志对齐）
+  case "$(cat "$WORK/body")" in *'"request_id":"req_'*) reqid=1 ;; *) reqid=0 ;; esac
+  if [ "$code" = "$want_status" ] && [ "$json" = 1 ] && [ "$got_code" = "$want_code" ] && [ "$reqid" = 1 ]; then
+    PASS=$((PASS+1)); printf 'PASS  %-42s %s %s -> %s %s +request_id\n' "$desc" "$method" "$path" "$code" "$got_code"
   else
     FAIL=$((FAIL+1))
-    printf 'FAIL  %-42s %s %s -> status=%s content-type=%s code=%s (want %s %s JSON)\n' \
-      "$desc" "$method" "$path" "$code" "${ctype:-<none>}" "${got_code:-<none>}" "$want_status" "$want_code"
+    printf 'FAIL  %-42s %s %s -> status=%s content-type=%s code=%s request_id=%s (want %s %s JSON + request_id)\n' \
+      "$desc" "$method" "$path" "$code" "${ctype:-<none>}" "${got_code:-<none>}" "$reqid" "$want_status" "$want_code"
   fi
 }
 
@@ -81,6 +83,7 @@ check "根路径 -> 404 信封"           404 ROUTE_NOT_FOUND   GET    /
 check "未定义方法 DELETE /config"    405 METHOD_NOT_ALLOWED DELETE /v1/config
 check "未定义方法 POST /stats"       405 METHOD_NOT_ALLOWED POST   /v1/stats
 check "未定义方法 GET /transfers"    405 METHOD_NOT_ALLOWED GET    /v1/transfers
+check "尾斜杠不是本服务的写法"        404 ROUTE_NOT_FOUND   GET    /v1/config/
 echo "----------------------------------------------------------------------"
 echo "阴性对照（对象级语义不许被顶替 / 真路由不许被吞）"
 check "未注册码仍 CODE_NOT_FOUND"    404 CODE_NOT_FOUND     GET    /v1/codes/AWQW
@@ -91,6 +94,14 @@ if [ "$hstatus" = "200" ] && grep -q '"api_version"' "$WORK/h"; then
   PASS=$((PASS+1)); echo "PASS  /healthz 真路由仍 200"
 else
   FAIL=$((FAIL+1)); echo "FAIL  /healthz 被兜底抢答：status=$hstatus"
+fi
+# 3xx 不在 §0.2 覆盖内：路径规范化重定向必须保持 307（不许被兜底改写成 404/信封，
+# 否则客户端重定向链路被打断）。这一条是"锁行为"，不是"要信封"。
+rstatus=$(curl -sS -m 3 -o /dev/null -w '%{http_code}' "$B//v1/config")
+if [ "$rstatus" = "307" ]; then
+  PASS=$((PASS+1)); echo "PASS  //v1/config 仍是 307 重定向（3xx 不在覆盖内）"
+else
+  FAIL=$((FAIL+1)); echo "FAIL  //v1/config status=$rstatus（want 307，重定向被兜底改写了？）"
 fi
 echo "----------------------------------------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

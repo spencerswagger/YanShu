@@ -38,8 +38,16 @@ func newUnrouted(routes []routeEntry) *unrouted {
 		}
 		u.methods[rt.pattern] = append(u.methods[rt.pattern], rt.method)
 	}
-	for pat := range u.methods {
-		sort.Strings(u.methods[pat])
+	for pat, methods := range u.methods {
+		// 有 GET 就必然有 HEAD：`ServeMux` 把 HEAD 也交给 GET handler，
+		// 所以 `Allow` 里漏掉 HEAD 会让按 §10.1「改用 Allow 里的方法」的客户端少一条合法选项。
+		for _, m := range methods {
+			if m == http.MethodGet {
+				methods = append(methods, http.MethodHead)
+				break
+			}
+		}
+		u.methods[pat] = dedupSort(methods)
 	}
 	return u
 }
@@ -56,6 +64,21 @@ func (u *unrouted) handler() http.HandlerFunc {
 		}
 		fail(w, r, spec.ErrRouteNotFound)
 	}
+}
+
+// dedupSort 去重并排序（Allow 头要求稳定输出）。
+func dedupSort(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // routeEntry 是一条"方法 + 路径模板 + handler"的路由（契约 §3 接口总表的一行）。

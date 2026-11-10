@@ -50,7 +50,7 @@
 - `message`：给开发者看的英文短句，**不含**任何用户数据、文件名、密钥、IP。
 - `scope` / `retry_after`：仅限速类错误出现（见第 12 章）。
 - `request_id`：服务端生成，便于对日志；不含用户信息。
-- **覆盖率是硬的**：`code` 与 `request_id` 必须出现在**每一个**非 2xx 响应里，包含"路径本身不存在"（`404 ROUTE_NOT_FOUND`）与"方法不在 §3 表内"（`405 METHOD_NOT_ALLOWED` + `Allow` 头）。路由层默认的 `text/plain` 抢答（`404 page not found` / `Method Not Allowed`）**不允许**出现在对外响应里（ADR-0003）。
+- **覆盖率是硬的**：`code` 与 `request_id` 必须出现在**每一个 4xx/5xx 响应**里，包含"路径本身不存在"（`404 ROUTE_NOT_FOUND`）与"方法不在 §3 表内"（`405 METHOD_NOT_ALLOWED` + `Allow` 头）。路由层默认的 `text/plain` 抢答（`404 page not found` / `Method Not Allowed`）**不允许**出现在对外响应里（ADR-0003）。**3xx 不在本条覆盖内**：路径规范化重定向（如 `//v1/config` → `307`）由 `net/http` 自己处理，不带 JSON 体，客户端不得依赖其内容。
 - `details`：**可选**对象，只承载结构化、非用户内容的信息。v1 **只允许一个键** `missing`（缺块区间数组，见 §6.6）；新增键必须走 ADR。服务端 MUST NOT 在 `details` 里回显请求体、文件名、明文或任何码以外的用户输入。
 
 ```json

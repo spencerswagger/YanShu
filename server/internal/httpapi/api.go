@@ -89,6 +89,9 @@ func (a *API) routes() []routeEntry {
 		{http.MethodGet, spec.PathTransfer, a.handleGetTransfer},
 		{http.MethodPost, spec.PathTransferReport, a.handleAbuseReport},
 
+		// 契约 §3 第 18 行 `POST /v1/transfers/{id}/token`（凭据重签发，§1.7.5）**当前故意缺**：
+		// 端点尚未实现（契约 §3 写"v1 定义并实现"属实描述错误，已单独登记任务）。
+		// 请不要在这里"顺手补一行"——它要按 §1.7.5 的五条硬约束实现，不是加个路由就完事。
 		{http.MethodGet, spec.PathWS, a.handleWS},
 		{http.MethodGet, spec.PathStats, a.handleStats},
 	}
