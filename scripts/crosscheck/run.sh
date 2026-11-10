@@ -82,15 +82,27 @@ if [ -z "${YS_TOOL:-}" ]; then
 	# 沙盒/CI 的 cargo 包装脚本会把 target 目录挪走（例如 /.cache/rust），而那个变量
 	# 只对 cargo 子进程生效 —— 拼出来的路径根本不存在，crosscheck 会在 SM4-GCM 段
 	# 以 "No such file or directory: .../crypto/target/release/ys-tool" 中断（退出码 1）。
-	YS_TOOL=$(cd "$ROOT/crypto" && cargo build --release --bin ys-tool --message-format=json 2>/dev/null |
-		python3 -c 'import json,sys
-msgs=[json.loads(l) for l in sys.stdin if l.lstrip().startswith("{")]
-paths=[m["executable"] for m in msgs
-       if m.get("reason")=="compiler-artifact" and m.get("executable")
-       and m.get("target",{}).get("name")=="ys-tool"]
-print(paths[-1] if paths else "")')
+	build_json="$BUILD/cargo-build.json"
+	if ! (cd "$ROOT/crypto" && cargo build --release --bin ys-tool --message-format=json-render-diagnostics >"$build_json"); then
+		echo "!! cargo build --release --bin ys-tool 失败（编译错误见上；不静默降级）" >&2
+		exit 2
+	fi
+	YS_TOOL=$(python3 -c 'import json,sys
+paths=[]
+for line in sys.stdin:
+    line=line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        m=json.loads(line)
+    except Exception:
+        continue
+    if (m.get("reason")=="compiler-artifact" and m.get("executable")
+            and m.get("target",{}).get("name")=="ys-tool"):
+        paths.append(m["executable"])
+print(paths[-1] if paths else "")' <"$build_json")
 	if [ -z "$YS_TOOL" ] || [ ! -x "$YS_TOOL" ]; then
-		echo "!! 无法确定 ys-tool 产物路径（cargo --message-format=json 没有报出 executable）" >&2
+		echo "!! 无法确定 ys-tool 产物路径（cargo --message-format=json-render-diagnostics 没有报出 executable）" >&2
 		echo "   可显式指定：YS_TOOL=/path/to/ys-tool sh scripts/crosscheck/run.sh" >&2
 		exit 2
 	fi
