@@ -29,8 +29,13 @@ const ENSURE = join(WEB, 'scripts/ensure-wasm.mjs')
 
 const sha = (buf) => createHash('sha256').update(buf).digest('hex')
 
-/** 当前仓库真实存在的 commit（写溯源时要过 `git cat-file -e`） */
-const REAL_COMMIT = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: WEB, encoding: 'utf8' }).stdout.trim()
+/**
+ * 写溯源的 commit：git 树里用真 HEAD（脚本会用 `git cat-file -e` 校验），
+ * 非 git 树（tarball / CI 解包）里脚本降级为告警，所以这里造一个 40 位 sha 即可。
+ */
+const gitHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: WEB, encoding: 'utf8' })
+const HAS_GIT = gitHead.status === 0 && /^[0-9a-f]{40}$/.test(String(gitHead.stdout || '').trim())
+const REAL_COMMIT = HAS_GIT ? String(gitHead.stdout).trim() : 'a'.repeat(40)
 
 function sandbox({ wasm, meta } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ys-sync-prov-'))
@@ -90,7 +95,8 @@ test('--commit 没给值 / 格式不对 / 本仓不存在：都非 0 退出，�
     { args: ['--expect-sha', sha(kernel), '--commit'], label: '--commit 缺值' },
     { args: ['--expect-sha', sha(kernel), '--commit', 'HEAD'], label: '--commit=HEAD' },
     { args: ['--expect-sha', sha(kernel), '--commit', 'a'.repeat(39)], label: '39 位' },
-    { args: ['--expect-sha', sha(kernel), '--commit', 'f'.repeat(40)], label: '本仓不存在的 commit' },
+    // 「commit 在本仓不存在」只有 git 树才判得出来（非 git 树脚本降级为告警，见 README）
+    ...(HAS_GIT ? [{ args: ['--expect-sha', sha(kernel), '--commit', 'f'.repeat(40)], label: '本仓不存在的 commit' }] : []),
   ]
   for (const c of cases) {
     const r = run(SYNC, { publicDir: sb.publicDir, env: { YS_WASM: cand }, args: c.args })
