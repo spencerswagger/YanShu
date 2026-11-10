@@ -1,0 +1,33 @@
+{
+  "what": "TTL 到点翻转滞后（胶囊文字 / 整行灰化 / 下载禁用三者），前端单一定时器实测",
+  "how": {
+    "fixture": "真发 3 笔 1 MiB，把其中一笔 expires_at 改成 now()+20s（另两笔 now()+43m / now()+50h）",
+    "step": "首屏加载（不刷新）→ 页面内每 25ms 采样该行的 .ttl 文案 / li.expired / 按钮 disabled，记录各自首次翻转的服务端时刻",
+    "clock": "页面侧用 /v1/config 的 server_time + performance.now() 估算服务端时刻（与 lib/serverClock.js 同一口径），因此存在 ±0.2s 的往返误差",
+    "command": "node web/scripts/v5-evidence.mjs --api=http://127.0.0.1:18080 --serve=dist --dsn=\"$TEST_DATABASE_URL\" --size=96 --out=results/ui-v5（两次独立跑，各自独立 schema）"
+  },
+  "thresholds": { "rowFlipLagMs": 1000, "pillRowSkewMs": 500 },
+  "runs": [
+    {
+      "run": 1,
+      "schema": "gate_web_e2e",
+      "expiresAt": 1794252136017,
+      "pillLagMs": 45,
+      "rowLagMs": 45,
+      "btnLagMs": 45,
+      "skewMs": 0,
+      "pass": true
+    },
+    {
+      "run": 2,
+      "schema": "gate_web_e2e2",
+      "expiresAt": 1794252217245,
+      "pillLagMs": -162,
+      "rowLagMs": -162,
+      "btnLagMs": -162,
+      "skewMs": 0,
+      "pass": true
+    }
+  ],
+  "note": "两次都是三者同帧翻转（skew=0），滞后 45ms / -162ms；负值表示按页面侧估算的服务端时刻看，翻转比对账的 expires_at 早了约 0.16s，属 /v1/config 往返误差，不是提前过期。"
+}

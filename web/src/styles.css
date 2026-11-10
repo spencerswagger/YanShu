@@ -1111,3 +1111,70 @@ input[type='text'] {
 .safety-sheet button {
   min-height: 48px !important;
 }
+
+/* ── v5：TTL 胶囊 / 速度行 / 平台统计 ── */
+.ttl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  font: 600 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--ink-3, var(--muted));
+  white-space: nowrap;
+}
+.ttl.soon {
+  color: #e2b04a;
+  border-color: #4a3c1f;
+  background: #1d1710;
+}
+.ttl.expired {
+  color: #8b98a4;
+  border-color: #2a363f;
+  background: #121a20;
+}
+.speed-line .speed-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.speed-line .speed {
+  font: 700 24px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  min-width: 6.2em; /* 固定宽度：数字变化不挤动布局 */
+  display: inline-block;
+}
+.speed-line .eta {
+  font: 600 14px/1 ui-monospace, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2, var(--muted));
+  min-width: 6em;
+  text-align: right;
+}
+.speed-line .warn {
+  color: #e2b04a;
+  font-weight: 600;
+}
+.speed-line .grow {
+  flex: 1;
+}
+/* 过期行：整行灰化 + 文件名删除线（T2），下载按钮另行置灰 */
+.ritem.expired {
+  opacity: 0.55;
+}
+.ritem.expired .rname {
+  text-decoration: line-through;
+}
+.ritem.expired .avatar {
+  filter: grayscale(1);
+}
+
+/* 接收行的两段进度：`下载中 62%` / `解密中` */
+.row-progress .stage {
+  font: 600 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2, var(--muted));
+  margin-top: 8px;
+}

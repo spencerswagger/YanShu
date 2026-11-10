@@ -21,6 +21,7 @@ import { createChunkRouter } from './chunkRouter.js'
 import { attemptDirect } from './p2p.js'
 import { encodeChunkFrame } from './p2pChunks.js'
 import { info } from '../lib/log.js'
+import { parseServerExpiry, serverNow } from '../lib/serverClock.js'
 
 function idempotencyKey() {
   const bytes = new Uint8Array(16)
@@ -106,6 +107,8 @@ async function sendFileStreaming({
   })
   const transferId = created.transfer_id
   const uploadToken = created.upload_token
+  // TTL 以服务端 create 响应为准（本机时钟可能偏；这里推算的只是兜底值）
+  const expiresAt = parseServerExpiry(created.expires_at) ?? serverNow() + (ttlSeconds ?? config.defaultTtlSeconds) * 1000
 
   await pendingStore?.put(transferId, {
     kind: 'send',
@@ -121,6 +124,7 @@ async function sendFileStreaming({
     preludeSm3: b64uEncode(preludeSm3),
     session: null, // 流式不落会话快照（本来也不攒整包）
     createdAt: Date.now(),
+    expiresAt,
     state: 'UPLOADING',
     streaming: true,
   })
@@ -158,6 +162,12 @@ async function sendFileStreaming({
   kernel.streamPackEnd()
   report(onProgress, { phase: 'completing', done: total, total, message: '标记完成' })
   const done = await api.complete({ transferId, uploadToken })
+  // 流式路径同样要把落库记录翻成终态，否则「最近传输」永远显示"传输中"、并被当成未完成上传
+  await pendingStore?.put(transferId, {
+    ...(await pendingStore?.get(transferId)),
+    state: done?.json?.state || 'READY',
+    doneAt: Date.now(),
+  })
   report(onProgress, { phase: 'done', done: total, total, message: '已发送' })
   info('发送完成（流式）', { bytes: total, chunks: chunkCount })
   return {
@@ -168,6 +178,7 @@ async function sendFileStreaming({
     fileSize: total,
     chunkCount,
     preludeLen: prelude.length,
+    expiresAt,
     state: done?.json?.state,
   }
 }
@@ -295,6 +306,8 @@ async function uploadSession({
   const preludeSm3 = kernel.sm3(prelude)
 
   let attempt = 0
+  /** 服务端给的过期时刻（整包与续传两条路共用）；拿不到时由调用方兜底 */
+  let expiresAt = null
   for (;;) {
     attempt += 1
     try {
@@ -307,10 +320,12 @@ async function uploadSession({
       if (resume && attempt === 1) {
         transferId = resume.transferId
         uploadToken = resume.uploadToken
+        const record = await pendingStore?.get(transferId)
+        expiresAt = record?.expiresAt ?? null
         const status = (await api.uploadStatus({ transferId, uploadToken })) || {}
         if (status.state && status.state !== 'UPLOADING') {
-          await pendingStore?.put(transferId, { ...(await pendingStore?.get(transferId)), state: status.state })
-          return { transferId, state: status.state, resumed: false }
+          await pendingStore?.put(transferId, { ...record, state: status.state })
+          return { transferId, state: status.state, resumed: false, expiresAt }
         }
         needPrelude = !status.prelude_received
         if (status.bitmap) missing = missingIndexes(decodeBitmap(status.bitmap, chunkCount))
@@ -339,6 +354,7 @@ async function uploadSession({
         })
         transferId = created.transfer_id
         uploadToken = created.upload_token
+        expiresAt = parseServerExpiry(created.expires_at) ?? serverNow() + (ttlSeconds ?? config.defaultTtlSeconds) * 1000
         await pendingStore?.put(transferId, {
           kind: 'send',
           transferId,
@@ -355,6 +371,7 @@ async function uploadSession({
           session: pack.length <= config.maxPersistPack ? packSession.export() : null,
           packSize: pack.length,
           createdAt: Date.now(),
+          expiresAt,
           state: 'UPLOADING',
         })
       }
@@ -390,6 +407,7 @@ async function uploadSession({
         preludeLen,
         preludeSm3: b64uEncode(preludeSm3),
         createdAt: Date.now(),
+        expiresAt,
         state: done?.json?.state || 'READY',
         doneAt: Date.now(),
       })
@@ -403,6 +421,7 @@ async function uploadSession({
         fileSize,
         chunkCount,
         preludeLen,
+        expiresAt,
         state: done?.json?.state,
       }
     } catch (err) {

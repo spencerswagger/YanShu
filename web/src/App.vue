@@ -15,6 +15,9 @@ import { defaultSinkFactory } from './lib/saveStream.js'
 import { decode as b64uDecode } from './lib/base64url.js'
 import { info } from './lib/log.js'
 import { createSignaler } from './net/signal.js'
+import { fetchStats } from './net/stats.js'
+import { syncServerTime } from './lib/serverClock.js'
+import { refreshExpiryClock } from './lib/expiryTicker.js'
 import { createResponder } from './net/p2pResponder.js'
 import { createDirectBuffer } from './net/p2pChunks.js'
 import MyCodeCard from './components/MyCodeCard.vue'
@@ -44,6 +47,7 @@ const inboxRef = ref(null)
 /** 本次会话的真实计数（不做假数字）：成功发送 / 成功接收 / 失败 */
 const counts = reactive({ sent: 0, received: 0, failed: 0 })
 const recentSends = ref([])
+const platformStats = ref(null)
 const safetyOpen = ref(false)
 const successRate = computed(() => {
   const total = counts.sent + counts.received + counts.failed
@@ -142,6 +146,10 @@ onMounted(async () => {
     try {
       const cfg = await client.get('/config', { retry: true })
       serverConfig.value = cfg.json
+      // 用服务端时间基准初始化倒计时（Date 头或 server_time 都可）
+      const dateHeader = cfg.headers?.get?.('date')
+      syncServerTime(cfg.json?.server_time ? Date.parse(cfg.json.server_time) : dateHeader ? Date.parse(dateHeader) : Date.now())
+      refreshExpiryClock() // 时间基准变了，TTL 的共享 tick 立刻重算
       info('已连接中转', { path: '/config', status: cfg.status })
     } catch (err) {
       const d = describeError(err)
@@ -150,6 +158,8 @@ onMounted(async () => {
 
     await ensureRegistered()
     await refreshRecent()
+    // 全平台统计：失败静默降级（不显示该区块）
+    platformStats.value = await fetchStats(client)
   } catch (err) {
     const d = describeError(err)
     bootError.value = `${d.title}${d.hint ? '：' + d.hint : ''}`
@@ -352,7 +362,7 @@ async function doReceive({ transferId, onProgress }) {
           :kernel-layout="kernelLayout"
           :save-nickname="saveNickname"
         />
-        <StatsCard :sent="counts.sent" :received="counts.received" :rate="successRate" />
+        <StatsCard :sent="counts.sent" :received="counts.received" :rate="successRate" :platform="platformStats" />
         <div class="safety-line">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <rect x="5" y="10" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.6" />

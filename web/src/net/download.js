@@ -14,6 +14,12 @@ import { info } from '../lib/log.js'
 import { config } from '../config.js'
 import { bytes } from '../lib/bytes.js'
 
+/** 让出一帧：`unpack.finish()` 是同步的，不让出的话「解密中」这段永远画不出来 */
+function nextPaint() {
+  if (typeof requestAnimationFrame !== 'function') return new Promise((r) => setTimeout(r, 0))
+  return new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))
+}
+
 const TERMINAL_CODES = {
   REVOKED: 'TRANSFER_REVOKED',
   EXPIRED: 'TRANSFER_EXPIRED',
@@ -100,12 +106,16 @@ async function receiveStreaming({
       bytes(kernel.segmenter.buildRecordHeader(index, slice.length - 16, chunkCount), slice),
     )
 
-  let done = 0
+  let done = 0 // 已解密并写出的明文字节
+  let fetched = 0 // 已取到的密文字节（含尚未解密的块）
   for (let index = 0; index < chunkCount; index++) {
     if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
     const picked = directBuffer
       ? await takeChunkBytes({ directBuffer, index, getChunk: relayGet })
       : { bytes: await relayGet(index), source: 'relay' }
+    // 先记「已取到」再解密：两个百分比因此会差一块左右，能看出解密落后于网络
+    fetched += picked.bytes.length
+    report({ phase: 'downloading', done: fetched, decrypted: done, total: totalSize, message: `下载块 ${index + 1}/${chunkCount}` })
     let plain
     try {
       plain = unpackSlice(index, picked.bytes)
@@ -116,7 +126,13 @@ async function receiveStreaming({
     }
     await sink.write(plain)
     done += plain.length
-    report({ phase: 'downloading', done, total: totalSize, message: `解密块 ${index + 1}/${chunkCount}` })
+    report({
+      phase: 'downloading',
+      done: fetched,
+      decrypted: done,
+      total: totalSize,
+      message: `解密块 ${index + 1}/${chunkCount}`,
+    })
   }
   kernel.streamUnpackEnd()
 
@@ -220,6 +236,7 @@ async function receiveOnce({
       message: '端侧验签并解密（块 AEAD + 摘要）',
       verified: false,
     })
+    await nextPaint()
     const finished = unpack.finish()
     plain = finished.plain
     if (Number(finished.meta.size) !== plain.length) {
