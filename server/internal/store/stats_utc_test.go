@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spencerswagger/YanShu/server/internal/store"
+	"github.com/spencerswagger/YanShu/server/internal/testutil"
 )
 
 // openWithSessionTZ 用**非 UTC 的会话时区**打开一个干净 schema。
@@ -20,7 +21,7 @@ func openWithSessionTZ(t *testing.T, name, tz string) *store.Store {
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL not set; skipping integration test")
 	}
-	schema := "yanshu_core_test_tz_" + name
+	schema := testutil.SchemaName("tz_" + name)
 	sep := "?"
 	if strings.Contains(dsn, "?") {
 		sep = "&"
@@ -33,6 +34,8 @@ func openWithSessionTZ(t *testing.T, name, tz string) *store.Store {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(st.Close)
+	// 后注册先执行：DROP 用还没关的连接池。
+	t.Cleanup(func() { testutil.DropSchemaQuietly(schema, st) })
 	if _, err := st.Pool().Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE"); err != nil {
 		t.Fatalf("drop schema: %v", err)
 	}
