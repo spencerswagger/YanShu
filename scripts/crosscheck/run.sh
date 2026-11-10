@@ -78,8 +78,23 @@ if [ -z "${YS_TOOL:-}" ]; then
 		CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=gcc
 		export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER
 	fi
-	(cd "$ROOT/crypto" && cargo build --release --bin ys-tool >/dev/null)
-	YS_TOOL="${CARGO_TARGET_DIR:-$ROOT/crypto/target}/release/ys-tool"
+	# 产物路径以 cargo 自报的为准。不能只用 shell 里的 $CARGO_TARGET_DIR 去拼：
+	# 沙盒/CI 的 cargo 包装脚本会把 target 目录挪走（例如 /.cache/rust），而那个变量
+	# 只对 cargo 子进程生效 —— 拼出来的路径根本不存在，crosscheck 会在 SM4-GCM 段
+	# 以 "No such file or directory: .../crypto/target/release/ys-tool" 中断（退出码 1）。
+	YS_TOOL=$(cd "$ROOT/crypto" && cargo build --release --bin ys-tool --message-format=json 2>/dev/null |
+		python3 -c 'import json,sys
+msgs=[json.loads(l) for l in sys.stdin if l.lstrip().startswith("{")]
+paths=[m["executable"] for m in msgs
+       if m.get("reason")=="compiler-artifact" and m.get("executable")
+       and m.get("target",{}).get("name")=="ys-tool"]
+print(paths[-1] if paths else "")')
+	if [ -z "$YS_TOOL" ] || [ ! -x "$YS_TOOL" ]; then
+		echo "!! 无法确定 ys-tool 产物路径（cargo --message-format=json 没有报出 executable）" >&2
+		echo "   可显式指定：YS_TOOL=/path/to/ys-tool sh scripts/crosscheck/run.sh" >&2
+		exit 2
+	fi
+	echo "    ys-tool: $YS_TOOL"
 fi
 
 # ---- 向量缺失则先生成
