@@ -392,10 +392,8 @@ func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if !a.allow(w, r, "status:transfer:"+t.ID, "transfer", spec.DefaultLimits.ChunkPutPerTransfer) {
 		return
 	}
-	if spec.IsTerminalState(t.State) {
-		fail(w, r, spec.ErrTransferStateConflict)
-		return
-	}
+	// 终结态（CONSUMED / REVOKED / EXPIRED）在 requireUploadToken 里已按 §1.7.4 回 410，
+	// 走到这里一定未终结——不要再加一个 409 分支，那会让"终结态 410 先于凭据"被悄悄顶掉。
 	chunks, err := a.store.ListChunks(r.Context(), t.ID)
 	if err != nil {
 		a.internalError(w, r, "list chunks", err)
@@ -606,11 +604,8 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 	if !ok {
 		return store.Transfer{}, false
 	}
-	token := uploadToken(r)
-	if token == "" {
-		fail(w, r, spec.ErrAuthMissing)
-		return store.Transfer{}, false
-	}
+	// 先取资源，**再**看凭据：契约 §1.7.4 把判定顺序写死为「终结态 410 → KID → 值 → 有效期 →
+	// 409 状态冲突」，终结态连"没带凭据"也排在后面（否则客户端会按 401 去重签，白跑一轮）。
 	t, err := a.store.GetTransfer(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -635,7 +630,18 @@ func (a *API) requireUploadToken(w http.ResponseWriter, r *http.Request) (store.
 		}
 		return store.Transfer{}, false
 	}
-	// 判定顺序（先凭据后状态）：
+	// 已终结（CONSUMED / REVOKED）：一律按实际终态回 410，**不返回任何 401**——
+	// 即使凭据缺失、被轮换、已超期或干脆是伪造的（§1.7.4 判定顺序第一条）。
+	if spec.IsTerminalState(t.State) {
+		fail(w, r, spec.TerminalErrorCode(t.State))
+		return store.Transfer{}, false
+	}
+	token := uploadToken(r)
+	if token == "" {
+		fail(w, r, spec.ErrAuthMissing)
+		return store.Transfer{}, false
+	}
+	// 资源未终结，才轮到凭据内部顺序：
 	// ① EPOCH 不符 → AUTH_TOKEN_STALE（EPOCH 是唯一吊销开关，递增即生效、无需重启）
 	epoch, err := a.store.CurrentTokenEpoch(r.Context())
 	if err != nil {
