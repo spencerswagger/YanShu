@@ -14,17 +14,43 @@ import { describeError } from '../src/net/errors.js'
 
 const noAsciiLetters = (s) => !/[A-Za-z]/.test(s)
 
-test('ROUTE_NOT_FOUND / METHOD_NOT_ALLOWED 有中文文案，且不含原始英文码', () => {
-  const route = describeError(new ApiError({ code: 'ROUTE_NOT_FOUND', status: 404, message: 'no route' }))
-  const method = describeError(new ApiError({ code: 'METHOD_NOT_ALLOWED', status: 405, message: 'no method' }))
+/**
+ * **逐字**钉住用户看到的两个字。
+ *
+ * 为什么逐字：spencer 过目的是"用户真正看到的字"，而"形状对就行"的断言拦不住悄悄改字——
+ * 实测把标题从「页面版本不一致」改成「版本不一致」，形状断言全绿。改文案必须同时改这里，
+ * 让"改了没报备"变成一条红测试，而不是一次静默的界面变更。
+ */
+const APPROVED_COPY = {
+  ROUTE_NOT_FOUND: {
+    title: '页面版本不一致',
+    hint: '这个地址服务端不认识，刷新页面后再试。',
+  },
+  METHOD_NOT_ALLOWED: {
+    title: '页面版本不一致',
+    hint: '这个操作服务端不支持，刷新页面后再试。',
+  },
+}
 
-  for (const [name, d] of [['ROUTE_NOT_FOUND', route], ['METHOD_NOT_ALLOWED', method]]) {
+const STATUS = { ROUTE_NOT_FOUND: 404, METHOD_NOT_ALLOWED: 405 }
+
+test('ROUTE_NOT_FOUND / METHOD_NOT_ALLOWED 的文案与上线版逐字一致', () => {
+  for (const [name, want] of Object.entries(APPROVED_COPY)) {
+    const d = describeError(new ApiError({ code: name, status: STATUS[name], message: 'raw message from server' }))
+    assert.equal(d.title, want.title, `${name} 标题与上线版不一致（改文案要同步改本文件）`)
+    assert.equal(d.hint, want.hint, `${name} 提示与上线版不一致（改文案要同步改本文件）`)
+  }
+})
+
+test('两条文案的形状约束（纯中文 / 短语 / 有下一步 / 非终结 / 不自动重试）', () => {
+  for (const [name, want] of Object.entries(APPROVED_COPY)) {
+    const d = describeError(new ApiError({ code: name, status: STATUS[name] }))
     assert.notEqual(d.title, `请求失败（${name}）`, `${name} 不应再落到兜底标题`)
     assert.ok(noAsciiLetters(d.title), `${name} 的标题不应含英文原文：${d.title}`)
     assert.ok(noAsciiLetters(d.hint), `${name} 的提示不应含英文原文：${d.hint}`)
-    // 与现有文案同量级：标题是短语、提示一句话（不写解释性长句）
+    // 与现有文案同量级：标题是短语、提示最多两句（不写解释性长句）
     assert.ok(d.title.length <= 8, `${name} 标题过长：${d.title}`)
-    assert.ok(d.hint.length <= 30, `${name} 提示过长：${d.hint}`)
+    assert.ok([...want.hint].length <= 30, `${name} 提示过长：${want.hint}`)
     assert.match(d.hint, /刷新/, `${name} 必须给"下一步"（刷新页面）`)
     assert.equal(d.terminal, false, `${name} 不是终结态`)
     assert.ok(!d.retry, `${name} 不该自动重试`)
