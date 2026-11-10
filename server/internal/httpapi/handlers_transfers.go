@@ -493,12 +493,23 @@ func (a *API) handleAck(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	dl := downloadID(r)
 	if spec.IsTerminalState(t.State) {
+		// 例外只有一个，来自 §7.5 的幂等条款：**同一 `download_id` 的重复 ack 只计一次并返回 200**。
+		// 它只对 CONSUMED（ack 自己造出来的终态）+ 本传输的租约成立——REVOKED / EXPIRED
+		// 按 §1.7.4（终结态一律 410）与 §5.2（"到期后的 `POST /ack` → 410 且不计数"）照回 410。
+		if t.State == spec.StateConsumed && dl != "" {
+			if d, err := a.store.GetDownload(r.Context(), dl); err == nil && d.TransferID == id {
+				if res, err := a.store.AckDownload(r.Context(), dl, a.now()); err == nil {
+					a.writeAckResult(w, res)
+					return
+				}
+			}
+		}
 		fail(w, r, spec.TerminalErrorCode(t.State))
 		return
 	}
 
-	dl := downloadID(r)
 	if dl == "" {
 		fail(w, r, spec.ErrDownloadNotStarted)
 		return
@@ -539,7 +550,12 @@ func (a *API) handleAck(w http.ResponseWriter, r *http.Request) {
 	if res.Consumed && res.Counted {
 		a.purgeCiphertext(r, res.Transfer.ID)
 	}
+	a.writeAckResult(w, res)
+}
 
+// writeAckResult 写 ack 的成功体（§7.5）：正常 ack 与"同租约重复 ack"两条路径共用，
+// 避免两处各拼一份 JSON 走样。
+func (a *API) writeAckResult(w http.ResponseWriter, res store.AckResult) {
 	resp := spec.AckResponse{State: res.Transfer.State, DownloadCount: uint32(res.Transfer.DownloadCount)}
 	if res.Transfer.TerminalReason != nil {
 		resp.TerminalReason = res.Transfer.TerminalReason

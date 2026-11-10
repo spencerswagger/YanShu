@@ -646,9 +646,10 @@ func TestRevoke(t *testing.T) {
 	e.wantError(e.do(http.MethodPost, spec.RevokePath(tr.TransferID), nil,
 		e.authHeaders(spec.PurposeTransferRevoke, other)), spec.ErrNotTransferParty)
 
-	// ack 撤回后的传输 → 409。
+	// ack 撤回后的传输 → 410 TRANSFER_REVOKED（§1.7.4 判定顺序：终结态先于凭据/409；
+	// §5.2 同一口径。修前这里断言的是 409 DOWNLOAD_NOT_STARTED，那是被本 PR 修掉的旧行为）。
 	e.wantError(e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil,
-		e.ackHeaders(recipient, strings.Repeat("a", 32))), spec.ErrDownloadNotStarted)
+		e.ackHeaders(recipient, strings.Repeat("a", 32))), spec.ErrTransferRevoked)
 }
 
 func TestTTLExpiryAndSweep(t *testing.T) {

@@ -115,6 +115,47 @@ func TestAckTerminalStatePrecedesLease(t *testing.T) {
 	}
 }
 
+// TestAckConsumedReplayStaysIdempotent 锁住 §1.7.4 唯一的那条例外：
+// §7.5「同一 `download_id` 的重复 ack 只计一次**并返回 200**」——它不是错误路径，
+// 所以不能被"终结态一律 410"吞掉；反之**换一个 download_id**（哪怕格式合法）就是错误路径 → 410。
+func TestAckConsumedReplayStaysIdempotent(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("发送方")
+	recipient, _ := e.register("接收方")
+	f := newFixture()
+	tr := e.readyTransfer(sender, recipient, f) // max_downloads 默认 1 → 一次 ack 即 CONSUMED
+
+	dl := e.openLease(tr.TransferID)
+	if resp := e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil,
+		e.ackHeaders(recipient, dl)); resp.status != http.StatusOK {
+		t.Fatalf("ack: %d %s", resp.status, resp.body)
+	}
+	if got := e.downloadCount(tr.TransferID); got != 1 {
+		t.Fatalf("首次 ack 应计数一次，download_count = %d", got)
+	}
+
+	// 同一 download_id 重复 ack：200 幂等，不再计数（§7.5）。
+	resp := e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil, e.ackHeaders(recipient, dl))
+	if resp.status != http.StatusOK {
+		t.Fatalf("同租约重复 ack 应 200（§7.5 幂等），实测 %d %s", resp.status, resp.body)
+	}
+	var ack spec.AckResponse
+	if err := json.Unmarshal(resp.body, &ack); err != nil {
+		t.Fatalf("解 ack 体: %v", err)
+	}
+	if ack.State != spec.StateConsumed || ack.DownloadCount != 1 {
+		t.Fatalf("重复 ack 不得再计数：%+v", ack)
+	}
+
+	// 换一个格式合法但不属于该传输的 download_id：这是错误路径 → 410 TRANSFER_CONSUMED。
+	resp = e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil,
+		e.ackHeaders(recipient, "0123456789abcdef0123456789abcdef"))
+	e.wantError(resp, spec.ErrTransferConsumed)
+	if got := e.downloadCount(tr.TransferID); got != 1 {
+		t.Fatalf("被拒的 ack 不得计数，download_count = %d, want 1", got)
+	}
+}
+
 // TestAckNonTerminalStillChecksLease 是上一条的**阴性对照**：
 // 未终结时照旧按凭据分支（缺 → 409 DOWNLOAD_NOT_STARTED、有效 → 200 并计数），
 // 否则"一律 410"会把真正该走 409 的场景吞掉，门禁就变成永远绿。
