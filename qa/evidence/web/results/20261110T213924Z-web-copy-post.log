@@ -1,0 +1,7 @@
+PASS  ROUTE_NOT_FOUND 有中文文案且不落兜底                     title="页面版本不一致" terminal=false retry=false
+PASS  METHOD_NOT_ALLOWED 有中文文案且不落兜底                  title="页面版本不一致" terminal=false retry=false
+PASS  未知码 WAT_999 仍走兜底并带原始码                          title="请求失败（WAT_999）" hint="服务端原话"
+PASS  老形态 HTTP_404 仍走兜底（不抛不吞）                        title="请求失败（HTTP_404）" hint="HTTP 404"
+PASS  CODE_NOT_FOUND 仍归自己的文案                         title="码不对"
+--------------------------------------------------------------------------------------
+5/5 通过　结论：PASS
