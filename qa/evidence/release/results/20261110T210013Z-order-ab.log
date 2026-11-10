@@ -1,0 +1,55 @@
+===== ORDER A_57_58_56 base=bf84457  2026-11-10T21:00:14Z =====
+--- merge f941589 rc=0 unmerged=[]
+--- merge 760dfdb rc=0 unmerged=[]
+--- merge 884fbe4 rc=0 unmerged=[]
+--- tree SHA: 79563cfefe89ef98a725180fbb0a8f48dbabe037 ---
+--- 合后 build/vet ---
+BUILD_VET_OK
+--- 合后 go test -count=1 ./...（15 包，-count=1 跳过缓存）---
+ok  	github.com/spencerswagger/YanShu/server/cmd/deliver	0.010s
+?   	github.com/spencerswagger/YanShu/server/cmd/yanshu-server	[no test files]
+ok  	github.com/spencerswagger/YanShu/server/internal/auth	1.471s
+ok  	github.com/spencerswagger/YanShu/server/internal/blob	0.007s
+ok  	github.com/spencerswagger/YanShu/server/internal/cleanup	2.087s
+ok  	github.com/spencerswagger/YanShu/server/internal/config	0.050s
+ok  	github.com/spencerswagger/YanShu/server/internal/gm	0.438s
+ok  	github.com/spencerswagger/YanShu/server/internal/httpapi	29.942s
+ok  	github.com/spencerswagger/YanShu/server/internal/logging	0.014s
+ok  	github.com/spencerswagger/YanShu/server/internal/packet	0.006s
+ok  	github.com/spencerswagger/YanShu/server/internal/ratelimit	0.007s
+ok  	github.com/spencerswagger/YanShu/server/internal/signal	0.013s
+ok  	github.com/spencerswagger/YanShu/server/internal/spec	0.013s
+ok  	github.com/spencerswagger/YanShu/server/internal/store	3.239s
+?   	github.com/spencerswagger/YanShu/server/internal/testutil	[no test files]
+ORDER A_57_58_56: OK
+
+===== ORDER B_57_56_58 base=bf84457  2026-11-10T21:00:49Z =====
+--- merge f941589 rc=0 unmerged=[]
+--- merge 884fbe4 rc=0 unmerged=[]
+--- merge 760dfdb rc=0 unmerged=[]
+--- tree SHA: 79563cfefe89ef98a725180fbb0a8f48dbabe037 ---
+--- 合后 build/vet ---
+BUILD_VET_OK
+--- 合后 go test -count=1 ./...（15 包，-count=1 跳过缓存）---
+ok  	github.com/spencerswagger/YanShu/server/cmd/deliver	0.014s
+?   	github.com/spencerswagger/YanShu/server/cmd/yanshu-server	[no test files]
+ok  	github.com/spencerswagger/YanShu/server/internal/auth	1.211s
+ok  	github.com/spencerswagger/YanShu/server/internal/blob	0.004s
+ok  	github.com/spencerswagger/YanShu/server/internal/cleanup	2.142s
+ok  	github.com/spencerswagger/YanShu/server/internal/config	0.006s
+ok  	github.com/spencerswagger/YanShu/server/internal/gm	0.205s
+ok  	github.com/spencerswagger/YanShu/server/internal/httpapi	29.345s
+ok  	github.com/spencerswagger/YanShu/server/internal/logging	0.007s
+ok  	github.com/spencerswagger/YanShu/server/internal/packet	0.007s
+ok  	github.com/spencerswagger/YanShu/server/internal/ratelimit	0.007s
+ok  	github.com/spencerswagger/YanShu/server/internal/signal	0.011s
+ok  	github.com/spencerswagger/YanShu/server/internal/spec	0.006s
+ok  	github.com/spencerswagger/YanShu/server/internal/store	1.950s
+?   	github.com/spencerswagger/YanShu/server/internal/testutil	[no test files]
+ORDER B_57_56_58: OK
+
+== 结论 ==
+A tree=79563cfefe89ef98a725180fbb0a8f48dbabe037
+B tree=79563cfefe89ef98a725180fbb0a8f48dbabe037
+两序合并结果完全相同（tree SHA 一致）
+两序皆可行

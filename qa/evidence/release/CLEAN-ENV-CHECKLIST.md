@@ -94,8 +94,8 @@ qa/evidence/release/negative_checks.sh origin/main /tmp/yanshu-negative
 ```
 
 三处故意破坏 + 一处基线。脚本自己建一个**隔离库**（`yanshu_neg_<UTC>`）跑，跑完删掉 ——
-httpapi 夹具用的是固定 schema 名，跟别人同时跑同一包会互删 schema，不隔离就会冒出
-`no schema has been selected to create in` 这种"假失败"。
+目的是不碰共享库里的既有数据/schema。并发互删 schema 的根因已由 #68 消除
+（`testutil` 每次 `NewStore` 用唯一 schema，不再用固定名），所以脚本里也不再有"撞名重试"。
 
 判定不是"退出码非 0 就算抓到"，而是**必须红在预期断言上**：
 

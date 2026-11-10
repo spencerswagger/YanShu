@@ -287,6 +287,8 @@ def main(argv=None) -> int:
     ap.add_argument("--skip-index", action="store_true")
     ap.add_argument("--skip-restart", action="store_true")
     ap.add_argument("--keep", action="store_true", help="保留工作目录与新库（排障用）")
+    ap.add_argument("--allow-no-envelope", action="store_true",
+                    help="树里没有 #58（fallback.go）时允许把 §0.2 记 WARN；默认按 FAIL（防空转）")
     ap.add_argument("--selftest-break-keys", action="store_true",
                     help="自检用：down 之后偷偷换掉 token_secret，验证「secrets sha256 不变」会红")
     ap.add_argument("--json-out", default=None)
@@ -443,12 +445,21 @@ def main(argv=None) -> int:
             codex = (obj.get("error") or {}).get("code", "")
         except Exception:  # noqa: BLE001
             is_env, codex = False, ""
+        # 树里有 #58（fallback.go）→ 信封是硬要求，坏了必须红；
+        # 只有显式 --allow-no-envelope 才允许把"树里没有 #58"记 WARN（不冒充通过）。
+        has_fallback = (src / "server/internal/httpapi/fallback.go").is_file()
         if is_env:
             rep.add("契约 §0.2：未路由路径必须是错误信封",
                     stx == 404 and codex == "ROUTE_NOT_FOUND", f"{stx} {codex}")
-        else:
+        elif has_fallback:
+            rep.add("契约 §0.2：未路由路径必须是错误信封", False,
+                    f"{stx} {raw[:60]!r}（树里有 fallback.go，却回非信封）")
+        elif args.allow_no_envelope:
             rep.add("契约 §0.2：未路由路径必须是错误信封", None,
-                    f"{stx} text/plain（main 未含 #58，记 SKIP 不算通过）")
+                    f"{stx} text/plain（树里无 fallback.go，--allow-no-envelope 记 SKIP）")
+        else:
+            rep.add("契约 §0.2：未路由路径必须是错误信封", False,
+                    f"{stx} text/plain（树里无 fallback.go；要放过请显式 --allow-no-envelope）")
 
         # 7) 建索引锁写
         if args.skip_index:
@@ -471,7 +482,8 @@ def main(argv=None) -> int:
             srv.env = build_env(port, keys_up, dsn_db, blobs, logs)
             ok2 = srv.start()
             key_sha_up = {k: sha256_file(p) for k, p in keys_up.items()}
-            rep.raw["secrets"] = {"before": key_sha1, "up": key_sha_up}
+            # 只存 sha256，绝不存密钥原值（secret scanner 会咬；行里也只打前 12 位）
+            rep.raw["secrets_sha256"] = {"before": key_sha1, "up": key_sha_up}
             rep.add("down && up 后 secrets sha256 不变",
                     key_sha1 == key_sha_up and ok2,
                     f"token={key_sha_up['token_secret'][:12]}… pg={key_sha_up['pg_password'][:12]}…")

@@ -1,0 +1,17 @@
+[iso] 隔离库：yanshu_neg_20261110t205359_266
+反向验证 @ 2026-11-10T20:53:59Z  ref=origin/main (b8fabfd5b5a403dd9c4548adefd3c47e5e1f450a)
+[PASS] 基线：两条门禁都绿且真跑（store PASS=1 / httpapi PASS=2）
+[PASS] #57-a 普通 CREATE INDEX 回归：变异后测试红在预期断言上（门禁有牙）
+            migrations_lock_guard_test.go:113: 0011_mutant_plain_index.sql 第 1 条语句在事务迁移里用普通 CREATE INDEX 建 transfers 的索引：
+                `CREATE INDEX` 取 SHARE 锁、applyMigration 把整份文件包在一个事务里，锁持到提交 ——
+                这期间 transfers 的写入全被挡住（实测 150 万行时单条写最长阻塞 1215.8 ms）。
+[PASS] #57-b CONCURRENTLY 缺 no-transaction 头：变异后测试红在预期断言上（门禁有牙）
+            migrations_lock_guard_test.go:88: 0010_indexes_concurrently.sql 第 2 条语句用了 CONCURRENTLY，但文件头没有 `-- yanshu:no-transaction`：
+                它会跑在事务块里，PostgreSQL 直接拒绝执行。
+                语句：CREATE INDEX CONCURRENTLY IF NOT EXISTS transfers_terminal_at_idx
+[PASS] #56 终结态被凭据存在性顶掉：变异后测试红在预期断言上（门禁有牙）
+            terminal_410_precedence_test.go:110: §1.7.4 被违反：status 在 CONSUMED 终态（无凭据）应回 410，实测 401 {"error":{"code":"AUTH_MISSING","message":"authentication headers are missing","request_id":"req_7806c9f180a37f24"}}
+            terminal_410_precedence_test.go:110: §1.7.4 被违反：PUT prelude 在 CONSUMED 终态（无凭据）应回 410，实测 401 {"error":{"code":"AUTH_MISSING","message":"authentication headers are missing","request_id":"req_151845588e7a7308"}}
+            terminal_410_precedence_test.go:110: §1.7.4 被违反：PUT chunk 在 CONSUMED 终态（无凭据）应回 410，实测 401 {"error":{"code":"AUTH_MISSING","message":"authentication headers are missing","request_id":"req_95aa4b7264f4e630"}}
+
+结论：三处变异全部被抓 → 两道门禁有牙

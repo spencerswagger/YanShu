@@ -10,8 +10,9 @@
 #   - #58 要求内层脚本的 `PASS=n FAIL=0` 且 rc=0（它末行永远含 "PASS="，grep PASS 会恒真）；
 #   - 该项被 SKIP（树里没有这条）/`--only` 非法 → 退出码 2，不能算"跑过"。
 #
-# 为什么每项都自己建隔离库：httpapi 夹具用固定 schema 名（yanshu_core_test_httpapi），
-# 与别人同时跑会互删 schema，冒出 "no schema has been selected"（假失败）。
+# 为什么每项都自己建隔离库：不碰共享库里的既有数据/schema，跑完即删。
+# （#68 之前 httpapi 夹具用固定 schema 名、并发跑会互删；#68 已改成每次 NewStore 唯一，
+#  这里保留独立库是为了"干净"，不再是为了绕并发。）
 #
 # 退出码：0 所有"要求跑的"都真跑了且 PASS；1 有 FAIL；2 环境不成立或该项没跑（BLOCKED）。
 set -u
