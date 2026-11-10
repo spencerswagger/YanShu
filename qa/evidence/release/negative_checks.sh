@@ -14,15 +14,15 @@ REF=${1:-origin/main}
 WORK=${2:-/tmp/yanshu-negative}
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../../.." && pwd)
-TRIES=${TRIES:-3}
 
 command -v git >/dev/null && command -v go >/dev/null || { echo "[BLOCKED] 缺 git/go" >&2; exit 2; }
 # httpapi 门禁要连库；没 DSN 时用例会 SKIP（exit 0），看起来跟"绿"一样，必须先挡住
 [ -n "${TEST_DATABASE_URL:-}" ] || { echo "[BLOCKED] 需要 TEST_DATABASE_URL（门禁要连真 PG）" >&2; exit 2; }
 REV=$(git -C "$REPO" rev-parse "$REF") || { echo "[BLOCKED] 取不到 $REF" >&2; exit 2; }
 
-# 隔离到**独立数据库**：httpapi 夹具用固定 schema 名（yanshu_core_test_httpapi），
-# 跟别人同时跑同一包会互删 schema，冒出 "no schema has been selected"。
+# 用独立数据库：不碰共享库里的既有数据/schema，跑完即删。
+# 并发互删 schema 的根因已由 #68 消除（testutil 每次 NewStore 用唯一 schema），
+# 这里不再为"夹具撞名"重试。
 ADMIN_DSN=$TEST_DATABASE_URL
 NEGDB="yanshu_neg_$(date -u +%Y%m%dt%H%M%Sz | tr 'A-Z' 'a-z')"
 psql -X -q "$ADMIN_DSN" -c "CREATE DATABASE \"$NEGDB\"" >/dev/null 2>&1 || {
@@ -50,55 +50,39 @@ run_http()  { ( cd "$SRC" && go test ./internal/httpapi -v -run 'Terminal|NonTer
 
 count_pass() { grep -c '^--- PASS' "$1" 2>/dev/null || true; }
 
-# 带重试地跑一次；输出落 $2。返回 0/1。
-# 为什么要重试：httpapi 夹具用**固定 schema 名**（yanshu_core_test_httpapi），
-# 本机同时有人跑同一包时会互删 schema，冒出 "no schema has been selected to create in"。
+# 单次执行；输出落 $2。返回 0/1。
 attempt() { # $1=命令函数 $2=日志
   "$1" > "$2" 2>&1 && return 0 || return 1
 }
 
 rc_all=0
 
-# ---- 基线：必须绿且真跑
-rs=1; i=0
-while [ "$i" -lt "$TRIES" ]; do
-  i=$((i + 1))
-  rs=0; attempt run_store "$WORK/base-store.log" || rs=$?
-  rh=0; attempt run_http  "$WORK/base-http.log"  || rh=$?
-  ns=$(count_pass "$WORK/base-store.log"); nh=$(count_pass "$WORK/base-http.log")
-  [ "$rs" -eq 0 ] && [ "$rh" -eq 0 ] && [ "$ns" -ge 1 ] && [ "${nh:-0}" -ge 2 ] && break
-  echo "  [retry $i/$TRIES] 基线不绿（rc=$rs/$rh PASS=${ns:-0}/${nh:-0}），5s 后重试" >&2
-  sleep 5
-done
+# ---- 基线：必须绿且真跑（单次；#68 之后夹具 schema 唯一，不需要为并发重试）
+rs=0; attempt run_store "$WORK/base-store.log" || rs=$?
+rh=0; attempt run_http  "$WORK/base-http.log"  || rh=$?
+ns=$(count_pass "$WORK/base-store.log"); nh=$(count_pass "$WORK/base-http.log")
 if [ "$rs" -eq 0 ] && [ "$rh" -eq 0 ] && [ "$ns" -ge 1 ] && [ "${nh:-0}" -ge 2 ]; then
   echo "[PASS] 基线：两条门禁都绿且真跑（store PASS=$ns / httpapi PASS=$nh）"
 else
-  echo "[BLOCKED] 基线跑不绿（rc=$rs/$rh PASS=${ns:-0}/${nh:-0}）：环境问题（并发跑测试/DSN），不能据此判门禁好坏" >&2
+  echo "[BLOCKED] 基线跑不绿（rc=$rs/$rh PASS=${ns:-0}/${nh:-0}）：环境/DSN 问题，不能据此判门禁好坏" >&2
   exit 2
 fi
 
 # 变异必须红在**那条断言的消息**上：只要求"有 --- FAIL"会把
 # "no schema has been selected / migrate: …" 这种环境炸库也当成门禁有牙（假绿）。
 expect_fail() { # $1=名字 $2=输出文件 $3=命令函数 $4=必须出现的断言消息（固定串）
-  local i=0
-  while [ "$i" -lt "$TRIES" ]; do
-    i=$((i + 1))
-    if "$3" > "$2" 2>&1; then
-      echo "[FAIL] $1：变异后测试仍然绿（门禁没牙）"; rc_all=1; return
-    fi
-    if grep -q 'no schema has been selected' "$2"; then
-      echo "  [retry $i/$TRIES] 环境炸库（并发跑测试互删 schema），5s 后重试" >&2
-      sleep 5; continue
-    fi
-    if grep -q -- "$4" "$2"; then
-      echo "[PASS] $1：变异后测试红在预期断言上（门禁有牙）"
-      grep -E '^(--- FAIL|    )' "$2" | head -3 | sed 's/^/        /'
-      return
-    fi
-    echo "  [retry $i/$TRIES] 非 0 但没出现预期断言「$4」，5s 后重试" >&2
-    sleep 5
-  done
-  echo "[BLOCKED] $1：始终没红在预期断言上，无法判定（不是门禁结论）" >&2
+  if "$3" > "$2" 2>&1; then
+    echo "[FAIL] $1：变异后测试仍然绿（门禁没牙）"; rc_all=1; return
+  fi
+  if grep -q 'no schema has been selected' "$2"; then
+    echo "[BLOCKED] $1：连库/夹具异常（no schema selected），不是门禁结论" >&2; rc_all=2; return
+  fi
+  if grep -q -- "$4" "$2"; then
+    echo "[PASS] $1：变异后测试红在预期断言上（门禁有牙）"
+    grep -E '^(--- FAIL|    )' "$2" | head -3 | sed 's/^/        /'
+    return
+  fi
+  echo "[BLOCKED] $1：非 0 但没出现预期断言「$4」，无法判定" >&2
   rc_all=2
 }
 
