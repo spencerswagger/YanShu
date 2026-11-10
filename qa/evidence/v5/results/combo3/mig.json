@@ -1,0 +1,72 @@
+{
+  "title": "v5 迁移专项 · 0010 非事务 CIC + 迁移器（单连接 / try-lock / 切句）",
+  "verdict": 0,
+  "rows": [
+    {
+      "name": "干净库 0→0010 一次跑成功",
+      "kind": "PASS",
+      "evidence": "rc=0 0.1s 记录迁移=9"
+    },
+    {
+      "name": "5 个 v5 索引全部建成且 valid",
+      "kind": "PASS",
+      "evidence": "{\"transfer_chunks_unredacted_idx\": \"true\", \"transfers_created_at_idx\": \"true\", \"transfers_terminal_at_idx\": \"true\", \"transfers_terminal_unredacted_idx\": \"true\", \"transfers_unpurged_terminal_idx\": \"true\"}"
+    },
+    {
+      "name": "0009 库补跑 0010 成功（不重复建索引报错）",
+      "kind": "PASS",
+      "evidence": "rc=0 补跑前索引=0 补跑后=5 out=time=2026-11-10T03:19:36.173Z level=INFO msg=\"migrations app"
+    },
+    {
+      "name": "补跑后 5 个索引 valid",
+      "kind": "PASS",
+      "evidence": "{\"transfer_chunks_unredacted_idx\": \"true\", \"transfers_created_at_idx\": \"true\", \"transfers_terminal_at_idx\": \"true\", \"transfers_terminal_unredacted_idx\": \"true\", \"transfers_unpurged_terminal_idx\": \"true\"}"
+    },
+    {
+      "name": "CIC 期间 INSERT 未被阻塞（耗时无数量级突变）",
+      "kind": "PASS",
+      "evidence": "基线 max=64ms　CIC 期间 max=86ms（8 次）"
+    },
+    {
+      "name": "CIC 的锁模式是 ShareUpdateExclusiveLock（不是 ShareLock）",
+      "kind": "PASS",
+      "evidence": "观测到的锁=['ShareUpdateExclusiveLock']"
+    },
+    {
+      "name": "中断（后端被杀）后留下 INVALID 索引（可复现的坏状态）",
+      "kind": "PASS",
+      "evidence": "CIC 进行中=True invalid=['transfers_terminal_at_idx']"
+    },
+    {
+      "name": "重跑靠 DROP INDEX CONCURRENTLY IF EXISTS 自愈成 valid",
+      "kind": "PASS",
+      "evidence": "重跑 rc=0 1.9s 结果={\"transfer_chunks_unredacted_idx\": \"true\", \"transfers_created_at_idx\": \"true\", \"transfers_terminal_at_idx\": \"true\", \"transfers_terminal_unredacted_idx\": \"true\", \"transfers_unpurged_terminal_idx\": \"true\"}"
+    },
+    {
+      "name": "已到 0010 的库再跑一次幂等",
+      "kind": "PASS",
+      "evidence": "rc=0 0.01s"
+    },
+    {
+      "name": "两个实例并发迁移都成功且不死锁",
+      "kind": "PASS",
+      "evidence": "rc=0/0 deadlock=False"
+    },
+    {
+      "name": "迁移结束后不残留 advisory 锁（单连接加锁/解锁）",
+      "kind": "PASS",
+      "evidence": "advisory 锁=0"
+    },
+    {
+      "name": "并发迁移后 5 个索引 valid",
+      "kind": "PASS",
+      "evidence": "{\"transfer_chunks_unredacted_idx\": \"true\", \"transfers_created_at_idx\": \"true\", \"transfers_terminal_at_idx\": \"true\", \"transfers_terminal_unredacted_idx\": \"true\", \"transfers_unpurged_terminal_idx\": \"true\"}"
+    },
+    {
+      "name": "迁移器单测（切句 11 例 + 指令识别）通过",
+      "kind": "PASS",
+      "evidence": "rc=0 PASS 行=2"
+    }
+  ],
+  "notes": []
+}

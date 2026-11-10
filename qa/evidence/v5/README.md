@@ -50,6 +50,8 @@ node qa/evidence/v5/ui_v5_shots.mjs --dist /tmp/v5/web/dist --api http://127.0.0
 | `ui_v5_shots.mjs` | ①④ 界面 | 真 Chromium 打开生产构建：首屏不点刷新就应拉到 4 行；其中一条 `expires_at=now()+30s`，**页面内等到点**后该行必须自己翻成「已过期，无法取回」+ 整行灰化 + 删除线 + 下载置灰（全程不刷新、不重载），并核对服务端此刻 `state=EXPIRED`；平台统计六格文案齐全 | 前后端两条分支 + Chromium |
 | `check_purge_fallback.py` | ③b 兜底删密文 | 种 250 条（> 批次 200）未删密文终结行 + 真文件：残留归零、**第 1/2 轮删的是不同批（交集空）**、各轮并集=全部、日志 `purged` 非常量、`purgeRemaining` 归零；再加「事务内终结 `newly=false`」两条（到期取件 / ack）在 sweep=600s 下密文必须当场删净 | 后端分支 |
 | `ui_ttl_flip.mjs` | ① 翻转/兜底 | 造一条 `expires_at=now+N秒` 的真实传输：页内 rAF 探针记录「胶囊翻 / 整行灰化 / 下载置灰」三件事的**翻转时刻**（判同帧、判是否比服务端早判过期，并与库内精确值、接口秒级值分别对比）；再用 `?freeze=1` 在应用脚本前冻掉定时器（模拟后台节流），点下载验证**一个请求都不发**、直接置过期态 | 前后端 + Chromium |
+| `check_migrations.py` | 迁移专项 | `0010` 非事务 CIC：干净库 0→0010、0009 补跑、CIC 期间写不阻塞（并抓锁模式必须是 `ShareUpdateExclusiveLock`）、**杀后端会话**制造 INVALID 再验重跑自愈、幂等、两实例并发不死锁、advisory 锁不残留；附迁移器切句/指令单测 | 后端分支 + migrations 目录 |
+| `check_block_redaction.py` | ③d 块级脱敏 | `transfer_chunks.ciphertext_sm3` 30 天后归 NULL；`transfers` 除三列外**逐列**不变（按 information_schema 比，不手抄）；块侧候选集单调不增 | 后端分支 |
 | `check_redact_index.py` | ③c 脱敏索引 | 20 万行稳态上 `EXPLAIN (ANALYZE, BUFFERS)`：子查询与整条 UPDATE 都必须走 Index Scan、buffers/耗时达标；再测「一次性脱敏 18 万行后」的瞬时退化与 `VACUUM` 后的回落 | 后端分支 |
 
 `v5_ui_seed.py` 的第 4 条是**短 TTL**（默认 30s，`--short-ttl` 可调）：「已过期」这一态在
