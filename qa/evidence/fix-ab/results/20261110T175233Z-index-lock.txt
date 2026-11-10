@@ -1,0 +1,17 @@
+===== index-lock @ 2026-11-10T17:52:46Z =====
+[cmd] python3 /worktrees/YS-QA/qa/evidence/fix-ab/ab_index_lock_write.py --dsn postgres://yanshu_test:***@127.0.0.1:56377/yanshu_test?sslmode=disable --rows 600000 --json-out /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T175233Z-index-lock.json
+== 建索引锁写 A/B @ 2026-11-10T17:52:47+0000
+造数：600000 行 / 113 MB，耗时 3.9s
+
+[写入延迟]（同一条 writer 连接贯穿三个阶段）
+  基线(无索引): 建索引 0 ms｜写入 n=31 max=52.6ms p95=50.0ms p50=44.1ms >200ms:0 >1s:0
+       采样到的表锁：(无)
+  A 普通CREATE INDEX: 建索引 772 ms｜写入 n=1 max=759.6ms p95=759.6ms p50=759.6ms >200ms:1 >1s:0
+       采样到的表锁：ShareLock
+  B CONCURRENTLY: 建索引 993 ms｜写入 n=16 max=57.3ms p95=55.2ms p50=46.2ms >200ms:0 >1s:0
+       采样到的表锁：ShareUpdateExclusiveLock
+
+结论：A（事务+普通 CREATE INDEX）写入被挡住（最长 759.6 ms，锁 ShareLock）；B（CONCURRENTLY）写入持续（最长 57.3 ms，锁 ShareUpdateExclusiveLock） → A 阻塞 / B 不阻塞，结论成立
+
+[json] /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T175233Z-index-lock.json
+[exit=0] index-lock

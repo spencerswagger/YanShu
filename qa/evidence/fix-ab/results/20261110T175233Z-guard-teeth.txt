@@ -1,12 +1,12 @@
-===== guard-teeth @ 2026-11-10T17:44:14Z =====
-[cmd] sh /worktrees/YS-QA/qa/evidence/fix-ab/run_guard_teeth.sh /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/trees/guard /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/trees/before
+===== guard-teeth @ 2026-11-10T17:52:40Z =====
+[cmd] sh /worktrees/YS-QA/qa/evidence/fix-ab/run_guard_teeth.sh /.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/trees/guard /.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/trees/before
 ===== 1) 修后树：门禁本体 =====
 --- PASS: TestMigrationsCreateIndexesWithoutBlockingWrites (0.00s)
 === RUN   TestNoTxMigrationHasConcurrentIndex
     migrations_lock_guard_test.go:148: 非事务 + CONCURRENTLY 的迁移：0010_indexes_concurrently.sql
 --- PASS: TestNoTxMigrationHasConcurrentIndex (0.00s)
 PASS
-ok  	github.com/spencerswagger/YanShu/server/internal/store	0.013s
+ok  	github.com/spencerswagger/YanShu/server/internal/store	0.006s
 [PASS] 修后树门禁真跑了且绿
 
 ===== 2) 反向验证：塞一条普通 CREATE INDEX（模拟有人写回去）=====
@@ -16,14 +16,14 @@ ok  	github.com/spencerswagger/YanShu/server/internal/store	0.013s
         改法：把索引挪进一个文件头带 `-- yanshu:no-transaction` 的迁移，并用 `CREATE INDEX CONCURRENTLY`。
         语句：CREATE INDEX IF NOT EXISTS mutant_idx ON transfers (created_at)
 FAIL
-FAIL	github.com/spencerswagger/YanShu/server/internal/store	0.006s
+FAIL	github.com/spencerswagger/YanShu/server/internal/store	0.008s
 FAIL
 [PASS] 门禁抓住变异体（测试红）
 
 ===== 3) 修前树：同一条规则有没有门禁？ =====
 testing: warning: no tests to run
 PASS
-ok  	github.com/spencerswagger/YanShu/server/internal/store	0.005s [no tests to run]
+ok  	github.com/spencerswagger/YanShu/server/internal/store	0.021s [no tests to run]
 [PASS] 修前树确实没有这条门禁（规则当时无人守）
 
 结论：门禁有牙（PASS→变异体红→修前无门禁）

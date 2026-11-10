@@ -1,7 +1,7 @@
-===== terminal-after @ 2026-11-10T17:44:14Z =====
-[cmd] python3 /worktrees/YS-QA/qa/evidence/fix-ab/ab_terminal_410.py --binary /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/after --dsn postgres://yanshu_test:***@127.0.0.1:55217/yanshu_test?sslmode=disable --expect after --work /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/term-after --json-out /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T174406Z-terminal-after.json
-== 契约 §1.7.4 终结态 410 先于凭据 401（expect=after）@ 2026-11-10T17:44:14+0000
-binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/after  sha256 = d8e73daf0b657f3fc946876c7ce075d1d5f591c291028c3edbabf772533696f7
+===== terminal-after @ 2026-11-10T17:52:40Z =====
+[cmd] python3 /worktrees/YS-QA/qa/evidence/fix-ab/ab_terminal_410.py --binary /.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/bin/after --dsn postgres://yanshu_test:***@127.0.0.1:56377/yanshu_test?sslmode=disable --expect after --work /.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/term-after --json-out /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T175233Z-terminal-after.json
+== 契约 §1.7.4 终结态 410 先于凭据 401（expect=after）@ 2026-11-10T17:52:40+0000
+binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/bin/after  sha256 = ed1f40d2279536d820de5bc161f33d3c383d9a41d1149dbc450240e4abf45255
 
 [矩阵] 终态 × 路径 × 凭据
   410✓  CONSUMED status   cred=none  → 410 TRANSFER_CONSUMED
@@ -41,5 +41,5 @@ binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/after  sha256 = d8e73
 
 结论：24 例中 24 例为 410 + 对应终态码 → 修后达标
 
-[json] /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T174406Z-terminal-after.json
+[json] /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T175233Z-terminal-after.json
 [exit=0] terminal-after

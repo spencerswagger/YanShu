@@ -184,8 +184,10 @@ def main(argv=None) -> int:
                 failures.append(f"{r['state']} {r['path']} cred={r['cred']} → {r['status']} {r['code']}，期望 410")
             elif r["code"] != TERMINAL_CODE[r["state"]]:
                 failures.append(f"{r['state']} {r['path']} → 410 {r['code']}，期望 {TERMINAL_CODE[r['state']]}")
-        verdict_ok = len(got_410) == len(terminal)
-        print(f"\n结论：24 例中 {len(got_410)} 例为 410 + 对应终态码 → 修后{'达标' if verdict_ok else '未达标'}")
+        verdict_ok = len(got_410) == len(terminal) and not failures
+        print(f"\n结论：24 例中 {len(got_410)} 例为 410 + 对应终态码"
+              + (f"；另有 {len(failures)} 条不过（含阴性对照）" if failures else "")
+              + f" → 修后{'达标' if verdict_ok else '未达标'}")
 
     for f in failures:
         print(f"  [FAIL] {f}")

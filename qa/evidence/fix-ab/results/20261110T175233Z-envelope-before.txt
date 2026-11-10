@@ -1,7 +1,7 @@
-===== envelope-before @ 2026-11-10T17:44:08Z =====
-[cmd] python3 /worktrees/YS-QA/qa/evidence/fix-ab/ab_contract_envelope.py --binary /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/before --dsn postgres://yanshu_test:***@127.0.0.1:55217/yanshu_test?sslmode=disable --expect before --work /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/env-before --json-out /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T174406Z-envelope-before.json
-== 契约 §0.2 错误信封 A/B（expect=before）@ 2026-11-10T17:44:08+0000
-binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/before  sha256 = c28c599d9be152d30e5f706a63e43f7bc498983e88bc0bfe20cc6f2ec6073347
+===== envelope-before @ 2026-11-10T17:52:35Z =====
+[cmd] python3 /worktrees/YS-QA/qa/evidence/fix-ab/ab_contract_envelope.py --binary /.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/bin/before --dsn postgres://yanshu_test:***@127.0.0.1:56377/yanshu_test?sslmode=disable --expect before --work /.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/env-before --json-out /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T175233Z-envelope-before.json
+== 契约 §0.2 错误信封 A/B（expect=before）@ 2026-11-10T17:52:35+0000
+binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runfinal/bin/before  sha256 = 69d8d5c63bfeb57025d1a43ab4c1e345a85fb59ec4bc5581cdc4e9f5e5c64a49
 
 -- 未被路由接住的请求 --
   404  GET    /v1/definitely-not-an-endpoint             未知路径
@@ -23,5 +23,5 @@ binary = /.octop/workspaces/0JXF1M/tmp/ab-round/runpos/bin/before  sha256 = c28c
 
 结论：4/4 条未被路由接住的请求**没有**错误信封（text/plain）→ 修前问题复现成功
 
-[json] /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T174406Z-envelope-before.json
+[json] /worktrees/YS-QA/qa/evidence/fix-ab/results/20261110T175233Z-envelope-before.json
 [exit=0] envelope-before

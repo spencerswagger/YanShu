@@ -15,7 +15,8 @@
 
 ## 怎么跑
 
-前置：一个可连的 PostgreSQL（脚本自己建/删独立 schema，不碰别的库）+ `TEST_DATABASE_URL`。
+前置：`go`（run_all 现编两版二进制）、`psql`（ab_common 直查）、一个可连的 PostgreSQL
+（脚本自己建/删独立 schema，不碰别的库）+ `TEST_DATABASE_URL`。
 
 ```sh
 # 一条命令：建两棵树 → 编二进制 → 跑三组 A/B（结果写 results/）
@@ -33,7 +34,7 @@ python3 qa/evidence/fix-ab/ab_index_lock_write.py --rows 600000
 退出码：0 = 与 `--expect` 相符；1 = 不符；2 = 环境/前置失败（BLOCKED）。
 `run_all.sh` 会聚合：**任何一项非 0 → 整体 exit 1**（`results/*.rc` 逐项记录；验证方式是
 把 `--after-ref/--envelope-after-ref/--guard-ref` 全换成 `origin/main`，整体必须非 0，
-留档见 `results/*-negative-run-rc.txt`）。
+留档见 `results/negative-run-rc.txt`）。
 每份脚本都会把结构化结果写成 JSON（含 `at` 时间戳、二进制 `sha256`、逐例原始状态码与
 错误名），可直接给评审看。
 

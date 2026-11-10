@@ -40,42 +40,47 @@
 ## 2. 每张合入后的最小回归（一条一项，可执行）
 
 前置（每张都先做）：`git fetch origin && git switch main && git pull --ff-only`，再合；
-合完在 main 的干净树上跑。
+合完在 main 的干净树上跑。下面每条都用子 shell，**不依赖上一条的 cwd**。
 
 ### #57 合入后
 
 ```sh
-cd server && go build ./... && go vet ./... && gofmt -l .        # 期望：无输出
-go test ./internal/store -run 'TestMigrationsCreateIndexesWithoutBlockingWrites|TestNoTxMigrationHasConcurrentIndex' -v
-go build -o ./yanshu-server ./cmd/yanshu-server                          # -migrate-only 用的二进制
-YANSHU_DATABASE_URL="$TEST_DATABASE_URL" ./yanshu-server -migrate-only   # 期望：9 份迁移全过
-YANSHU_DATABASE_URL="$TEST_DATABASE_URL" ./yanshu-server -migrate-only   # 期望：重跑幂等、不报错
+(cd server && go build ./... && go vet ./... && gofmt -l .)                # 期望：无输出
+(cd server && go test ./internal/store \
+  -run 'TestMigrationsCreateIndexesWithoutBlockingWrites|TestNoTxMigrationHasConcurrentIndex' -v)
+(cd server && go build -o ./yanshu-server ./cmd/yanshu-server)            # -migrate-only 要用的二进制
+(cd server && YANSHU_DATABASE_URL="$TEST_DATABASE_URL" ./yanshu-server -migrate-only)  # 9 份迁移全过
+(cd server && YANSHU_DATABASE_URL="$TEST_DATABASE_URL" ./yanshu-server -migrate-only)  # 重跑幂等
 ```
 
 ### #58 合入后
 
 ```sh
-qa/evidence/fix-ab/ab_contract_envelope.py --binary ./yanshu-server --expect after
-# 期望 4/4 信封（404 ROUTE_NOT_FOUND / 405 METHOD_NOT_ALLOWED，带 request_id）+ 两条对照组 PASS
-cd server && go test ./internal/httpapi \
-  -run 'TestUnroutedPathKeepsContractEnvelope|TestWrongMethodKeepsContractEnvelope|TestRoutedRequestsAreNotSwallowed' -v
-# 期望：3 条 --- PASS（少一条就是没跑到，`-run` 匹配不到会静默 exit 0）
+(cd server && go build -o ./yanshu-server ./cmd/yanshu-server)            # 重编，别用上一块的旧二进制
+qa/evidence/fix-ab/ab_contract_envelope.py --binary ./server/yanshu-server --expect after
+# 期望 4/4 信封（404 ROUTE_NOT_FOUND / 405 METHOD_NOT_ALLOWED，带 request_id）+ 2 条对照组 PASS
+(cd server && go test ./internal/httpapi -list 'Envelope|Fallback|Routed')   # 先核名字：名字变了 -run 会空转
+(cd server && go test ./internal/httpapi \
+  -run 'TestUnroutedPathKeepsContractEnvelope|TestWrongMethodKeepsContractEnvelope|TestHandlerWiresUnroutedFallback' -v)
+# 期望：3 条 --- PASS（-run 匹配不到时静默 exit 0，所以先 -list 再跑）
 ```
 
 ### #56 合入后
 
 ```sh
-qa/evidence/fix-ab/ab_terminal_410.py --binary ./yanshu-server --expect after
-# 期望 24/24 = 410 + 对应终态码；阴性对照仍是 401 AUTH_MISSING / AUTH_TOKEN_INVALID
-cd server && go test ./internal/httpapi -run 'Terminal|NonTerminal' -v
+qa/evidence/fix-ab/ab_terminal_410.py --binary ./server/yanshu-server --expect after
+# 期望 24/24 = 410 + 对应终态码；阴性对照 8 条仍是 401 AUTH_MISSING / AUTH_TOKEN_INVALID
+(cd server && go test ./internal/httpapi -run 'Terminal|NonTerminal' -v)
 ```
 
 ### 三张全合完（发版前）
 
 ```sh
-cd server && go build ./... && go vet ./... && gofmt -l . && go test ./...   # 真 PG：TEST_DATABASE_URL
-qa/evidence/fix-ab/run_all.sh --before-ref origin/main~3 --after-ref origin/main \
-  --envelope-after-ref origin/main --guard-ref origin/main
+(cd server && go build ./... && go vet ./... && gofmt -l . && go test ./...)   # 真 PG：TEST_DATABASE_URL
+(cd server && go build -o ./yanshu-server ./cmd/yanshu-server)
+qa/evidence/fix-ab/ab_contract_envelope.py --binary ./server/yanshu-server --expect after
+qa/evidence/fix-ab/ab_terminal_410.py --binary ./server/yanshu-server --expect after
+qa/evidence/fix-ab/ab_index_lock_write.py --rows 600000
 ```
 
 ## 3. 两处观察（不影响合入，供提交人决定）
