@@ -43,7 +43,14 @@ run_order() { # $1=名字 $2..=三个 head
   echo "--- 合后 build/vet ---"
   ( cd server && go build ./... && go vet ./... ) && echo "BUILD_VET_OK" || { echo "BUILD_VET_FAIL"; return 1; }
   echo "--- 合后 go test -count=1 ./...（$(cd server && go list ./... | wc -l) 包，-count=1 跳过缓存）---"
-  ( cd server && TEST_DATABASE_URL="$TEST_DATABASE_URL" go test -count=1 ./... 2>&1 ) | tail -20
+  # 不能 `go test | tail`：管道状态是 tail 的，测试红了也会被当成成功（复审 P1）。
+  ( cd server && TEST_DATABASE_URL="$TEST_DATABASE_URL" go test -count=1 ./... ) >"$WORK/$name-test.log" 2>&1
+  trc=$?
+  tail -20 "$WORK/$name-test.log"
+  if [ "$trc" -ne 0 ]; then
+    echo "GO_TEST_FAIL rc=$trc（完整日志 $WORK/$name-test.log）"
+    return 1
+  fi
   return 0
 }
 
@@ -59,6 +66,10 @@ B_TREE=$(git rev-parse B_57_56_58^{tree} 2>/dev/null || echo "?")
 echo "== 结论 =="
 echo "A tree=$A_TREE"
 echo "B tree=$B_TREE"
-[ "$A_TREE" = "$B_TREE" ] && echo "两序合并结果完全相同（tree SHA 一致）" || echo "两序结果不同（需人工看）"
+if [ "$A_TREE" = "$B_TREE" ]; then
+  echo "两序合并结果完全相同（tree SHA 一致）"
+else
+  echo "两序结果不同（需人工看）"; rc_all=1
+fi
 [ "$rc_all" -eq 0 ] && echo "两序皆可行" || echo "至少一序有问题（见上）"
 exit "$rc_all"

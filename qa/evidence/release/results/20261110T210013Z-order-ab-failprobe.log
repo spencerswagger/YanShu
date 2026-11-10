@@ -1,0 +1,27 @@
+===== ORDER A_57_58_56 base=bf84457  2026-11-10T21:00:04Z =====
+--- merge f941589 rc=0 unmerged=[]
+--- merge 760dfdb rc=0 unmerged=[]
+--- merge 884fbe4 rc=0 unmerged=[]
+--- tree SHA: 79563cfefe89ef98a725180fbb0a8f48dbabe037 ---
+--- 合后 build/vet ---
+BUILD_VET_OK
+--- 合后 false（15 包，-count=1 跳过缓存）---
+GO_TEST_FAIL rc=1（完整日志 /.octop/workspaces/0JXF1M/tmp/ordfail2/A_57_58_56-test.log）
+ORDER A_57_58_56: FAIL
+
+===== ORDER B_57_56_58 base=bf84457  2026-11-10T21:00:07Z =====
+--- merge f941589 rc=0 unmerged=[]
+--- merge 884fbe4 rc=0 unmerged=[]
+--- merge 760dfdb rc=0 unmerged=[]
+--- tree SHA: 79563cfefe89ef98a725180fbb0a8f48dbabe037 ---
+--- 合后 build/vet ---
+BUILD_VET_OK
+--- 合后 false（15 包，-count=1 跳过缓存）---
+GO_TEST_FAIL rc=1（完整日志 /.octop/workspaces/0JXF1M/tmp/ordfail2/B_57_56_58-test.log）
+ORDER B_57_56_58: FAIL
+
+== 结论 ==
+A tree=79563cfefe89ef98a725180fbb0a8f48dbabe037
+B tree=79563cfefe89ef98a725180fbb0a8f48dbabe037
+两序合并结果完全相同（tree SHA 一致）
+至少一序有问题（见上）
