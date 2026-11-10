@@ -35,11 +35,7 @@ func openWithSessionTZ(t *testing.T, name, tz string) *store.Store {
 	}
 	t.Cleanup(st.Close)
 	// 后注册先执行：DROP 用还没关的连接池。
-	t.Cleanup(func() {
-		dropCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_, _ = st.Pool().Exec(dropCtx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
-	})
+	t.Cleanup(func() { testutil.DropSchemaQuietly(schema, st) })
 	if _, err := st.Pool().Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE"); err != nil {
 		t.Fatalf("drop schema: %v", err)
 	}
