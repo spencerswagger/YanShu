@@ -17,6 +17,8 @@
   正确的当前内核判成"不可交付"。）
 - 检查：`python3 qa/evidence/check_server_kernel.py --server-dir <源码根> --repo <仓库根>
   --vectors-dir <向量目录>`；期望 sha 由脚本从 `verifier.go` 首条**推导**，不在脚本里另写一份。
+  白名单写成有序切片（`SHA256: "<hex>"`，带 `Bytes`/`Role`）或旧 map 字面量都认；**一条都解析不到
+  时脚本直接 BLOCKED（exit 2），不回落常量** —— 要指定一次期望值就用 `--expect-sha <hex>`。
 - 人读的冻结记录在 `docs/CRYPTO-PACK.md` §18.2。**两者不一致时先修文档**（不要拿过期文档当门槛，
   也不要把 `verifier.go` 改成迁就文档）。
 
