@@ -115,6 +115,39 @@ func TestAckTerminalStatePrecedesLease(t *testing.T) {
 	}
 }
 
+// TestAckTerminalBeatsPartyCheck 钉住「410 先于 403」（ADR-0005 §2.1）：
+// 非当事人（这里是发送方）持**本传输的有效租约**在终态上 ack，必须回 410 而不是 403 NOT_TRANSFER_PARTY。
+// 没有这条用例的话，谁按 §10「非接收方调 ack → 403」把顺序改回去都不会红。
+func TestAckTerminalBeatsPartyCheck(t *testing.T) {
+	e := newEnv(t, "")
+	sender, _ := e.register("发送方")
+	recipient, _ := e.register("接收方")
+	f := newFixture()
+	tr := e.readyTransfer(sender, recipient, f)
+
+	dl := e.openLease(tr.TransferID) // 先拿到本传输的有效租约，再撤回
+	if resp := e.do(http.MethodPost, spec.RevokePath(tr.TransferID), nil,
+		e.authHeaders(spec.PurposeTransferRevoke, sender)); resp.status != http.StatusOK {
+		t.Fatalf("revoke: %d %s", resp.status, resp.body)
+	}
+
+	for _, who := range []struct{ name, code string }{
+		{"非当事人（发送方）持有效租约", sender},
+		{"当事人（接收方）持有效租约", recipient},
+	} {
+		resp := e.do(http.MethodPost, spec.AckPath(tr.TransferID), nil, e.ackHeaders(who.code, dl))
+		if resp.status != http.StatusGone {
+			t.Fatalf("%s：终态下 ack 应回 410（§1.7.4），实测 %d %s", who.name, resp.status, resp.body)
+		}
+		if got := decodeErrorCode(t, resp); got != spec.ErrTransferRevoked {
+			t.Fatalf("%s：应回 TRANSFER_REVOKED，实测 %q", who.name, got)
+		}
+	}
+	if got := e.downloadCount(tr.TransferID); got != 0 {
+		t.Fatalf("终态下被拒的 ack 不得计数，download_count = %d", got)
+	}
+}
+
 // TestAckConsumedReplayStaysIdempotent 锁住 §1.7.4 唯一的那条例外：
 // §7.5「同一 `download_id` 的重复 ack 只计一次**并返回 200**」——它不是错误路径，
 // 所以不能被"终结态一律 410"吞掉；反之**换一个 download_id**（哪怕格式合法）就是错误路径 → 410。
