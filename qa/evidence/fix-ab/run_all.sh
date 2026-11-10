@@ -4,18 +4,24 @@
 #
 # 用法：
 #   qa/evidence/fix-ab/run_all.sh \
-#     --before-ref origin/main \
-#     --after-ref  origin/fix/terminal-410-before-token \
-#     [--envelope-after-ref origin/fix/<契约信封兜底分支>] \
-#     [--guard-ref origin/fix/migration-index-lock-guard] \
+#     --before-ref bf84457 \                  # 修前基线：必须写死"合入前"的 sha（见下）
+#     --after-ref  7385f8b \                  # #56 合入点（终结态 410）
+#     [--envelope-after-ref 760dfdb] \        # #58 分支 head（合入后换成合入点 sha）
+#     [--guard-ref 9efc88f] \                 # #57 合入点（建索引门禁）
 #     [--rows 600000] [--work /tmp/fix-ab-run] [--dsn "$TEST_DATABASE_URL"]
 #
-# 退出码：0 全部符合预期；1 有不符合；2 环境失败（BUILD/PG）。
+# 关于 --before-ref：**不要用 origin/main**。#56/#57 已合入，main 本身就是"修后"，
+# 拿它当 before 会让 A/B 反着判。合入前的最后一个 main 是 bf84457（#55 合入点），
+# 也是本脚本的默认值；脚本会拦住"before 与任一 after 指向同一 commit"的调用。
+#
+# 退出码：0 全部符合预期；1 有不符合；2 环境失败（BUILD/PG/ref）。
 set -e
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../../.." && pwd)
-BEFORE=origin/main
+# 修前基线不是 origin/main：#56（7385f8b）/ #57（9efc88f）已合入，main 本身已是"修后"。
+# bf84457 = #55 合入点 = 这两张合入前的最后一个 main。
+BEFORE=bf84457
 AFTER=
 ENV_AFTER=
 GUARD_REF=
@@ -32,7 +38,7 @@ while [ $# -gt 0 ]; do
     --rows) ROWS=$2; shift 2 ;;
     --work) WORK=$2; shift 2 ;;
     --dsn) DSN=$2; shift 2 ;;
-    -h|--help) sed -n '1,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '/^set -e$/q;p' "$0"; exit 0 ;;
     *) echo "未知参数：$1" >&2; exit 2 ;;
   esac
 done
@@ -42,6 +48,29 @@ OUT=$HERE/results
 mkdir -p "$OUT" "$WORK/trees" "$WORK/bin"
 
 [ -n "$DSN" ] || { echo "[BLOCKED] 需要 --dsn 或 TEST_DATABASE_URL（真 PG）" >&2; exit 2; }
+
+resolve() { # $1=ref → 打印 commit sha；解析不到就 BLOCKED
+  git -C "$REPO" rev-parse --verify --quiet "$1^{commit}" 2>/dev/null || {
+    echo "[BLOCKED] 解析不到 ref/commit：$1" >&2; exit 2; }
+}
+BEFORE_SHA=$(resolve "$BEFORE")
+AFTER_SHA=
+ENV_AFTER_SHA=
+GUARD_SHA=
+if [ -n "$AFTER" ]; then AFTER_SHA=$(resolve "$AFTER"); fi
+if [ -n "$ENV_AFTER" ]; then ENV_AFTER_SHA=$(resolve "$ENV_AFTER"); fi
+if [ -n "$GUARD_REF" ]; then GUARD_SHA=$(resolve "$GUARD_REF"); fi
+
+# 防呆（复审要求）：before 与任一 after 指向同一 commit 时，A/B 就是拿一份树自证，直接停。
+for pair in "after=$AFTER_SHA" "envelope-after=$ENV_AFTER_SHA" "guard=$GUARD_SHA"; do
+  name=${pair%%=*}; sha=${pair#*=}
+  if [ -n "$sha" ] && [ "$sha" = "$BEFORE_SHA" ]; then
+    echo "[BLOCKED] --before-ref 与 --$name 指向同一 commit（$BEFORE_SHA）→ A/B 无意义" >&2
+    echo "           before 必须是修复合入前的树，例如 bf84457（#55 合入点）" >&2
+    exit 2
+  fi
+done
+echo "[refs] before=$BEFORE($BEFORE_SHA) after=${AFTER_SHA:--} envelope-after=${ENV_AFTER_SHA:--} guard=${GUARD_SHA:--}"
 
 build() { # $1=ref  $2=name
   local ref=$1 name=$2 dir=$WORK/trees/$2
@@ -87,7 +116,7 @@ if [ -n "$ENV_AFTER" ]; then
     --binary "$WORK/bin/env-after" --dsn "$DSN" --expect after --work "$WORK/env-after" \
     --json-out "$OUT/$STAMP-envelope-after.json" || rc_env=$?
 else
-  echo "===== envelope-after SKIP（未给 --envelope-after-ref：契约信封兜底分支还没推）=====" | \
+  echo "===== envelope-after SKIP（未给 --envelope-after-ref：只跑信封修前基线，出不了 A/B 结论）=====" | \
     tee "$OUT/$STAMP-envelope-after.txt"
 fi
 

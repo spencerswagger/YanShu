@@ -4,7 +4,7 @@
 可复跑证据 —— 同一份脚本打「修前」和「修后」两棵树，只按 `docs/API.md` 的线格式与真 PG
 的行为判定。
 
-| 脚本 | 守的规则 | 修前（main） | 修后 |
+| 脚本 | 守的规则 | 修前（`bf84457`，2026-11-10 的 main） | 修后 |
 |---|---|---|---|
 | `ab_contract_envelope.py` | API.md §0.2「所有非 2xx 响应统一错误信封」 | 未路由的 404/405 是 `text/plain`，无 `error.code`/`request_id` | 404 `ROUTE_NOT_FOUND` / 405 `METHOD_NOT_ALLOWED` 的 JSON 信封 |
 | `ab_terminal_410.py` | API.md §1.7.4「终结态 410 先于凭据 401」 | 24 例里 0 例 410（`401 AUTH_MISSING` / `AUTH_TOKEN_INVALID` / `409`） | 24/24 都是 410 + 对应终态码 |
@@ -20,21 +20,29 @@
 
 ```sh
 # 一条命令：建两棵树 → 编二进制 → 跑三组 A/B（结果写 results/）
+#
+# --before-ref 必须写死"修复合入前"的 sha。别写 origin/main：#56 已于 2026-11-10 19:02Z 合入，
+# main 现在本身就是"修后"，before==after 会把 A/B 反着判（run_all.sh 已加保护，直接 exit 2）。
+# 快照（2026-11-10 19:22Z）：before=bf84457 / 410 修后=7385f8b / 信封修后=760dfdb / 门禁=9efc88f
 qa/evidence/fix-ab/run_all.sh \
-  --before-ref origin/main \
-  --after-ref  origin/fix/terminal-410-before-token \
-  --envelope-after-ref ''            # 契约信封兜底分支还没推 → 留空，只跑修前基线并标 SKIP
-  --guard-ref origin/fix/migration-index-lock-guard   # 防回退门禁（PR #57）+ 变异体反向验证
+  --before-ref bf84457 \
+  --after-ref  7385f8b \
+  --envelope-after-ref 760dfdb \
+  --guard-ref  9efc88f
 
 # 或单跑某一份
 python3 qa/evidence/fix-ab/ab_terminal_410.py --binary bin/yanshu-server --expect after
 python3 qa/evidence/fix-ab/ab_index_lock_write.py --rows 600000
 ```
 
+三组实验各自"修前/修后"该用哪棵树、以及每张 PR 合入后要跑什么，见 `MERGE-ORDER.md` §4。
+
 退出码：0 = 与 `--expect` 相符；1 = 不符；2 = 环境/前置失败（BLOCKED）。
-`run_all.sh` 会聚合：**任何一项非 0 → 整体 exit 1**（`results/*.rc` 逐项记录；验证方式是
-把 `--after-ref/--envelope-after-ref/--guard-ref` 全换成 `origin/main`，整体必须非 0，
-留档见 `results/negative-run-rc.txt`）。
+`run_all.sh` 会聚合：**任何一项非 0 → 整体 exit 1**（`results/*.rc` 逐项记录）。验证聚合器本身
+不是假绿的办法：把 before/after 角色对调（`--before-ref 7385f8b --after-ref bf84457`，两棵树都真实
+存在但角色反了）或让 `--dsn` 连一个不存在的库，整体必须非 0。留档见 `results/negative-run-rc.txt`
+（那一轮三条 after 都写 `origin/main`，因为当时 main（=`bf84457`）还是"修前"；这个写法现在不成立，
+文件末尾有补注）。
 每份脚本都会把结构化结果写成 JSON（含 `at` 时间戳、二进制 `sha256`、逐例原始状态码与
 错误名），可直接给评审看。
 

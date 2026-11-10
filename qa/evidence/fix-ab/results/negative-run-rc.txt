@@ -14,3 +14,12 @@ run_all 总退出码：1（期望非 0；修复前这里是 0，因为 rc 取的
 
 各实验结论/失败行：
 [FAIL] 有实验不符合预期（见上面 exit!=0 的项与 .rc 文件）
+
+--- 补注（2026-11-10 19:25Z，合入状态变化后追加，未改动上面的原始记录）---
+那一轮三条 after 都写 origin/main 是成立的，因为当时 main = bf84457，还是"修前"
+（#56 到 19:02Z 才合入）。现在 main 本身带着 410 修复，这个写法不再成立
+（run_all.sh 也会拦掉"before 与任一 after 同 commit"：直接 BLOCKED / exit 2）。
+要再复现一次"整体非 0"，把 before/after 反过来即可（两棵树都真实存在、只是角色互换）：
+  run_all.sh --before-ref 7385f8b --after-ref bf84457 --rows 100000
+  # 预期：terminal-before / terminal-after 都红（树与 --expect 反了）→ 整体 exit 1
+或把 --dsn 指向连不上的库（各项 exit 2，整体 exit 1）。
