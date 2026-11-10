@@ -1,12 +1,12 @@
 {
   "title": "干净环境真实收发自测",
-  "subtitle": "ref=origin/main work=/.octop/workspaces/0JXF1M/tmp/clean-run2 db=yanshu_selftest_20261110t191701z at=2026-11-10T19:17:01+0000",
-  "at": "2026-11-10T19:17:17+0000",
+  "subtitle": "ref=origin/main work=/.octop/workspaces/0JXF1M/tmp/cf1 db=yanshu_selftest_20261110t193941z at=2026-11-10T19:39:41+0000",
+  "at": "2026-11-10T19:39:55+0000",
   "rows": [
     {
       "name": "纯净检出（无 .git、空数据目录）",
       "kind": "PASS",
-      "evidence": "commit=1f6b9e05a51a files=498"
+      "evidence": "commit=200d26b350c3 files=498"
     },
     {
       "name": "新库是空的（迁移前 public 无表）",
@@ -16,12 +16,17 @@
     {
       "name": "secrets 首次生成（0600，hex）",
       "kind": "PASS",
-      "evidence": "sha256={'token_secret': 'aa5cb46a401e', 'pg_password': 'c0b33330cd72'} mode={'token_secret': '0o600', 'pg_password': '0o600'}"
+      "evidence": "sha256={'token_secret': '1c1d52e82e07', 'pg_password': '438f96c2eb92'} mode={'token_secret': '0o600', 'pg_password': '0o600'}"
     },
     {
       "name": "首次启动（空数据目录 + 新库，迁移自动落库）",
       "kind": "PASS",
-      "evidence": "healthz=200 log=/.octop/workspaces/0JXF1M/tmp/clean-run2/logs/selftest-server.log"
+      "evidence": "healthz=200 log=/.octop/workspaces/0JXF1M/tmp/cf1/logs/selftest-server.log"
+    },
+    {
+      "name": "上传完成后密文确实落盘（ack 前）",
+      "kind": "PASS",
+      "evidence": "7c/7c71d8d92b314b255f68f7f0eabac8eb exists=True"
     },
     {
       "name": "真收真发 A：prelude+3 块逐字节一致 + ack→CONSUMED",
@@ -36,7 +41,7 @@
     {
       "name": "真收真发 B：留一条 READY 供 down/up 后比对",
       "kind": "PASS",
-      "evidence": "tid=dd9b3ae03df8 sha={'prelude': '88e785f8ea', 'chunk0': '041a1738ac'}"
+      "evidence": "tid=e815f8d7aaa7 sha={'prelude': '88e785f8ea', 'chunk0': '041a1738ac'}"
     },
     {
       "name": "契约 §1.7.4：终结态上传必须 410（且不返回 401）",
@@ -56,7 +61,7 @@
     {
       "name": "建索引期间写入不被阻塞（普通 vs CONCURRENTLY 实测）",
       "kind": "PASS",
-      "evidence": "普通建索引 1199ms/写最长 1144.9ms（>300ms 1 条）；CONCURRENTLY 1568ms/写最长 85.0ms"
+      "evidence": "普通建索引 1492ms/写最长 1447.3ms（>300ms 1 条）；CONCURRENTLY 1428ms/写最长 69.4ms"
     },
     {
       "name": "down：进程正常退出",
@@ -66,7 +71,7 @@
     {
       "name": "down && up 后 secrets sha256 不变",
       "kind": "PASS",
-      "evidence": "token=aa5cb46a401e… pg=c0b33330cd72…"
+      "evidence": "token=1c1d52e82e07… pg=438f96c2eb92…"
     },
     {
       "name": "重启后取回同一密文 sha256 不变",
@@ -74,21 +79,20 @@
       "evidence": "before=88e785f8ea… after=88e785f8ea…"
     },
     {
-      "name": "重启后 upload_token 仍有效（TOKEN_SECRET 真的没换）",
+      "name": "重启后旧 upload_token 仍可用（凭据不因重启失效）",
       "kind": "PASS",
-      "evidence": "status=200"
+      "evidence": "status=200（secret 不作验签，密钥不变见上行）"
     }
   ],
   "notes": [
-    "工作目录=/.octop/workspaces/0JXF1M/tmp/clean-run2（已删）　db=yanshu_selftest_20261110t191701z",
-    "binary sha256=baa50ce5073952f70d35777c897b4653d87706ca83a0baa0c52ff96fc5b3ec8d"
+    "binary sha256=2813db1f564eeceb8b2731ee86b2ba55a94d6fcae4bbbc26ee305d4db24290b5"
   ],
   "raw": {
     "ref": "origin/main",
-    "commit": "1f6b9e05a51a5aea9bbee52f8fed0cae530f9d3d",
-    "binary_sha256": "baa50ce5073952f70d35777c897b4653d87706ca83a0baa0c52ff96fc5b3ec8d",
+    "commit": "200d26b350c34c5d3b7e163a381fa78d72473f03",
+    "binary_sha256": "2813db1f564eeceb8b2731ee86b2ba55a94d6fcae4bbbc26ee305d4db24290b5",
     "transfer_a": {
-      "transfer_id": "5fddf3219929265e8f1389eb3236e0de",
+      "transfer_id": "7c71d8d92b314b255f68f7f0eabac8eb",
       "sha256": [
         "88e785f8ea2039c6d181b4f501ac3f4458b904dea280fe66f2d590d7c098db25",
         "041a1738aca218435e78de047281d34e6ed4791473ba4a950effa0294093cfad",
@@ -97,7 +101,7 @@
       ]
     },
     "transfer_b": {
-      "transfer_id": "dd9b3ae03df86209b1a767a532c18fd6",
+      "transfer_id": "e815f8d7aaa728e0a6b03cc2aafb1acc",
       "sha256_before": {
         "prelude": "88e785f8ea2039c6d181b4f501ac3f4458b904dea280fe66f2d590d7c098db25",
         "chunk0": "041a1738aca218435e78de047281d34e6ed4791473ba4a950effa0294093cfad"
@@ -109,39 +113,35 @@
     },
     "index_lock": {
       "base": {
-        "n": 25,
-        "max_ms": 78.4,
-        "p50_ms": 71.1,
+        "n": 23,
+        "max_ms": 77.8,
+        "p50_ms": 72.0,
         "over_300ms": 0
       },
       "plain": {
         "n": 2,
-        "max_ms": 1144.9,
-        "p50_ms": 609.3,
+        "max_ms": 1447.3,
+        "p50_ms": 759.4,
         "over_300ms": 1
       },
       "concurrent": {
-        "n": 23,
-        "max_ms": 85.0,
-        "p50_ms": 44.1,
+        "n": 21,
+        "max_ms": 69.4,
+        "p50_ms": 47.2,
         "over_300ms": 0
       },
-      "a_build_ms": 1199.0,
-      "b_build_ms": 1567.8,
+      "a_build_ms": 1491.8,
+      "b_build_ms": 1428.1,
       "writer_errors": []
     },
     "secrets": {
       "before": {
-        "token_secret": "aa5cb46a401e84dd969c434403ca39a738c576a22aa33fc07c9c20f7c8fc27e8",
-        "pg_password": "c0b33330cd7272c3b807becdde680631454473e992bcd1463e09b2da3b0d8d30"
-      },
-      "down": {
-        "token_secret": "aa5cb46a401e84dd969c434403ca39a738c576a22aa33fc07c9c20f7c8fc27e8",
-        "pg_password": "c0b33330cd7272c3b807becdde680631454473e992bcd1463e09b2da3b0d8d30"
+        "token_secret": "1c1d52e82e07da1ffead1575625b167c27be165f3c6c52fe83ae34f7f0fd00e8",
+        "pg_password": "438f96c2eb9209134206c502d499a3648879dac27422d7d127a6a173b26e58bc"
       },
       "up": {
-        "token_secret": "aa5cb46a401e84dd969c434403ca39a738c576a22aa33fc07c9c20f7c8fc27e8",
-        "pg_password": "c0b33330cd7272c3b807becdde680631454473e992bcd1463e09b2da3b0d8d30"
+        "token_secret": "1c1d52e82e07da1ffead1575625b167c27be165f3c6c52fe83ae34f7f0fd00e8",
+        "pg_password": "438f96c2eb9209134206c502d499a3648879dac27422d7d127a6a173b26e58bc"
       }
     }
   },

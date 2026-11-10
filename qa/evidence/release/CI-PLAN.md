@@ -36,6 +36,8 @@ jobs:
       TEST_DATABASE_URL: postgres://yanshu:pg@127.0.0.1:5432/yanshu_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # negative_checks.sh 要 rev-parse origin/main；浅克隆没有它
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27.x"
@@ -56,6 +58,8 @@ jobs:
           cd server
           go test ./internal/httpapi -run 'Terminal|NonTerminal' -v
       - name: 变异必红（证明门禁有牙）
+        # 脚本会自建隔离库 yanshu_neg_* 再删掉（角色需要 CREATEDB）；
+        # 所以 service 的 POSTGRES_USER 用默认超级用户，或给 yanshu 角色 CREATEDB。
         run: qa/evidence/release/negative_checks.sh origin/main /tmp/neg
       - name: 干净环境收发冒烟（跳过建索引，约 40s）
         run: |

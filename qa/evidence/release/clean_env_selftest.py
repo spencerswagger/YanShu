@@ -86,6 +86,49 @@ def dsn_with_db(dsn: str, db: str) -> str:
     return urllib.parse.urlunsplit((u.scheme, u.netloc, "/" + db, u.query, ""))
 
 
+def init_secrets(d: Path) -> dict[str, Path]:
+    """与 compose 的 `init` 容器同口径：文件不存在或为空才生成（hex、0600）。
+
+    每次 `up` 之前都跑一遍 —— 这样"有人把 `[ -s ]` 判断去掉 → up 重新生成密钥"这种真实
+    回退才会被测试看见；只在首次生成、之后不再执行 init 的写法，down/up 那两条断言结构上
+    不可能红（Owl 复审 P1）。
+    """
+    out = {}
+    for name, nbytes in (("token_secret", 32), ("pg_password", 24)):
+        f = d / name
+        if (not f.exists()) or f.stat().st_size == 0:
+            f.write_text(os.urandom(nbytes).hex())
+            f.chmod(0o600)
+        out[name] = f
+    return out
+
+
+def build_env(port: int, keys: dict[str, Path], dsn_db: str, blobs: Path, logs: Path) -> dict:
+    """每次启动都**从文件重新读** secret —— 否则测的是"我把同一个值喂给了两个进程"。"""
+    return dict(os.environ,
+                YANSHU_ENV="test", YANSHU_VERIFIER="stub-allow",
+                YANSHU_ADDR=f"127.0.0.1:{port}",
+                YANSHU_DATABASE_URL=dsn_db,
+                YANSHU_BLOB_DIR=str(blobs),
+                YANSHU_LOG_DIR=str(logs),
+                YANSHU_TOKEN_SECRET=keys["token_secret"].read_text().strip(),
+                YANSHU_TOKEN_EPOCH="1",
+                YANSHU_SWEEP_INTERVAL="1s",
+                _HEALTH=f"http://127.0.0.1:{port}/healthz")
+
+
+def unsafe_work(p: Path) -> str:
+    """防手滑：`--work` 会被 rmtree，绝不允许指向 /、家目录、仓库本身或其父目录。"""
+    p = p.resolve()
+    if p in (Path("/"), Path("/tmp"), Path.home(), REPO):
+        return "禁区路径"
+    if p == REPO or REPO in p.parents:
+        return "不能在工作树内删"
+    if len(p.parts) < 3:
+        return "路径太浅（至少两段）"
+    return ""
+
+
 class Report:
     def __init__(self, title: str, subtitle: str = ""):
         self.title, self.subtitle = title, subtitle
@@ -104,8 +147,10 @@ class Report:
 
     def emit(self, json_out: str | None) -> int:
         bad = [r for r in self.rows if r[1] == "FAIL"]
+        warn = [r for r in self.rows if r[1] == "WARN"]
+        ok = [r for r in self.rows if r[1] == "PASS"]
         print("-" * 96)
-        print(f"{len(self.rows) - len(bad)}/{len(self.rows)} 通过　结论："
+        print(f"PASS {len(ok)}　WARN(SKIP) {len(warn)}　FAIL {len(bad)}　共 {len(self.rows)} 项　结论："
               + ("PASS" if not bad else "FAIL"))
         if json_out:
             Path(json_out).parent.mkdir(parents=True, exist_ok=True)
@@ -242,6 +287,8 @@ def main(argv=None) -> int:
     ap.add_argument("--skip-index", action="store_true")
     ap.add_argument("--skip-restart", action="store_true")
     ap.add_argument("--keep", action="store_true", help="保留工作目录与新库（排障用）")
+    ap.add_argument("--selftest-break-keys", action="store_true",
+                    help="自检用：down 之后偷偷换掉 token_secret，验证「secrets sha256 不变」会红")
     ap.add_argument("--json-out", default=None)
     args = ap.parse_args(argv)
 
@@ -254,203 +301,207 @@ def main(argv=None) -> int:
             return EXIT_BLOCKED
 
     work = Path(args.work).resolve()
+    if why := unsafe_work(work):
+        print(f"[BLOCKED] --work {work} 不允许（{why}）", file=sys.stderr)
+        return EXIT_BLOCKED
+
     src = work / "src"
     secrets = work / "secrets"
     blobs, logs, bindir = work / "blobs", work / "logs", work / "bin"
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     db = f"yanshu_selftest_{stamp.lower()}"
 
-    rep = Report("干净环境真实收发自测",
-                 f"ref={args.ref} work={work} db={db} at={now()}")
-
-    if work.exists() and not args.keep:
-        shutil.rmtree(work)
-    for d in (src, secrets, blobs, logs, bindir):
-        d.mkdir(parents=True, exist_ok=True)
-
-    # 0) 纯净检出（git archive：没有 .git、没有构建产物）
+    rep = Report("干净环境真实收发自测", f"ref={args.ref} work={work} db={db} at={now()}")
+    srv: Proc | None = None
+    db_created = False
     try:
-        rev = subprocess.run(["git", "-C", str(REPO), "rev-parse", args.ref],
-                             capture_output=True, text=True, check=True).stdout.strip()
-    except subprocess.CalledProcessError as e:
-        print(f"[BLOCKED] 取不到 {args.ref}：{e}", file=sys.stderr)
-        return EXIT_BLOCKED
-    p1 = subprocess.Popen(["git", "-C", str(REPO), "archive", rev], stdout=subprocess.PIPE)
-    p2 = subprocess.Popen(["tar", "-x", "-C", str(src)], stdin=p1.stdout)
-    p1.stdout.close()
-    p2.communicate()
-    if p1.wait() != 0 or p2.returncode != 0:
-        print("[BLOCKED] git archive 失败（ref 不存在？）", file=sys.stderr)
-        return EXIT_BLOCKED
-    rep.raw["ref"], rep.raw["commit"] = args.ref, rev
-    n_files = sum(1 for _ in src.rglob("*") if _.is_file())
-    rep.add("纯净检出（无 .git、空数据目录）",
-            not (src / ".git").exists() and n_files > 50,
-            f"commit={rev[:12]} files={n_files}")
+        if work.exists() and not args.keep:
+            shutil.rmtree(work)
+        for d in (src, secrets, blobs, logs, bindir):
+            d.mkdir(parents=True, exist_ok=True)
 
-    # 1) 新库 + 空 blob/日志目录
-    rc, out = psql(args.dsn, f'CREATE DATABASE "{db}"')
-    if rc != 0:
-        print(f"[BLOCKED] 建库失败：{out}", file=sys.stderr)
-        return EXIT_BLOCKED
-    dsn_db = dsn_with_db(args.dsn, db)
-    rc, n = psql(dsn_db, "select count(*) from information_schema.tables where table_schema='public'")
-    rep.add("新库是空的（迁移前 public 无表）", rc == 0 and n == "0", f"tables={n}")
+        # 0) 纯净检出
+        try:
+            rev = subprocess.run(["git", "-C", str(REPO), "rev-parse", args.ref],
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        except subprocess.CalledProcessError as e:
+            print(f"[BLOCKED] 取不到 {args.ref}：{e}", file=sys.stderr)
+            return EXIT_BLOCKED
+        p1 = subprocess.Popen(["git", "-C", str(REPO), "archive", rev], stdout=subprocess.PIPE)
+        p2 = subprocess.Popen(["tar", "-x", "-C", str(src)], stdin=p1.stdout)
+        p1.stdout.close()
+        p2.communicate()
+        if p1.wait() != 0 or p2.returncode != 0:
+            print("[BLOCKED] git archive 失败（ref 不存在？）", file=sys.stderr)
+            return EXIT_BLOCKED
+        rep.raw["ref"], rep.raw["commit"] = args.ref, rev
+        n_files = sum(1 for _ in src.rglob("*") if _.is_file())
+        rep.add("纯净检出（无 .git、空数据目录）",
+                not (src / ".git").exists() and n_files > 50,
+                f"commit={rev[:12]} files={n_files}")
 
-    # 2) 密钥文件（模拟 compose 的 init：不存在才生成，0600）
-    key_files = {}
-    for name, nbytes in (("token_secret", 32), ("pg_password", 24)):
-        f = secrets / name
-        if not f.exists():
-            f.write_text(os.urandom(nbytes).hex())
-            f.chmod(0o600)
-        key_files[name] = f
-    key_sha1 = {k: sha256_file(p) for k, p in key_files.items()}
-    modes = {k: oct(p.stat().st_mode & 0o777) for k, p in key_files.items()}
-    rep.add("secrets 首次生成（0600，hex）",
-            all(modes[k] == "0o600" for k in modes)
-            and all(re.fullmatch(r"[0-9a-f]+", p.read_text()) for p in key_files.values()),
-            f"sha256={ {k: v[:12] for k, v in key_sha1.items()} } mode={modes}")
+        # 1) 新库
+        rc, out = psql(args.dsn, f'CREATE DATABASE "{db}"')
+        if rc != 0:
+            print(f"[BLOCKED] 建库失败：{out}", file=sys.stderr)
+            return EXIT_BLOCKED
+        db_created = True
+        dsn_db = dsn_with_db(args.dsn, db)
+        rc, n = psql(dsn_db, "select count(*) from information_schema.tables where table_schema='public'")
+        rep.add("新库是空的（迁移前 public 无表）", rc == 0 and n == "0", f"tables={n}")
 
-    # 3) 构建 + 起服务
-    binpath = bindir / "yanshu-server"
-    b = subprocess.run(["go", "build", "-o", str(binpath), "./cmd/yanshu-server"],
-                       cwd=str(src / "server"), capture_output=True, text=True)
-    if b.returncode != 0:
-        print(f"[BLOCKED] 构建失败：{b.stderr[-400:]}", file=sys.stderr)
-        return EXIT_BLOCKED
-    bin_sha = sha256_file(binpath)
-    rep.raw["binary_sha256"] = bin_sha
-    port = free_port()
-    env = dict(os.environ,
-               YANSHU_ENV="test", YANSHU_VERIFIER="stub-allow",
-               YANSHU_ADDR=f"127.0.0.1:{port}",
-               YANSHU_DATABASE_URL=dsn_db,
-               YANSHU_BLOB_DIR=str(blobs),
-               YANSHU_LOG_DIR=str(logs),
-               YANSHU_TOKEN_SECRET=key_files["token_secret"].read_text().strip(),
-               YANSHU_TOKEN_EPOCH="1",
-               YANSHU_SWEEP_INTERVAL="1s",
-               _HEALTH=f"http://127.0.0.1:{port}/healthz")
-    srv = Proc(binpath, env, src / "server", logs / "selftest-server.log")
-    ok = srv.start()
-    rep.add("首次启动（空数据目录 + 新库，迁移自动落库）", ok,
-            f"healthz={'200' if ok else 'FAIL'} log={srv.log}")
-    if not ok:
-        rep.emit(args.json_out)
-        return EXIT_FAIL
+        # 2) 密钥（compose init 同口径）
+        keys = init_secrets(secrets)
+        key_sha1 = {k: sha256_file(p) for k, p in keys.items()}
+        modes = {k: oct(p.stat().st_mode & 0o777) for k, p in keys.items()}
+        rep.add("secrets 首次生成（0600，hex）",
+                all(modes[k] == "0o600" for k in modes)
+                and all(re.fullmatch(r"[0-9a-f]+", p.read_text()) for p in keys.values()),
+                f"sha256={ {k: v[:12] for k, v in key_sha1.items()} } mode={modes}")
 
-    base = f"http://127.0.0.1:{port}"
-    c = Y.Client(base)
-    sender, _ = c.register_pair("clean-sender", "发送方")
-    recipient, _ = c.register_pair("clean-recipient", "接收方")
+        # 3) 构建 + 首次启动（env 从文件读）
+        binpath = bindir / "yanshu-server"
+        b = subprocess.run(["go", "build", "-o", str(binpath), "./cmd/yanshu-server"],
+                           cwd=str(src / "server"), capture_output=True, text=True)
+        if b.returncode != 0:
+            print(f"[BLOCKED] 构建失败：{b.stderr[-400:]}", file=sys.stderr)
+            return EXIT_BLOCKED
+        bin_sha = sha256_file(binpath)
+        rep.raw["binary_sha256"] = bin_sha
+        port = free_port()
+        srv = Proc(binpath, build_env(port, keys, dsn_db, blobs, logs),
+                   src / "server", logs / "selftest-server.log")
+        ok = srv.start()
+        rep.add("首次启动（空数据目录 + 新库，迁移自动落库）", ok,
+                f"healthz={'200' if ok else 'FAIL'} log={srv.log}")
+        if not ok:
+            return EXIT_FAIL
 
-    # 4) 真收真发 A：完整生命周期 + 逐块 sha256 两侧一致
-    chunk_size = 262144
-    ta = Y.make_transfer(c, sender, recipient, size=chunk_size * 3, chunk_size=chunk_size, chunks=3)
-    tid_a = ta["transfer_id"]
-    st, prelude = c.get_prelude(tid_a)
-    dl = c.headers.get("x-ys-download-id", "")
-    got_sha, want_sha = [], [sha256_bytes(ta["prelude"])]
-    pre_ok = st == 200 and isinstance(prelude, bytes) and prelude == ta["prelude"]
-    for i in range(3):
-        stc, data = c.get_chunk(tid_a, i, dl)
-        want_sha.append(sha256_bytes(ta["chunks"][i]))
-        got_sha.append(sha256_bytes(data) if isinstance(data, bytes) else "err")
-        pre_ok = pre_ok and stc == 200 and data == ta["chunks"][i]
-    sta, ack = c.ack(tid_a, recipient, dl)
-    rep.raw["transfer_a"] = {"transfer_id": tid_a, "sha256": want_sha}
-    rep.add("真收真发 A：prelude+3 块逐字节一致 + ack→CONSUMED",
-            pre_ok and sta == 200 and ack.get("state") == "CONSUMED",
-            f"sha256(prelude)={want_sha[0][:12]}… blocks={[s[:8] for s in got_sha]} ack={sta} {ack.get('state')}")
-    tdir = blobs / tid_a[:2] / tid_a
-    rep.add("ack 后密文物理删除", not tdir.is_dir(), f"残留={tdir.is_dir()}")
+        base = f"http://127.0.0.1:{port}"
+        c = Y.Client(base)
+        sender, _ = c.register_pair("clean-sender", "发送方")
+        recipient, _ = c.register_pair("clean-recipient", "接收方")
 
-    # 5) 真收真发 B：留一条 READY 给重启后比对
-    tb = Y.make_transfer(c, sender, recipient, size=chunk_size, chunk_size=chunk_size, chunks=1)
-    tid_b = tb["transfer_id"]
-    st, pb = c.get_prelude(tid_b)
-    dlb = c.headers.get("x-ys-download-id", "")
-    stc, cb = c.get_chunk(tid_b, 0, dlb)
-    sha_b_before = {"prelude": sha256_bytes(pb) if isinstance(pb, bytes) else "err",
-                    "chunk0": sha256_bytes(cb) if isinstance(cb, bytes) else "err"}
-    rep.raw["transfer_b"] = {"transfer_id": tid_b, "sha256_before": sha_b_before}
-    rep.add("真收真发 B：留一条 READY 供 down/up 后比对",
-            st == 200 and stc == 200 and sha_b_before["prelude"] == sha256_bytes(tb["prelude"]),
-            f"tid={tid_b[:12]} sha={ {k: v[:10] for k, v in sha_b_before.items()} }")
+        # 4) 真收真发 A
+        chunk_size = 262144
+        ta = Y.make_transfer(c, sender, recipient, size=chunk_size * 3,
+                             chunk_size=chunk_size, chunks=3)
+        tid_a = ta["transfer_id"]
+        tdir = blobs / tid_a[:2] / tid_a
+        rep.add("上传完成后密文确实落盘（ack 前）", tdir.is_dir(),
+                f"{tdir.relative_to(blobs)} exists={tdir.is_dir()}")
+        st, prelude = c.get_prelude(tid_a)
+        dl = c.headers.get("x-ys-download-id", "")
+        got_sha, want_sha = [], [sha256_bytes(ta["prelude"])]
+        pre_ok = st == 200 and isinstance(prelude, bytes) and prelude == ta["prelude"]
+        for i in range(3):
+            stc, data = c.get_chunk(tid_a, i, dl)
+            want_sha.append(sha256_bytes(ta["chunks"][i]))
+            got_sha.append(sha256_bytes(data) if isinstance(data, bytes) else "err")
+            pre_ok = pre_ok and stc == 200 and data == ta["chunks"][i]
+        sta, ack = c.ack(tid_a, recipient, dl)
+        rep.raw["transfer_a"] = {"transfer_id": tid_a, "sha256": want_sha}
+        rep.add("真收真发 A：prelude+3 块逐字节一致 + ack→CONSUMED",
+                pre_ok and sta == 200 and ack.get("state") == "CONSUMED",
+                f"sha256(prelude)={want_sha[0][:12]}… blocks={[s[:8] for s in got_sha]} ack={sta} {ack.get('state')}")
+        rep.add("ack 后密文物理删除", not tdir.is_dir(), f"残留={tdir.is_dir()}")
 
-    # 6) 契约违例：终结态 410 / 伪造凭据 401 / 未路由信封
-    st410, raw410 = c.call("PUT", f"/v1/transfers/{tid_a}/prelude", ta["prelude"],
-                           {"Content-Type": "application/octet-stream"})  # A 已 CONSUMED，且不带凭据头
-    body410 = raw410 if isinstance(raw410, dict) else {}
-    code410 = (body410.get("error") or {}).get("code", "") if isinstance(body410, dict) else ""
-    rep.add("契约 §1.7.4：终结态上传必须 410（且不返回 401）",
-            st410 == 410 and code410 == "TRANSFER_CONSUMED", f"{st410} {code410}")
+        # 5) 真收真发 B（留 READY 给重启比对）
+        tb = Y.make_transfer(c, sender, recipient, size=chunk_size,
+                             chunk_size=chunk_size, chunks=1)
+        tid_b = tb["transfer_id"]
+        st, pb = c.get_prelude(tid_b)
+        dlb = c.headers.get("x-ys-download-id", "")
+        stc, cb = c.get_chunk(tid_b, 0, dlb)
+        sha_b_before = {"prelude": sha256_bytes(pb) if isinstance(pb, bytes) else "err",
+                        "chunk0": sha256_bytes(cb) if isinstance(cb, bytes) else "err"}
+        rep.raw["transfer_b"] = {"transfer_id": tid_b, "sha256_before": sha_b_before}
+        rep.add("真收真发 B：留一条 READY 供 down/up 后比对",
+                st == 200 and stc == 200 and sha_b_before["prelude"] == sha256_bytes(tb["prelude"]),
+                f"tid={tid_b[:12]} sha={ {k: v[:10] for k, v in sha_b_before.items()} }")
 
-    bogus = Y.b64u(os.urandom(32))
-    st401, body401 = c.put_prelude(tid_b, bogus, tb["prelude"])
-    code401 = (body401.get("error") or {}).get("code", "") if isinstance(body401, dict) else ""
-    rep.add("契约 §1.7.4：未终结 + 伪造凭据必须 401 AUTH_TOKEN_INVALID",
-            st401 == 401 and code401 == "AUTH_TOKEN_INVALID", f"{st401} {code401}")
+        # 6) 契约违例
+        st410, raw410 = c.call("PUT", f"/v1/transfers/{tid_a}/prelude", ta["prelude"],
+                               {"Content-Type": "application/octet-stream"})
+        body410 = raw410 if isinstance(raw410, dict) else {}
+        code410 = (body410.get("error") or {}).get("code", "") if isinstance(body410, dict) else ""
+        rep.add("契约 §1.7.4：终结态上传必须 410（且不返回 401）",
+                st410 == 410 and code410 == "TRANSFER_CONSUMED", f"{st410} {code410}")
 
-    stx, raw = c.call("GET", "/v1/definitely-not-an-endpoint")
-    is_env = False
-    try:
-        obj = json.loads(raw) if raw else {}
-        is_env = isinstance(obj.get("error"), dict) and bool(obj["error"].get("code"))
-        codex = (obj.get("error") or {}).get("code", "")
-    except Exception:  # noqa: BLE001
-        codex = ""
-    if is_env:
-        rep.add("契约 §0.2：未路由路径必须是错误信封",
-                stx == 404 and codex == "ROUTE_NOT_FOUND", f"{stx} {codex}")
-    else:
-        rep.add("契约 §0.2：未路由路径必须是错误信封", None,
-                f"{stx} text/plain（main 未含 #58，记 SKIP 不算通过）")
+        bogus = Y.b64u(os.urandom(32))
+        st401, body401 = c.put_prelude(tid_b, bogus, tb["prelude"])
+        code401 = (body401.get("error") or {}).get("code", "") if isinstance(body401, dict) else ""
+        rep.add("契约 §1.7.4：未终结 + 伪造凭据必须 401 AUTH_TOKEN_INVALID",
+                st401 == 401 and code401 == "AUTH_TOKEN_INVALID", f"{st401} {code401}")
 
-    # 7) 建索引锁写（真表真写）
-    if args.skip_index:
-        rep.add("建索引期间写入不被阻塞（跳过）", None, "--skip-index")
-    else:
-        ok_idx, ev_idx, raw_idx = index_lock_check(dsn_db, args.rows)
-        rep.raw["index_lock"] = raw_idx
-        rep.add("建索引期间写入不被阻塞（普通 vs CONCURRENTLY 实测）", ok_idx, ev_idx)
+        stx, raw = c.call("GET", "/v1/definitely-not-an-endpoint")
+        try:
+            obj = json.loads(raw) if raw else {}
+            is_env = isinstance(obj.get("error"), dict) and bool(obj["error"].get("code"))
+            codex = (obj.get("error") or {}).get("code", "")
+        except Exception:  # noqa: BLE001
+            is_env, codex = False, ""
+        if is_env:
+            rep.add("契约 §0.2：未路由路径必须是错误信封",
+                    stx == 404 and codex == "ROUTE_NOT_FOUND", f"{stx} {codex}")
+        else:
+            rep.add("契约 §0.2：未路由路径必须是错误信封", None,
+                    f"{stx} text/plain（main 未含 #58，记 SKIP 不算通过）")
 
-    # 8) down && up：密钥不变、密文与 token 不变
-    if args.skip_restart:
-        rep.add("down && up 后密钥不变（跳过）", None, "--skip-restart")
-    else:
-        stopped, how = srv.stop()
-        key_sha_down = {k: sha256_file(p) for k, p in key_files.items()}
-        rep.add("down：进程正常退出", stopped, how)
-        ok2 = srv.start()
-        key_sha_up = {k: sha256_file(p) for k, p in key_files.items()}
-        rep.raw["secrets"] = {"before": key_sha1, "down": key_sha_down, "up": key_sha_up}
-        rep.add("down && up 后 secrets sha256 不变",
-                key_sha1 == key_sha_down == key_sha_up and ok2,
-                f"token={key_sha_up['token_secret'][:12]}… pg={key_sha_up['pg_password'][:12]}…")
-        st, pb2 = c.get_prelude(tid_b)
-        dl2 = c.headers.get("x-ys-download-id", "")
-        stc2, cb2 = c.get_chunk(tid_b, 0, dl2)
-        sha_b_after = {"prelude": sha256_bytes(pb2) if isinstance(pb2, bytes) else "err",
-                       "chunk0": sha256_bytes(cb2) if isinstance(cb2, bytes) else "err"}
-        rep.raw["transfer_b"]["sha256_after"] = sha_b_after
-        rep.add("重启后取回同一密文 sha256 不变",
-                st == 200 and stc2 == 200 and sha_b_after == sha_b_before,
-                f"before={sha_b_before['prelude'][:10]}… after={sha_b_after['prelude'][:10]}…")
-        sts, _ = c.json("GET", f"/v1/transfers/{tid_b}/status", None,
-                        {"X-YS-Upload-Token": tb["upload_token"]})
-        rep.add("重启后 upload_token 仍有效（TOKEN_SECRET 真的没换）", sts == 200, f"status={sts}")
+        # 7) 建索引锁写
+        if args.skip_index:
+            rep.add("建索引期间写入不被阻塞（跳过）", None, "--skip-index")
+        else:
+            ok_idx, ev_idx, raw_idx = index_lock_check(dsn_db, args.rows)
+            rep.raw["index_lock"] = raw_idx
+            rep.add("建索引期间写入不被阻塞（普通 vs CONCURRENTLY 实测）", ok_idx, ev_idx)
 
-    srv.stop()
+        # 8) down && up
+        if args.skip_restart:
+            rep.add("down && up 后密钥不变（跳过）", None, "--skip-restart")
+        else:
+            stopped, how = srv.stop()
+            rep.add("down：进程正常退出", stopped, how)
+            if args.selftest_break_keys:
+                (secrets / "token_secret").write_text(os.urandom(32).hex())
+                rep.note("--selftest-break-keys：已故意改写 token_secret，下面「secrets sha256 不变」应 FAIL")
+            keys_up = init_secrets(secrets)          # 每次 up 都重跑 init（真实部署语义）
+            srv.env = build_env(port, keys_up, dsn_db, blobs, logs)
+            ok2 = srv.start()
+            key_sha_up = {k: sha256_file(p) for k, p in keys_up.items()}
+            rep.raw["secrets"] = {"before": key_sha1, "up": key_sha_up}
+            rep.add("down && up 后 secrets sha256 不变",
+                    key_sha1 == key_sha_up and ok2,
+                    f"token={key_sha_up['token_secret'][:12]}… pg={key_sha_up['pg_password'][:12]}…")
+            st, pb2 = c.get_prelude(tid_b)
+            dl2 = c.headers.get("x-ys-download-id", "")
+            stc2, cb2 = c.get_chunk(tid_b, 0, dl2)
+            sha_b_after = {"prelude": sha256_bytes(pb2) if isinstance(pb2, bytes) else "err",
+                           "chunk0": sha256_bytes(cb2) if isinstance(cb2, bytes) else "err"}
+            rep.raw["transfer_b"]["sha256_after"] = sha_b_after
+            rep.add("重启后取回同一密文 sha256 不变",
+                    st == 200 and stc2 == 200 and sha_b_after == sha_b_before,
+                    f"before={sha_b_before['prelude'][:10]}… after={sha_b_after['prelude'][:10]}…")
+            sts, _ = c.json("GET", f"/v1/transfers/{tid_b}/status", None,
+                            {"X-YS-Upload-Token": tb["upload_token"]})
+            # 注意：这条只证明"凭据不因重启失效"，**不能**用来证明 secret 没换 ——
+            # upload_token 的校验是 SM3(token) 与库里哈希比对，secret 只作派生盐。
+            # 密钥不变的证明在上面那条 secrets 文件 sha256（每次 up 前重跑 init 后再比）。
+            rep.add("重启后旧 upload_token 仍可用（凭据不因重启失效）", sts == 200,
+                    f"status={sts}（secret 不作验签，密钥不变见上行）")
 
-    # 9) 清理（--keep 时留下排障）
-    if not args.keep:
-        psql(args.dsn, f'DROP DATABASE IF EXISTS "{db}" WITH (FORCE)')
-
-    rep.note(f"工作目录={work}{'（保留）' if args.keep else '（已删）'}　db={db}")
-    rep.note(f"binary sha256={bin_sha}")
-    return rep.emit(args.json_out)
+        rep.note(f"binary sha256={bin_sha}")
+        return rep.emit(args.json_out)
+    finally:
+        if srv is not None:
+            srv.stop()
+        if db_created and not args.keep:
+            psql(args.dsn, f'DROP DATABASE IF EXISTS "{db}" WITH (FORCE)')
+        if not args.keep and work.exists():
+            shutil.rmtree(work, ignore_errors=True)
+            print(f"note  工作目录已删除：{work}")
+        elif args.keep:
+            print(f"note  工作目录保留：{work}　db={db}")
 
 
 if __name__ == "__main__":
