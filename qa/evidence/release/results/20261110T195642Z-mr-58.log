@@ -1,0 +1,9 @@
+== 合并期回归 @ 2026-11-10T19:56:43Z  ref=091997a (091997a9f536cb766707f8ec261326dc8517b303)  only=58
+   work=/tmp/yanshu-mr-1160
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t195646_test?sslmode=disable
+--- #58 契约 §0.2 路由信封 ---
+[PASS] #58 未路由信封（脚本自检）
+
+结论：本轮回归无 FAIL（SKIP 项见上，不算通过）

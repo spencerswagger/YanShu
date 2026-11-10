@@ -1,0 +1,9 @@
+== 合并期回归 @ 2026-11-10T19:56:57Z  ref=3925f8b (3925f8b2ad4430c1c5ffca47d53dcf2f06b68425)  only=61
+   work=/tmp/yanshu-mr-721
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t195701_test?sslmode=disable
+--- #61 wasm:sync 溯源门禁 ---
+[PASS] #61 node --test（# pass 6 # fail 0 # skipped 1 ）
+
+结论：本轮回归无 FAIL（SKIP 项见上，不算通过）

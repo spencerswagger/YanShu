@@ -1,0 +1,9 @@
+== 合并期回归 @ 2026-11-10T19:56:23Z  ref=7385f8b (7385f8bc280a59ae806fe07df6b886cb786b1195)  only=56
+   work=/tmp/yanshu-mr-4
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t195627_test?sslmode=disable
+--- #56 终结态 410 先于凭据 ---
+[PASS] #56 httpapi 门禁（Terminal + 阴性对照）
+
+结论：本轮回归无 FAIL（SKIP 项见上，不算通过）

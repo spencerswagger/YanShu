@@ -1,0 +1,9 @@
+== 合并期回归 @ 2026-11-10T19:56:51Z  ref=47b7740 (47b7740cecf576803dbcbf5949cb2134e9230702)  only=59
+   work=/tmp/yanshu-mr-4
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t195653_test?sslmode=disable
+--- #59 A/B 证据脚本 ---
+[PASS] #59 ab_contract_envelope --expect after
+
+结论：本轮回归无 FAIL（SKIP 项见上，不算通过）

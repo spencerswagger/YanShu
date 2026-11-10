@@ -1,0 +1,10 @@
+== 合并期回归 @ 2026-11-10T19:56:36Z  ref=9efc88f (9efc88f201b6529855105c3bfa67226cabf941d2)  only=57
+   work=/tmp/yanshu-mr-533
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t195641_test?sslmode=disable
+--- #57 建索引锁写门禁 ---
+[PASS] #57 store 门禁（两条）
+[PASS] #57 迁移跑两遍幂等（schema_migrations=9）
+
+结论：本轮回归无 FAIL（SKIP 项见上，不算通过）
