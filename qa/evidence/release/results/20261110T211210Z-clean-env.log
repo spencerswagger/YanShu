@@ -1,0 +1,20 @@
+PASS  纯净检出（无 .git、空数据目录）                             commit=b8fabfd5b5a4 files=555
+PASS  新库是空的（迁移前 public 无表）                           tables=0
+PASS  secrets 首次生成（0600，hex）                         sha256={'token_secret': 'a9aee2127c88', 'pg_password': '2666ca372985'} mode={'token_secret': '0o600', 'pg_pass
+PASS  首次启动（空数据目录 + 新库，迁移自动落库）                        healthz=200 log=/.octop/workspaces/0JXF1M/tmp/r10/logs/selftest-server.log
+PASS  上传完成后密文确实落盘（ack 前）                             8e/8ec96c6061adee58a84c9ebb5f8cd9f5 exists=True
+PASS  真收真发 A：prelude+3 块逐字节一致 + ack→CONSUMED         sha256(prelude)=88e785f8ea20… blocks=['041a1738', '87b50d76', 'fa6dc282'] ack=200 CONSUMED
+PASS  ack 后密文物理删除                                    残留=False
+PASS  真收真发 B：留一条 READY 供 down/up 后比对                 tid=0949dccb26cb sha={'prelude': '88e785f8ea', 'chunk0': '041a1738ac'}
+PASS  契约 §1.7.4：终结态上传必须 410（且不返回 401）                410 TRANSFER_CONSUMED
+PASS  契约 §1.7.4：未终结 + 伪造凭据必须 401 AUTH_TOKEN_INVALID  401 AUTH_TOKEN_INVALID
+PASS  契约 §0.2：未路由路径必须是错误信封                           404 ROUTE_NOT_FOUND
+PASS  建索引期间写入不被阻塞（普通 vs CONCURRENTLY 实测）             普通建索引 1225ms/写最长 1191.3ms（>300ms 1 条）；CONCURRENTLY 1432ms/写最长 110.9ms
+PASS  down：进程正常退出                                    exit=0
+PASS  down && up 后 secrets sha256 不变                 token=a9aee2127c88… pg=2666ca372985…
+PASS  重启后取回同一密文 sha256 不变                            before=88e785f8ea… after=88e785f8ea…
+PASS  重启后旧 upload_token 仍可用（凭据不因重启失效）                status=200（secret 不作验签，密钥不变见上行）
+note  binary sha256=0e92584e0913b9295c11c91152e66a688ef4373b5d36355997a3835b8d62bb17
+------------------------------------------------------------------------------------------------
+PASS 16　WARN(SKIP) 0　FAIL 0　共 16 项　结论：PASS
+note  工作目录已删除：/.octop/workspaces/0JXF1M/tmp/r10
