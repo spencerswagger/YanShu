@@ -75,7 +75,7 @@ docker compose exec postgres psql -U yanshu -d yanshu \
 - 登录 SWR 用 `SWR_USERNAME`/`SWR_PASSWORD`；**为兼容旧命名，也接受 `DOCKER_USERNAME`/`DOCKER_PASSWORD`**（两者都存在时优先 `SWR_*`）。均未配置时 workflow **只构建不推送**并打 warning，不失败。
 
 界面由 `yanshu-web` 镜像提供（nginx 静态站 + `/v1`、`/healthz` 反代到服务端）；compose 对外只发布 web 的 `${YANSHU_PORT:-18080}:80`，服务端仅在内部网络监听。
-当前推荐版本：`v0.2.2`（见 Release）；`v0.2.1`、`v0.2.0` 保留可回滚（改 `YANSHU_IMAGE_TAG=v0.2.1` 即可）；`v0.1.2` 已作废，勿用。
+当前推荐版本：`v0.2.3`（见 Release）；`v0.2.2`、`v0.2.1` 保留可回滚（改 `YANSHU_IMAGE_TAG=v0.2.2` 即可）；`v0.1.2` 已作废，勿用。
 
 **v0.2.2 镜像 digest（核验用，来源：tag 触发的 `build-images` run `42888815910`，两条 leg 均 success）**
 

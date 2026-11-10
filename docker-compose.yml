@@ -6,7 +6,7 @@
 #
 # 首次启动会在当前目录 ./secrets/ 下自动生成 token_secret 与 pg_password（0600），**别删**；
 # 重启用同一份密钥；想彻底重来用 `docker compose down -v` 再删 ./secrets。
-# 默认使用已发布版本 v0.2.2（可覆盖：YANSHU_IMAGE_TAG=v0.2.2 / latest；回滚填 v0.2.1）。端口同理：YANSHU_PORT=8000 docker compose up -d
+# 默认使用已发布版本 v0.2.3（可覆盖：YANSHU_IMAGE_TAG=v0.2.3 / latest；回滚填 v0.2.2）。端口同理：YANSHU_PORT=8000 docker compose up -d
 #
 # 所有镜像均取自国内源（华为云 SWR），无需外网 Docker Hub。
 # 开发（改代码后重新构建）：docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
@@ -57,7 +57,7 @@ services:
     restart: unless-stopped
 
   yanshu-server:
-    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:${YANSHU_IMAGE_TAG:-v0.2.2}
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:${YANSHU_IMAGE_TAG:-v0.2.3}
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,7 +93,7 @@ services:
     restart: unless-stopped
 
   web:
-    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:${YANSHU_IMAGE_TAG:-v0.2.2}
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:${YANSHU_IMAGE_TAG:-v0.2.3}
     depends_on:
       yanshu-server:
         condition: service_healthy
