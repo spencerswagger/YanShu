@@ -39,6 +39,7 @@ EV=""
 JSON_OUT=""
 EV_OVERRIDE=""
 NEG_FRESH=0
+NEG_SIZE=""
 NEG_KEEP=0
 
 n_pass=0; n_fail=0; n_skip=0; fail_names=""
@@ -79,6 +80,7 @@ while [ $# -gt 0 ]; do
         --gib) FILE_GIB="$2"; shift 2 ;;
         --json-out) JSON_OUT="$2"; shift 2 ;;
         --ev) EV_OVERRIDE="$2"; shift 2 ;;
+        --size) NEG_SIZE="$2"; shift 2 ;;
         --fresh-stack) NEG_FRESH=1; shift ;;
         --keep-stack) NEG_KEEP=1; shift ;;
         preflight|up|transfer|secrets|negative-save|all) CMD="$1"; shift ;;
@@ -334,9 +336,17 @@ cmd_negative_save() {
     fi
 
     FIXDIR="${FIXDIR:-$(dirname "$WORK")/ys-fixtures}"; mkdir -p "$FIXDIR"
-    src="$FIXDIR/neg-16MiB.bin"
-    [ -f "$src" ] || head -c $((16 * 1024 * 1024)) /dev/urandom > "$src"
+    # 文件大小可配：--size 64K / 1M / 16M（默认 16M）；下载侧没有大小门槛，小文件同样中招
+    sz="${NEG_SIZE:-16M}"
+    case "$sz" in
+        *K|*k) sz_bytes=$(( $(printf %s "$sz" | tr -d 'Kk') * 1024 )) ;;
+        *M|*m) sz_bytes=$(( $(printf %s "$sz" | tr -d 'Mm') * 1024 * 1024 )) ;;
+        *)     sz_bytes=$sz ;;
+    esac
+    src="$FIXDIR/neg-${sz}.bin"
+    [ -f "$src" ] && [ "$(wc -c < "$src")" -eq "$sz_bytes" ] || head -c "$sz_bytes" /dev/urandom > "$src"
     printf '%s  %s\n' "$(sha_of "$src")" "$src" > "$EV/negative-save-src-$TAG.sha256"
+    echo "$sz_bytes" > "$EV/negative-save-size-$TAG.txt"
 
     ack_before=$( ( cd "$WORK" && docker compose logs yanshu-server 2>/dev/null ) | grep -c 'ack' || true)
     step "40-negative-save-$TAG" node "$ROOT/negative-save.mjs" \
@@ -350,6 +360,7 @@ cmd_negative_save() {
     sum="$EV/negative-save-summary-$TAG.txt"
     {
         printf '镜像 tag        : %s\n' "$TAG"
+        printf '文件大小        : %s B\n' "$sz_bytes"
         printf '镜像 digest     : %s\n' "$(head -1 "$EV/neg-image-digest-$TAG.txt" 2>/dev/null)"
         printf '界面「已保存至本机」: %s\n' "$(python3 -c "import json;d=json.load(open('$EV/negative-save.json'));print(','.join(str(v['ui_says_saved']) for v in d['verdicts']))" 2>/dev/null)"
         printf '下载目录文件数  : %s\n' "$(python3 -c "import json;d=json.load(open('$EV/negative-save.json'));print(','.join(str(len(v['files'])) for v in d['verdicts']))" 2>/dev/null)"

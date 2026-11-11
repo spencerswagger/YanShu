@@ -1,15 +1,23 @@
-# legacy-tags：已发布 tag 的横向对照（16 MiB，逐个镜像真跑）
+# legacy-tags：已发布 tag 横向对照（一张表就是处置依据）
 
+> 表格由 `legacy-tags/table.py` 从 `results/*/negative-save.json` + summary 自动生成，不手抄（`python3 legacy-tags/table.py` 可重算）。
+
+| 镜像 tag | 文件大小 | 界面「已保存至本机」 | downloads 文件数 | ack 计数 | 传输最终状态 |
+|---|---|---|---|---|---|
+| v0.1.4 | 16 MiB | True,True | 0,0 | 0 → 2（delta=2） | 未取到/未取到 |
+| v0.2.1 | 16 MiB | True,True | 0,0 | 0 → 2（delta=2） | 未取到/未取到 |
+| v0.2.2 | 16 MiB | True,True | 0,0 | 0 → 2（delta=2） | 未取到/未取到 |
+| v0.2.3 | 16 MiB | True,True | 0,0 | 0 → 2（delta=2） | 未取到/未取到 |
+| v0.2.4 | 16 MiB | True,True | 0,0 | 0 → 2（delta=2） | 未取到/未取到 |
+
+**待补一行：`v0.2.4 / 64 KiB`** —— 命令已就绪（`./run.sh negative-save --tag v0.2.4 --size 64K`，`run.sh` 新增 `--size`），
+但机器在 **03:47 被回收**（约定 04:14），这一行**没跑成**，所以「任意大小都中」目前仍是代码推断（`canStream` 无大小门槛、`App.vue:307` 无条件传 sinkFactory），**未实证**。
+下次机器到手第一件事跑它，这一行会自动出现在上表里（`table.py` 会读 `negative-save-size-<tag>.txt`）。
+
+---
 运行环境：InstaBox（Docker 29.8.2 / compose v5.6.0 / Chromium 154），镜像全部取自华为云 SWR 官方 tag，
 **无本地 build、未改 compose 里的 tag**（用 `YANSHU_IMAGE_TAG` 这把官方开关切版本）。
 
-| 镜像 tag | 界面「已保存至本机」 | `downloads/` 文件数 | ack 计数 | 传输终态 | 页面报错 | 判定 |
-|---|---|---|---|---|---|---|
-| v0.1.4 | 是 / 是 | 0 / 0 | 0 → 2（delta=2） | **未取到**（见下） | 无 | 假成功 |
-| v0.2.1 | 是 / 是 | 0 / 0 | 0 → 2（delta=2） | **未取到** | 无 | 假成功 |
-| v0.2.2 | 是 / 是 | 0 / 0 | 0 → 2（delta=2） | **未取到** | 无 | 假成功 |
-| v0.2.3 | 是 / 是 | 0 / 0 | 0 → 2（delta=2） | **未取到** | 无 | 假成功 |
-| v0.2.4 | 是 / 是 | 0 / 0 | 0 → 2（delta=2） | **未取到** | 无 | 假成功 |
 
 - 「是 / 是」= 场景 A（出厂 sink）与场景 B（注入 `QuotaExceededError`）**都**报成功。
 - 「0 / 0」= 两个场景下载目录里都没有任何文件。

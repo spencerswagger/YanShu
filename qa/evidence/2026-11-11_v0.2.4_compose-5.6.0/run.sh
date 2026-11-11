@@ -38,6 +38,9 @@ PORT="$PORT_DEFAULT"
 EV=""
 JSON_OUT=""
 EV_OVERRIDE=""
+NEG_FRESH=0
+NEG_SIZE=""
+NEG_KEEP=0
 
 n_pass=0; n_fail=0; n_skip=0; fail_names=""
 
@@ -77,6 +80,9 @@ while [ $# -gt 0 ]; do
         --gib) FILE_GIB="$2"; shift 2 ;;
         --json-out) JSON_OUT="$2"; shift 2 ;;
         --ev) EV_OVERRIDE="$2"; shift 2 ;;
+        --size) NEG_SIZE="$2"; shift 2 ;;
+        --fresh-stack) NEG_FRESH=1; shift ;;
+        --keep-stack) NEG_KEEP=1; shift ;;
         preflight|up|transfer|secrets|negative-save|all) CMD="$1"; shift ;;
         -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -293,34 +299,90 @@ cmd_secrets() {
 }
 
 # ------------------------------------------------------------------ negative-save
-# 负面实测：写盘失败时界面不许报成功（v0.2.4 的「假绿」判据）
+# 负面实测：**报成功就必须有文件；写盘失败必须可见**。
+# v0.2.4 判据：这条 FAIL（假绿 + 已 ack = 数据丢失）；v0.2.5 必须 PASS 才允许发版。
+#   ./run.sh negative-save --tag v0.2.4 --ev <证据目录>   # 自动为该 tag 起独立干净栈
+#   ./run.sh negative-save --work <已存在的栈> --ev <证据目录>
 cmd_negative_save() {
-    echo "== negative-save：写盘失败必须可见 =="
-    [ -f "$EV/workdir.txt" ] && WORK=$(cat "$EV/workdir.txt")
-    [ -n "$WORK" ] || die2 "还没跑 up（找不到 workdir.txt）"
+    echo "== negative-save：假绿判定（tag=$TAG）=="
     command -v node >/dev/null 2>&1 || die2 "没有 node"
+
+    # 给了非默认 tag（或显式 --fresh-stack）就为该 tag 起一条独立的干净栈
+    if [ "${NEG_FRESH:-0}" = "1" ] || [ "$TAG" != "$TAG_DEFAULT" ] || [ -z "${WORK:-}" ]; then
+        base=$(dirname "${WORK:-/data/x}")
+        [ -d "$base" ] || base=/data
+        STACK="$base/clean-$TAG"
+        if [ -n "$(ls -A "$STACK" 2>/dev/null)" ]; then
+            # 已被别的 tag 用过 → 重建，避免镜像混用
+            ( cd "$STACK" && docker compose down -v >/dev/null 2>&1 ); rm -rf "$STACK"
+        fi
+        mkdir -p "$STACK"
+        url=$(printf "$COMPOSE_URL_TMPL" "$TAG")
+        step 41-neg-fetch-compose curl -fsS -o "$STACK/docker-compose.yml" "$url" || { bad "取不到 $TAG 的 compose"; return 1; }
+        got=$(sha_of "$STACK/docker-compose.yml")
+        if [ "$got" = "$COMPOSE_SHA" ]; then ok "compose sha256 与已知值一致（$got）"
+        elif [ "$TAG" = "$TAG_DEFAULT" ]; then bad "compose sha256 不一致：$got"
+        else skip "老 tag 的 compose 与已知值不同（$got）—— 只做记录，不判 FAIL"; fi
+        if grep -qE '^[[:space:]]*build:' "$STACK/docker-compose.yml"; then bad "compose 含 build: 段"; else ok "compose 无 build 段"; fi
+        ( cd "$STACK" && YANSHU_IMAGE_TAG="$TAG" docker compose pull ) > "$EV/logs/42-neg-pull-$TAG.log" 2>&1 \
+            && ok "拉取 $TAG 镜像成功" || bad "拉取 $TAG 镜像失败（见 logs/42-neg-pull-$TAG.log）"
+        ( cd "$STACK" && docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+            "$REG/yanshu-server:$TAG" ) > "$EV/neg-image-digest-$TAG.txt" 2>/dev/null
+        ( cd "$STACK" && YANSHU_IMAGE_TAG="$TAG" docker compose up -d --wait ) > "$EV/logs/43-neg-up-$TAG.log" 2>&1 \
+            && ok "$TAG 栈起来（up -d --wait）" || { bad "$TAG 栈起不来"; return 1; }
+        WORK="$STACK"; echo "$WORK" > "$EV/workdir.txt"
+    else
+        ok "复用现有栈：$WORK"
+    fi
+
     FIXDIR="${FIXDIR:-$(dirname "$WORK")/ys-fixtures}"; mkdir -p "$FIXDIR"
-    src="$FIXDIR/neg-16MiB.bin"
-    [ -f "$src" ] || head -c $((16 * 1024 * 1024)) /dev/urandom > "$src"
-    printf '%s  %s\n' "$(sha_of "$src")" "$src" > "$EV/negative-save-src.sha256"
+    # 文件大小可配：--size 64K / 1M / 16M（默认 16M）；下载侧没有大小门槛，小文件同样中招
+    sz="${NEG_SIZE:-16M}"
+    case "$sz" in
+        *K|*k) sz_bytes=$(( $(printf %s "$sz" | tr -d 'Kk') * 1024 )) ;;
+        *M|*m) sz_bytes=$(( $(printf %s "$sz" | tr -d 'Mm') * 1024 * 1024 )) ;;
+        *)     sz_bytes=$sz ;;
+    esac
+    src="$FIXDIR/neg-${sz}.bin"
+    [ -f "$src" ] && [ "$(wc -c < "$src")" -eq "$sz_bytes" ] || head -c "$sz_bytes" /dev/urandom > "$src"
+    printf '%s  %s\n' "$(sha_of "$src")" "$src" > "$EV/negative-save-src-$TAG.sha256"
+    echo "$sz_bytes" > "$EV/negative-save-size-$TAG.txt"
 
     ack_before=$( ( cd "$WORK" && docker compose logs yanshu-server 2>/dev/null ) | grep -c 'ack' || true)
-    step 40-negative-save node "$ROOT/negative-save.mjs" \
+    step "40-negative-save-$TAG" node "$ROOT/negative-save.mjs" \
         --url "http://127.0.0.1:$PORT/" --src "$src" --evidence "$EV" \
-        --dl-dir "$FIXDIR/neg-downloads" --wait-s 180
+        --dl-dir "$FIXDIR/neg-downloads-$TAG" --wait-s 180
     rc=$?
     ack_after=$( ( cd "$WORK" && docker compose logs yanshu-server 2>/dev/null ) | grep -c 'ack' || true)
-    printf 'ack 计数：前 %s → 后 %s（delta=%s）\n' "$ack_before" "$ack_after" "$((ack_after - ack_before))" \
-        | tee -a "$EV/summary.txt"
+    ack_delta=$((ack_after - ack_before))
+
+    # 四项现象落一张表（谁都能一眼看完）
+    sum="$EV/negative-save-summary-$TAG.txt"
+    {
+        printf '镜像 tag        : %s\n' "$TAG"
+        printf '文件大小        : %s B\n' "$sz_bytes"
+        printf '镜像 digest     : %s\n' "$(head -1 "$EV/neg-image-digest-$TAG.txt" 2>/dev/null)"
+        printf '界面「已保存至本机」: %s\n' "$(python3 -c "import json;d=json.load(open('$EV/negative-save.json'));print(','.join(str(v['ui_says_saved']) for v in d['verdicts']))" 2>/dev/null)"
+        printf '下载目录文件数  : %s\n' "$(python3 -c "import json;d=json.load(open('$EV/negative-save.json'));print(','.join(str(len(v['files'])) for v in d['verdicts']))" 2>/dev/null)"
+        printf 'ack 计数        : 前 %s → 后 %s（delta=%s）\n' "$ack_before" "$ack_after" "$ack_delta"
+        printf 'ack 原始行      : %s\n' "$( ( cd "$WORK" && docker compose logs --tail=200 yanshu-server 2>/dev/null ) | grep -i 'ack' | tail -2 | tr '\n' '|')"
+        printf '页面可见报错    : %s\n' "$(python3 -c "import json;d=json.load(open('$EV/negative-save.json'));print(';'.join(v['error_text'] or '-' for v in d['verdicts']))" 2>/dev/null)"
+        printf '场景判定        : %s\n' "$(python3 -c "import json;d=json.load(open('$EV/negative-save.json'));print('; '.join(v['tag']+'='+v['verdict'] for v in d['verdicts']))" 2>/dev/null)"
+    } | tee "$sum"
+    cat "$sum" >> "$EV/summary.txt"
 
     if [ $rc -eq 0 ]; then
-        ok "写盘成功会真落盘、写盘失败必有可见错误（无假绿）"
+        ok "[$TAG] 真保存会落盘、写盘失败必报错（无假绿）"
     else
-        bad "存在假绿或静默失败（见 logs/40-negative-save.log 与 negative-save.json）"
+        bad "[$TAG] 假绿或静默失败（见 negative-save.json）"
     fi
-    # 场景 A 若「报成功但磁盘无文件」，同时 ack 已经发出 → 密文已被删，用户拿不回来
-    if grep -q '假绿' "$EV/logs/40-negative-save.log" 2>/dev/null && [ "$((ack_after - ack_before))" -gt 0 ]; then
-        bad "假成功且已 ack（密文已删、文件从未写出 = 数据丢失）"
+    if [ "$ack_delta" -gt 0 ] && grep -q '假绿' "$EV/logs/40-negative-save-$TAG.log" 2>/dev/null; then
+        bad "[$TAG] 假成功且已 ack（delta=$ack_delta）：密文已删、文件从未写出 = 数据丢失"
+    fi
+
+    # 该 tag 的栈用完就停，避免下一个 tag 抢 18080
+    if [ "${NEG_KEEP:-0}" != "1" ]; then
+        ( cd "$WORK" && docker compose down ) > "$EV/logs/44-neg-down-$TAG.log" 2>&1 && ok "[$TAG] 栈已停（释放 $PORT）"
     fi
 }
 
