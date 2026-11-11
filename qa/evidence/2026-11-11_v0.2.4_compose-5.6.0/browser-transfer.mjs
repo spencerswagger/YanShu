@@ -144,7 +144,10 @@ try {
     } catch {}
   }, 5000)
   const before = new Set(readdirSync(dlDir).map(String))
-  const dlPromise = recv.waitForEvent('download', { timeout: 5 * 60 * 1000 }).catch(() => null)
+  // 下载事件超时必须可配：1 GiB 在 2 MiB/s 的限速下要 8.5 分钟，硬编码 5 分钟必然先超时
+  const dlTimeoutS = Number(arg('--dl-timeout-s', '900'))
+  say(`等 download 事件，超时 ${dlTimeoutS}s`)
+  const dlPromise = recv.waitForEvent('download', { timeout: dlTimeoutS * 1000 }).catch(() => null)
   await dlBtn.click()
 
   let download = await dlPromise
