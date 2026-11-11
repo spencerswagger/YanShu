@@ -1,0 +1,8 @@
+镜像 tag        : v0.2.2
+镜像 digest     : swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server@sha256:7d48a74a28c94fb267c182c97c4637e1eee028dd89f1b909c79f8041d0a8ec6d
+界面「已保存至本机」: True,True
+下载目录文件数  : 0,0
+ack 计数        : 前 0 → 后 2（delta=2）
+ack 原始行      : yanshu-server-1  | time=2026-11-11T18:09:43.926Z level=INFO msg=http requestId=40a3e3d94ab3fc1f method=POST route="POST /v1/transfers/{transferId}/ack" status=200 bytes=106 durationMs=7|yanshu-server-1  | time=2026-11-11T18:10:07.296Z level=INFO msg=http requestId=707ec6468fd7ea7d method=POST route="POST /v1/transfers/{transferId}/ack" status=200 bytes=106 durationMs=7|
+页面可见报错    : -;-
+场景判定        : A-no-inject=FAIL(假绿：报成功但磁盘无文件); B-inject-fail=FAIL(假绿：写盘注入失败仍报成功)

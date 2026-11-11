@@ -73,6 +73,11 @@ async function runOnce({ tag, failSink }) {
         } catch {}
       })
     }
+    const ids = new Map()
+    recv.on('request', (rq) => {
+      const m = rq.url().match(/\/v1\/transfers\/([0-9A-Za-z_-]{6,})(?:\/|$)/)
+      if (m) ids.set(m[1], (ids.get(m[1]) || 0) + 1)
+    })
     recv.on('console', (m) => { if (m.type() === 'error') res.console_errors.push(m.text().slice(0, 160)) })
     await recv.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
     await sleep(3000)
@@ -123,6 +128,19 @@ async function runOnce({ tag, failSink }) {
     if (m) res.error_text = m[1]
     res.files = newFileIn(dlDir, before)
     res.body_tail = body.replace(/\s+/g, ' ').slice(-200)
+
+    // 终态：ack 之后服务端应把传输置为终态（DELETED）；这条是「密文已删」的直接证据
+    if (ids.size) {
+      const id = [...ids.entries()].sort((a, b) => b[1] - a[1])[0][0]
+      res.transfer_id = id
+      try {
+        const r = await fetch(`${url.replace(/\/$/, '')}/v1/transfers/${id}`)
+        const j = await r.json().catch(() => ({}))
+        res.transfer_state_after = j.state || j.status || null
+        res.transfer_http = r.status
+        res.transfer_after_raw = JSON.stringify(j).slice(0, 300)
+      } catch (e) { res.transfer_state_after = 'QUERY_FAILED'; res.transfer_after_raw = String(e).slice(0, 120) }
+    }
   } finally {
     try { await ctxR?.close() } catch {}
     try { await ctxS?.close() } catch {}
