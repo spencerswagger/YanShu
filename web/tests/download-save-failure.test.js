@@ -148,7 +148,7 @@ test('写盘失败时 sink.abort() 会清掉半成品（不留垃圾也不留半
       }),
     (err) => err.code === 'SAVE_WRITE_FAILED',
   )
-  assert.equal(removed, 'half.bin', '失败必须清掉 OPFS 半成品')
+  assert.equal(removed, sink.entryName, '失败必须清掉 OPFS 半成品（按唯一条目名）')
 })
 
 test('交付下载失败（浏览器拒绝 a.click）：报 SAVE_DELIVERY_FAILED、不 ack', async () => {

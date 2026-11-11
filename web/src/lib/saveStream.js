@@ -123,23 +123,30 @@ export function createFileSink() {
 }
 
 /** 浏览器内部暂存（OPFS）：无需手势、常量内存；收完 getFile() 换一个磁盘承载的 Blob 去下载。 */
-export function createOpfsSink(name, { root = null } = {}) {
+export function createOpfsSink(name, { root = null, entryName = null } = {}) {
   let dir = root
   let handle = null
   let writable = null
+  /**
+   * **条目名必须唯一**：cleanup 是按条目名删的，若直接用交付名，
+   * 用户 60s 内重下同一个文件时，上一次的定时器会把这一次正在写的文件删掉（表现为"重试也失败"）。
+   * 交付给浏览器的名字仍是 `name`；临时条目叫 `<name>.<唯一串>.part`。
+   */
+  const entry = entryName || `${name}.${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}.part`
   return {
     kind: 'opfs',
     name,
+    entryName: entry,
     async open() {
       dir = dir || (await globalThis.navigator.storage.getDirectory())
-      // 同名残留（上次失败/上次没清）先删，避免把两个文件接在一起
+      // 自己的同名残留（同一 entry 复用）先删，避免把两次内容接在一起
       try {
-        await dir.removeEntry(name)
+        await dir.removeEntry(entry)
       } catch {
         /* 没有就算了 */
       }
       try {
-        handle = await dir.getFileHandle(name, { create: true })
+        handle = await dir.getFileHandle(entry, { create: true })
         writable = await handle.createWritable()
       } catch (err) {
         throw asSaveError(err, 'SAVE_WRITE_FAILED', '创建浏览器内部暂存')
@@ -162,10 +169,10 @@ export function createOpfsSink(name, { root = null } = {}) {
       const file = await handle.getFile()
       return { name, file }
     },
-    /** 交给浏览器下载之后再删（**别在 save 之前删**，那是唯一副本） */
+    /** 交给浏览器下载之后再删（**别在 save 之前删**，那是唯一副本）；只删**自己的**条目 */
     async cleanup() {
       try {
-        await dir?.removeEntry(name)
+        await dir?.removeEntry(entry)
       } catch {
         /* 忽略 */
       }
@@ -177,7 +184,7 @@ export function createOpfsSink(name, { root = null } = {}) {
         /* 忽略 */
       }
       try {
-        await dir?.removeEntry(name)
+        await dir?.removeEntry(entry)
       } catch {
         /* 没有就算了 */
       }

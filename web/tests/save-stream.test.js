@@ -71,7 +71,7 @@ test('大文件 + 没有手势（无头浏览器）→ 走 OPFS 流式写盘，c
   for (let i = 0; i < 4; i++) await sink.write(new Uint8Array(1024).fill(i))
   const out = await sink.close()
   assert.equal(out.file.size, 4096, '必须真的写到浏览器内部存储')
-  assert.equal(root.files.get('big.bin').chunks.length, 4)
+  assert.equal(root.files.get(sink.entryName).chunks.length, 4, '临时条目名唯一（<名>.<串>.part）')
   assert.equal(notices.length, 0)
 })
 
@@ -108,7 +108,7 @@ test('OPFS sink 中途 abort 要把半成品删掉', async () => {
   await sink.open()
   await sink.write(new Uint8Array(10))
   await sink.abort()
-  assert.equal(root.files.has('half.bin'), false)
+  assert.equal(root.files.has(sink.entryName), false)
 })
 
 test('内存上限就是 64 MiB（超过必须换流式落盘）', () => {
@@ -121,9 +121,9 @@ test('OPFS 成功后 cleanup() 必须删掉暂存副本（否则每个大文件�
   await sink.open()
   await sink.write(new Uint8Array(16))
   await sink.close()
-  assert.equal(root.files.has('big.bin'), true, 'close 之后副本还在（交给浏览器下载要用）')
+  assert.equal(root.files.has(sink.entryName), true, 'close 之后副本还在（交给浏览器下载要用）')
   await sink.cleanup()
-  assert.equal(root.files.has('big.bin'), false, '交付之后必须清掉，别一直占 origin 存储')
+  assert.equal(root.files.has(sink.entryName), false, '交付之后必须清掉，别一直占 origin 存储')
 })
 
 test('OPFS 写盘撞配额 → SAVE_QUOTA_EXCEEDED（不是裸 QuotaExceededError）', async () => {
@@ -149,4 +149,27 @@ test('OPFS 写盘撞配额 → SAVE_QUOTA_EXCEEDED（不是裸 QuotaExceededErro
   const sink = createOpfsSink('q.bin', { root })
   await sink.open()
   await assert.rejects(() => sink.write(new Uint8Array(4)), (err) => err.code === 'SAVE_QUOTA_EXCEEDED')
+})
+
+test('同一文件名连续两次下载：旧的 cleanup 不得删掉新那句正在写的条目', async () => {
+  const root = fakeOpfs()
+  const first = createOpfsSink('same.bin', { root })
+  await first.open()
+  await first.write(new Uint8Array(4))
+  await first.close()
+
+  // 第一次的 60s 定时器先到点（模拟"用户在窗口内又点了一次下载"）
+  const second = createOpfsSink('same.bin', { root })
+  await second.open()
+  await second.write(new Uint8Array(8))
+  await first.cleanup()
+  await second.write(new Uint8Array(8))
+
+  const out = await second.close()
+  assert.equal(out.file.size, 16, '第二次下载必须完整落盘（旧定时器不许删到它）')
+  assert.equal(out.name, 'same.bin', '交付名仍是原名，不是 .part')
+  assert.equal(root.files.has(first.entryName), false, '第一次的条目应被清掉')
+  assert.equal(root.files.has(second.entryName), true, '第二次的条目要留着，等它自己 cleanup')
+  await second.cleanup()
+  assert.equal(root.files.has(second.entryName), false)
 })
