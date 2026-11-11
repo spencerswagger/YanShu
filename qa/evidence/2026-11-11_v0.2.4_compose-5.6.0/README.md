@@ -41,6 +41,26 @@
 
 > 这块**不能**代替运行期结论：镜像里有正确的二进制，不等于 `compose up` 后真能收发。
 
+## 0.7 负面实测（`run.sh negative-save`）：v0.2.4 **跑出假绿**（2026-11-12 01:51 CST 实测）
+
+16 MiB、56 秒，两个场景都 FAIL：
+
+| 场景 | 注入 | 界面 | 磁盘 | 结论 |
+|---|---|---|---|---|
+| A 出厂 sink（headless，无 `showSaveFilePicker`） | 无 | **「已保存至本机：neg-16MiB.bin（16 MB）」** | **0 个文件** | 假绿 |
+| B 写盘必失败 | `showSaveFilePicker` 抛 `QuotaExceededError` + `navigator.storage.getDirectory` 抛 `QuotaExceededError` | **仍然「已保存至本机」**，无任何错误文案 | **0 个文件** | 假绿 |
+
+服务端同时刻 `ack` 计数 **0 → 2**（两次都 ack 了）→ **密文已按契约删除，文件从未写出 = 数据丢失**。
+根因（代码行）：`v0.2.4 web/src/net/download.js` 流式收尾是 `await sink.close()`(:139) → `if (ack) api.ack()`(:142) → `return`(:145)，
+**函数里根本没有 `save()`**（`save` 只在整包回退 `receiveOnce`），且 `sink.close()` 的返回值被丢掉。
+
+复跑：`./run.sh negative-save --work <干净目录> --ev <证据目录>`（v0.2.5 复验时同一条命令，**PASS 才允许发版**）。
+原始物：`results/20261111T162526-v0.2.4-rerun/negative-save.json`（`body_tail` 里保留了界面原文）、`logs/40-negative-save.log`。
+
+> 同一台机上的 `save-sink-probe.mjs`（`showSaveFilePicker` 测试替身，把字节真写到磁盘）拿到了
+> **1 GiB 两侧 sha256 逐字相同**（`424f4769…8e4`，1024 次写入，601.8s）。那证明「加密/上传/取块/解密」链路是通的，
+> **但它是注入替身，不算 v0.2.4 通过**——它恰好把「缺的就是落盘这一跳」钉死了。
+
 ## 1. 怎么复跑（一条命令）
 
 ```sh
@@ -51,6 +71,7 @@ mkdir -p /data/gate-pkg && cd /data/gate-pkg      # 把本目录内容拷进来
 ./run.sh up        --work /data/clean-v0.2.4      # 干净目录→官方 compose→拉 SWR 镜像→起服务→探活
 ./run.sh transfer  --work /data/clean-v0.2.4 --ev <上一步打印的证据目录> --gib 1
 ./run.sh secrets   --work /data/clean-v0.2.4 --ev <同上>
+./run.sh negative-save --work /data/clean-v0.2.4 --ev <同上>   # 写盘失败必须可见（16 MiB）
 # 或者一次跑完：./run.sh all --work /data/clean-v0.2.4
 ```
 

@@ -1,0 +1,2 @@
+$ node /data/gate-pkg/negative-save.mjs --url http://127.0.0.1:18080/ --src /data/ys-fixtures/neg-16MiB.bin --evidence /data/gate-pkg/results/20261111T162526-v0.2.4-rerun --dl-dir /data/ys-fixtures/neg-downloads --wait-s 180
+rc=1

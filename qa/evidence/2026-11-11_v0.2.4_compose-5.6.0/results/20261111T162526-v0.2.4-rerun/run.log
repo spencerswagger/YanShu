@@ -1,0 +1,232 @@
+[5.3s] 下载落地目录 /data/ys-fixtures/downloads（CDP setDownloadBehavior=allow）
+[5.4s] RECV-CONSOLE(error) The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element.
+[6.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 404 (Not Found)
+[8.7s] 接收端已就绪，码 RWB6
+[12.2s] 发送端已就绪，码 NWC8
+[12.2s] 填入对方码 RWB6
+[13.5s] 已选文件 /data/ys-fixtures/src-v0.2.4-1-GiB.bin（1.00 GiB）
+[13.7s] 已点发送，等加密+上传完成
+[98.0s] 发送端显示已发送
+[128.0s] 30s 内列表未自动出现新文件 → 点「刷新」（记为产品观察项：接收端不自动刷新）
+[128.1s] 接收端出现待接收项（自动出现=false），点「下载并解密」
+[128.1s] 等 download 事件，超时 1200s
+[133.1s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 11% · 解密中 11% 21.7 MB/s 剩 42 秒 108 MB / 1.00 GB 解密块 108/1024 最近传输 还没有传输记录
+[134.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[138.1s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 13% · 解密中 13% 21.3 MB/s 剩 41 秒 130 MB / 1.00 GB 解密块 130/1024 最近传输 还没有传输记录
+[139.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[143.1s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 14% · 解密中 14% 15.3 MB/s 剩 57 秒 141 MB / 1.00 GB 解密块 141/1024 最近传输 还没有传输记录
+[145.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[148.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 15% · 解密中 15% 13.0 MB/s 剩 2 分 153 MB / 1.00 GB 解密块 153/1024 最近传输 还没有传输记录
+[150.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[153.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 16% · 解密中 16% 12.4 MB/s 剩 2 分 164 MB / 1.00 GB 解密块 164/1024 最近传输 还没有传输记录
+[156.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[158.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 17% · 解密中 17% 12.0 MB/s 剩 2 分 175 MB / 1.00 GB 解密块 175/1024 最近传输 还没有传输记录
+[161.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[163.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 18% · 解密中 18% 11.7 MB/s 剩 2 分 186 MB / 1.00 GB 解密块 186/1024 最近传输 还没有传输记录
+[167.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[168.1s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 19% · 解密中 19% 8.2 MB/s 剩 2 分 197 MB / 1.00 GB 解密块 197/1024 最近传输 还没有传输记录
+[173.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[173.1s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 20% · 解密中 20% 6.4 MB/s 剩 3 分 208 MB / 1.00 GB 解密块 208/1024 最近传输 还没有传输记录
+[178.1s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 21% · 解密中 21% 5.0 MB/s 剩 3 分 211 MB / 1.00 GB 解密块 211/1024 最近传输 还没有传输记录
+[178.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[183.1s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 21% · 解密中 21% 9.3 MB/s 剩 2 分 219 MB / 1.00 GB 解密块 219/1024 最近传输 还没有传输记录
+[184.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[188.1s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 22% · 解密中 22% 6.6 MB/s 剩 2 分 230 MB / 1.00 GB 解密块 230/1024 最近传输 还没有传输记录
+[189.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[200.2s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 24% · 解密中 24% 5.2 MB/s 剩 3 分 241 MB / 1.00 GB 解密块 241/1024 最近传输 还没有传输记录
+[200.2s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 24% · 解密中 24% 5.2 MB/s 剩 3 分 241 MB / 1.00 GB 解密块 241/1024 最近传输 还没有传输记录
+[203.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[204.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 26% · 解密中 26% 12.0 MB/s 剩 2 分 268 MB / 1.00 GB 解密块 268/1024 最近传输 还没有传输记录
+[208.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[209.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 27% · 解密中 27% 11.3 MB/s 剩 2 分 279 MB / 1.00 GB 解密块 279/1024 最近传输 还没有传输记录
+[214.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 28% · 解密中 28% 8.0 MB/s 剩 2 分 286 MB / 1.00 GB 解密块 286/1024 最近传输 还没有传输记录
+[214.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[219.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 28% · 解密中 28% 10.8 MB/s 剩 2 分 291 MB / 1.00 GB 解密块 291/1024 最近传输 还没有传输记录
+[220.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[224.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 30% · 解密中 30% 8.7 MB/s 剩 2 分 303 MB / 1.00 GB 解密块 303/1024 最近传输 还没有传输记录
+[226.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[229.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 31% · 解密中 31% 9.5 MB/s 剩 2 分 314 MB / 1.00 GB 解密块 314/1024 最近传输 还没有传输记录
+[231.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[234.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 32% · 解密中 32% 9.4 MB/s 剩 2 分 326 MB / 1.00 GB 解密块 326/1024 最近传输 还没有传输记录
+[237.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[239.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 33% · 解密中 33% 9.5 MB/s 剩 2 分 337 MB / 1.00 GB 解密块 337/1024 最近传输 还没有传输记录
+[243.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[244.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 34% · 解密中 34% 9.5 MB/s 剩 2 分 349 MB / 1.00 GB 解密块 349/1024 最近传输 还没有传输记录
+[248.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[249.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 35% · 解密中 35% 10.1 MB/s 剩 2 分 360 MB / 1.00 GB 解密块 360/1024 最近传输 还没有传输记录
+[254.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 35% · 解密中 35% 7.2 MB/s 剩 2 分 362 MB / 1.00 GB 解密块 362/1024 最近传输 还没有传输记录
+[254.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[259.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 36% · 解密中 36% 10.4 MB/s 剩 2 分 371 MB / 1.00 GB 解密块 371/1024 最近传输 还没有传输记录
+[260.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[264.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 37% · 解密中 37% 10.5 MB/s 剩 2 分 382 MB / 1.00 GB 解密块 382/1024 最近传输 还没有传输记录
+[265.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[269.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 38% · 解密中 38% 11.1 MB/s 剩 56 秒 393 MB / 1.00 GB 解密块 393/1024 最近传输 还没有传输记录
+[271.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[274.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 40% · 解密中 40% 11.2 MB/s 剩 55 秒 405 MB / 1.00 GB 解密块 405/1024 最近传输 还没有传输记录
+[276.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[279.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 41% · 解密中 41% 11.3 MB/s 剩 53 秒 416 MB / 1.00 GB 解密块 416/1024 最近传输 还没有传输记录
+[282.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[284.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 42% · 解密中 42% 11.5 MB/s 剩 51 秒 427 MB / 1.00 GB 解密块 427/1024 最近传输 还没有传输记录
+[287.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[289.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 43% · 解密中 43% 11.5 MB/s 剩 51 秒 438 MB / 1.00 GB 解密块 438/1024 最近传输 还没有传输记录
+[293.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[294.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 44% · 解密中 44% 11.6 MB/s 剩 49 秒 449 MB / 1.00 GB 解密块 449/1024 最近传输 还没有传输记录
+[298.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[299.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 45% · 解密中 45% 11.7 MB/s 剩 48 秒 460 MB / 1.00 GB 解密块 460/1024 最近传输 还没有传输记录
+[304.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 45% · 解密中 45% 8.2 MB/s 剩 2 分 461 MB / 1.00 GB 解密块 461/1024 最近传输 还没有传输记录
+[304.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[309.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 46% · 解密中 46% 11.7 MB/s 剩 47 秒 471 MB / 1.00 GB 解密块 471/1024 最近传输 还没有传输记录
+[310.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[314.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 47% · 解密中 47% 11.7 MB/s 剩 46 秒 482 MB / 1.00 GB 解密块 482/1024 最近传输 还没有传输记录
+[316.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[319.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 48% · 解密中 48% 8.2 MB/s 剩 2 分 494 MB / 1.00 GB 解密块 494/1024 最近传输 还没有传输记录
+[321.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[324.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 49% · 解密中 49% 9.0 MB/s 剩 57 秒 505 MB / 1.00 GB 解密块 505/1024 最近传输 还没有传输记录
+[327.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[329.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 50% · 解密中 50% 9.9 MB/s 剩 51 秒 517 MB / 1.00 GB 解密块 517/1024 最近传输 还没有传输记录
+[332.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[334.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 52% · 解密中 52% 10.9 MB/s 剩 45 秒 528 MB / 1.00 GB 解密块 528/1024 最近传输 还没有传输记录
+[338.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[339.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 53% · 解密中 53% 10.5 MB/s 剩 46 秒 539 MB / 1.00 GB 解密块 539/1024 最近传输 还没有传输记录
+[344.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 54% · 解密中 54% 7.5 MB/s 剩 2 分 549 MB / 1.00 GB 解密块 549/1024 最近传输 还没有传输记录
+[344.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[349.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 54% · 解密中 54% 11.1 MB/s 剩 42 秒 550 MB / 1.00 GB 解密块 550/1024 最近传输 还没有传输记录
+[349.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[354.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 55% · 解密中 55% 11.2 MB/s 剩 41 秒 561 MB / 1.00 GB 解密块 561/1024 最近传输 还没有传输记录
+[355.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[359.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 56% · 解密中 56% 10.7 MB/s 剩 42 秒 573 MB / 1.00 GB 解密块 573/1024 最近传输 还没有传输记录
+[361.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[364.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 57% · 解密中 57% 10.0 MB/s 剩 44 秒 584 MB / 1.00 GB 解密块 584/1024 最近传输 还没有传输记录
+[366.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[369.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 58% · 解密中 58% 10.3 MB/s 剩 41 秒 595 MB / 1.00 GB 解密块 595/1024 最近传输 还没有传输记录
+[372.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[374.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 59% · 解密中 59% 9.9 MB/s 剩 42 秒 607 MB / 1.00 GB 解密块 607/1024 最近传输 还没有传输记录
+[377.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[379.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 60% · 解密中 60% 10.9 MB/s 剩 37 秒 618 MB / 1.00 GB 解密块 618/1024 最近传输 还没有传输记录
+[383.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[384.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 61% · 解密中 61% 7.7 MB/s 剩 51 秒 629 MB / 1.00 GB 解密块 629/1024 最近传输 还没有传输记录
+[388.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[389.0s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 63% · 解密中 63% 10.1 MB/s 剩 38 秒 640 MB / 1.00 GB 解密块 640/1024 最近传输 还没有传输记录
+[394.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 63% · 解密中 63% 7.1 MB/s 剩 53 秒 644 MB / 1.00 GB 解密块 644/1024 最近传输 还没有传输记录
+[394.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[399.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 64% · 解密中 64% 7.1 MB/s 剩 52 秒 651 MB / 1.00 GB 解密块 651/1024 最近传输 还没有传输记录
+[399.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[404.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 65% · 解密中 65% 5.6 MB/s 剩 2 分 662 MB / 1.00 GB 解密块 662/1024 最近传输 还没有传输记录
+[406.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[409.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 66% · 解密中 66% 7.2 MB/s 剩 48 秒 674 MB / 1.00 GB 解密块 674/1024 最近传输 还没有传输记录
+[411.7s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[414.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 67% · 解密中 67% 5.2 MB/s 剩 2 分 685 MB / 1.00 GB 解密块 685/1024 最近传输 还没有传输记录
+[417.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[419.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 68% · 解密中 68% 4.2 MB/s 剩 2 分 696 MB / 1.00 GB 解密块 696/1024 最近传输 还没有传输记录
+[423.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[424.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 69% · 解密中 69% 7.3 MB/s 剩 43 秒 709 MB / 1.00 GB 解密块 709/1024 最近传输 还没有传输记录
+[428.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[429.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 70% · 解密中 70% 5.2 MB/s 剩 58 秒 720 MB / 1.00 GB 解密块 720/1024 最近传输 还没有传输记录
+[434.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 71% · 解密中 71% 4.3 MB/s 剩 2 分 724 MB / 1.00 GB 解密块 724/1024 最近传输 还没有传输记录
+[434.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[439.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 71% · 解密中 71% 4.3 MB/s 剩 2 分 731 MB / 1.00 GB 解密块 731/1024 最近传输 还没有传输记录
+[440.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[444.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 73% · 解密中 73% 7.1 MB/s 剩 39 秒 743 MB / 1.00 GB 解密块 743/1024 最近传输 还没有传输记录
+[446.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[449.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 74% · 解密中 74% 5.0 MB/s 剩 53 秒 754 MB / 1.00 GB 解密块 754/1024 最近传输 还没有传输记录
+[451.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[454.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 75% · 解密中 75% 4.1 MB/s 剩 2 分 765 MB / 1.00 GB 解密块 765/1024 最近传输 还没有传输记录
+[456.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[459.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 76% · 解密中 76% 3.5 MB/s 剩 2 分 776 MB / 1.00 GB 解密块 776/1024 最近传输 还没有传输记录
+[462.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[464.0s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 77% · 解密中 77% 3.0 MB/s 剩 2 分 787 MB / 1.00 GB 解密块 787/1024 最近传输 还没有传输记录
+[468.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[469.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 78% · 解密中 78% 5.4 MB/s 剩 41 秒 799 MB / 1.00 GB 解密块 799/1024 最近传输 还没有传输记录
+[473.7s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[474.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 79% · 解密中 79% 4.1 MB/s 剩 51 秒 810 MB / 1.00 GB 解密块 810/1024 最近传输 还没有传输记录
+[479.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 80% · 解密中 80% 3.5 MB/s 剩 59 秒 817 MB / 1.00 GB 解密块 817/1024 最近传输 还没有传输记录
+[479.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[484.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 80% · 解密中 80% 3.5 MB/s 剩 58 秒 821 MB / 1.00 GB 解密块 821/1024 最近传输 还没有传输记录
+[484.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[489.0s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 81% · 解密中 81% 8.0 MB/s 剩 23 秒 832 MB / 1.00 GB 解密块 832/1024 最近传输 还没有传输记录
+[490.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[494.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 82% · 解密中 82% 5.7 MB/s 剩 31 秒 843 MB / 1.00 GB 解密块 843/1024 最近传输 还没有传输记录
+[495.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[499.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 83% · 解密中 83% 9.1 MB/s 剩 18 秒 854 MB / 1.00 GB 解密块 854/1024 最近传输 还没有传输记录
+[501.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[504.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 84% · 解密中 84% 9.3 MB/s 剩 17 秒 865 MB / 1.00 GB 解密块 865/1024 最近传输 还没有传输记录
+[508.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[509.3s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 86% · 解密中 86% 7.7 MB/s 剩 18 秒 878 MB / 1.00 GB 解密块 878/1024 最近传输 还没有传输记录
+[513.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[514.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 87% · 解密中 87% 8.1 MB/s 剩 16 秒 890 MB / 1.00 GB 解密块 890/1024 最近传输 还没有传输记录
+[519.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 87% · 解密中 87% 5.9 MB/s 剩 22 秒 893 MB / 1.00 GB 解密块 893/1024 最近传输 还没有传输记录
+[519.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[524.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 88% · 解密中 88% 9.4 MB/s 剩 13 秒 901 MB / 1.00 GB 解密块 901/1024 最近传输 还没有传输记录
+[525.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[529.1s] RECV-PROGRESS … 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 89% · 解密中 89% 10.0 MB/s 剩 11 秒 913 MB / 1.00 GB 解密块 913/1024 最近传输 还没有传输记录
+[530.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[534.1s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 90% · 解密中 90% 10.1 MB/s 即将完成 924 MB / 1.00 GB 解密块 924/1024 最近传输 还没有传输记录
+[536.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[539.1s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 91% · 解密中 91% 10.9 MB/s 即将完成 935 MB / 1.00 GB 解密块 935/1024 最近传输 还没有传输记录
+[542.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[544.1s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 92% · 解密中 92% 10.6 MB/s 即将完成 946 MB / 1.00 GB 解密块 946/1024 最近传输 还没有传输记录
+[547.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[549.1s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 94% · 解密中 94% 10.3 MB/s 即将完成 958 MB / 1.00 GB 解密块 958/1024 最近传输 还没有传输记录
+[553.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[554.1s] RECV-PROGRESS …送文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 95% · 解密中 95% 9.6 MB/s 即将完成 969 MB / 1.00 GB 解密块 969/1024 最近传输 还没有传输记录
+[559.1s] RECV-PROGRESS …送文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 95% · 解密中 95% 6.9 MB/s 即将完成 977 MB / 1.00 GB 解密块 977/1024 最近传输 还没有传输记录
+[559.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[564.1s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 96% · 解密中 96% 10.0 MB/s 即将完成 981 MB / 1.00 GB 解密块 981/1024 最近传输 还没有传输记录
+[565.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[569.1s] RECV-PROGRESS …送文件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 97% · 解密中 97% 9.7 MB/s 即将完成 992 MB / 1.00 GB 解密块 992/1024 最近传输 还没有传输记录
+[571.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[574.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 98% · 解密中 98% 7.3 MB/s 即将完成 1006 MB / 1.00 GB 解密块 1006/1024 最近传输 还没有传输记录
+[578.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[579.1s] RECV-PROGRESS …件 1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 99% · 解密中 99% 7.4 MB/s 即将完成 1018 MB / 1.00 GB 解密块 1018/1024 最近传输 还没有传输记录
+[584.5s] RECV-PROGRESS …1 个文件待接收 雁 雁NWC8 1.0 GB · 1024 块 23 小时后过期 下载中 100% · 解密中 100% 5.3 MB/s 即将完成 1.00 GB / 1.00 GB 解密块 1024/1024 最近传输 还没有传输记录
+[589.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[594.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[599.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[604.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[609.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[614.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[619.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[624.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[629.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[634.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[639.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[644.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[649.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[654.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[659.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[664.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[669.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[674.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[679.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[684.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[689.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[694.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[699.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[704.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[709.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[714.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[719.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[724.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[729.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[734.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[739.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[744.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[749.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[754.1s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[759.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[764.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[769.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[774.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[779.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[784.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[789.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[794.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[799.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[804.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[809.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[814.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[819.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[824.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[829.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[834.2s] RECV-PROGRESS …端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：src-v0.2.4-1-GiB.bin（1.0 GB） 暂无待接收文件 发送文件 最近传输 还没有传输记录
+[838.7s] 没收到 download 事件，改盯 downloadsPath 目录

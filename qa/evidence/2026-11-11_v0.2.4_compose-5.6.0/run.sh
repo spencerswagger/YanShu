@@ -7,6 +7,7 @@
 #   ./run.sh up               # 干净目录 → 官方 compose → SWR 官方镜像 → 起服务 → 探活
 #   ./run.sh transfer         # 双浏览器 ≥1 GiB 真收发 + 两侧 sha256（需要 browser-transfer.mjs）
 #   ./run.sh secrets          # down && up -d 后 ./secrets 两个密钥 sha256 必须不变
+#   ./run.sh negative-save    # 写盘失败必须可见（16 MiB，验「假绿」：报成功但无文件 = FAIL）
 #   ./run.sh all              # 顺序跑 up → transfer → secrets，任何一步 FAIL 即停
 #
 # 铁律（脚本会自己断言，不许改参数绕过）：
@@ -76,7 +77,7 @@ while [ $# -gt 0 ]; do
         --gib) FILE_GIB="$2"; shift 2 ;;
         --json-out) JSON_OUT="$2"; shift 2 ;;
         --ev) EV_OVERRIDE="$2"; shift 2 ;;
-        preflight|up|transfer|secrets|all) CMD="$1"; shift ;;
+        preflight|up|transfer|secrets|negative-save|all) CMD="$1"; shift ;;
         -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
@@ -239,6 +240,25 @@ cmd_transfer() {
 
     step 22-verify-sha256 sh "$ROOT/verify-sha256.sh" "$src" "$out"
     if [ $? -eq 0 ]; then ok "源/落地 sha256 逐字一致"; else bad "源/落地 sha256 不一致"; fi
+
+    # 块覆盖判定（不看进度条）：把上轮「1024/707」的争议钉死
+    if [ -f "$EV/chunk-coverage.json" ]; then
+        cov=$(python3 - "$EV/chunk-coverage.json" <<'PYEOF'
+import json,sys
+d=json.load(open(sys.argv[1]))
+print(d.get("unique_200",-1), d.get("missing_count",-1), d.get("min_index",-1), d.get("max_index",-1), d.get("retries",-1))
+PYEOF
+)
+        set -- $cov
+        cov_ok=$1; cov_miss=$2; cov_min=$3; cov_max=$4; cov_retry=$5
+        if [ "${cov_miss:-1}" = "0" ] && [ "${cov_ok:-0}" -gt 0 ]; then
+            ok "块覆盖完整：$cov_ok 个 index 有 200，index [${cov_min}..${cov_max}]，0 缺口（重试 $cov_retry 次）"
+        else
+            bad "块覆盖有缺口：$cov_ok 个 200 / 缺 ${cov_miss} 个（index [${cov_min}..${cov_max}]）"
+        fi
+    else
+        skip "没有 chunk-coverage.json（块覆盖未判）"
+    fi
 }
 
 # ------------------------------------------------------------------ secrets
@@ -272,12 +292,45 @@ cmd_secrets() {
     case "$body" in *'"status":"ok"'*) ok "重启后 /healthz 仍 ok（旧密钥能开旧库）" ;; *) bad "重启后 /healthz 不 ok（旧密钥开不了旧库）" ;; esac
 }
 
+# ------------------------------------------------------------------ negative-save
+# 负面实测：写盘失败时界面不许报成功（v0.2.4 的「假绿」判据）
+cmd_negative_save() {
+    echo "== negative-save：写盘失败必须可见 =="
+    [ -f "$EV/workdir.txt" ] && WORK=$(cat "$EV/workdir.txt")
+    [ -n "$WORK" ] || die2 "还没跑 up（找不到 workdir.txt）"
+    command -v node >/dev/null 2>&1 || die2 "没有 node"
+    FIXDIR="${FIXDIR:-$(dirname "$WORK")/ys-fixtures}"; mkdir -p "$FIXDIR"
+    src="$FIXDIR/neg-16MiB.bin"
+    [ -f "$src" ] || head -c $((16 * 1024 * 1024)) /dev/urandom > "$src"
+    printf '%s  %s\n' "$(sha_of "$src")" "$src" > "$EV/negative-save-src.sha256"
+
+    ack_before=$( ( cd "$WORK" && docker compose logs yanshu-server 2>/dev/null ) | grep -c 'ack' || true)
+    step 40-negative-save node "$ROOT/negative-save.mjs" \
+        --url "http://127.0.0.1:$PORT/" --src "$src" --evidence "$EV" \
+        --dl-dir "$FIXDIR/neg-downloads" --wait-s 180
+    rc=$?
+    ack_after=$( ( cd "$WORK" && docker compose logs yanshu-server 2>/dev/null ) | grep -c 'ack' || true)
+    printf 'ack 计数：前 %s → 后 %s（delta=%s）\n' "$ack_before" "$ack_after" "$((ack_after - ack_before))" \
+        | tee -a "$EV/summary.txt"
+
+    if [ $rc -eq 0 ]; then
+        ok "写盘成功会真落盘、写盘失败必有可见错误（无假绿）"
+    else
+        bad "存在假绿或静默失败（见 logs/40-negative-save.log 与 negative-save.json）"
+    fi
+    # 场景 A 若「报成功但磁盘无文件」，同时 ack 已经发出 → 密文已被删，用户拿不回来
+    if grep -q '假绿' "$EV/logs/40-negative-save.log" 2>/dev/null && [ "$((ack_after - ack_before))" -gt 0 ]; then
+        bad "假成功且已 ack（密文已删、文件从未写出 = 数据丢失）"
+    fi
+}
+
 # ------------------------------------------------------------------ main
 case "$CMD" in
     preflight) cmd_preflight ;;
     up)        cmd_up ;;
     transfer)  cmd_transfer ;;
     secrets)   cmd_secrets ;;
+    negative-save) cmd_negative_save ;;
     all)
         cmd_preflight
         if [ "$n_fail" -eq 0 ]; then

@@ -41,12 +41,31 @@ const say = (s) => {
 }
 const fail = async (why) => {
   say(`FAIL: ${why}`)
+  const cov = coverageReport()
+  writeFileSync(join(ev, 'chunk-coverage.json'), JSON.stringify(cov, null, 2))
   writeFileSync(join(ev, 'browser-transfer.json'),
-    JSON.stringify({ ok: false, why, elapsed_s: (Date.now() - t0) / 1000, log }, null, 2))
+    JSON.stringify({ ok: false, why, elapsed_s: (Date.now() - t0) / 1000, coverage: cov, log }, null, 2))
   process.exit(1)
 }
 
 const expectBytes = Math.round(gib * 1024 * 1024 * 1024)
+const chunkSeen = new Map()
+const coverageReport = () => {
+  const ok200 = [...chunkSeen.entries()].filter(([, v]) => v.some((x) => x.status === 200)).map(([k]) => k)
+  const all = [...chunkSeen.keys()]
+  const maxIdx = all.length ? Math.max(...all) : -1
+  const minIdx = all.length ? Math.min(...all) : -1
+  const okSet = new Set(ok200)
+  const missing = []
+  for (let i = minIdx; i <= maxIdx; i++) if (!okSet.has(i)) missing.push(i)
+  const dup = [...chunkSeen.values()].reduce((a, v) => a + Math.max(0, v.length - 1), 0)
+  return {
+    requested_indexes: all.length, unique_200: ok200.length,
+    min_index: minIdx, max_index: maxIdx, missing_count: missing.length,
+    missing_sample: missing.slice(0, 20), retries: dup,
+    note: '索引以站点实际返回为准（0 或 1 起），missing 只在 [min,max] 内计算'
+  }
+}
 try {
   const st = statSync(src)
   if (st.size < expectBytes) { console.error(`源文件 ${st.size} B < 要求的 ${expectBytes} B`); process.exit(2) }
@@ -69,6 +88,14 @@ try {
   // ---------- 接收端先起来：它要在服务器登记自己的码 ----------
   ctxA = await chromium.launchPersistentContext(join(profileRoot, 'recv'), launchOpts)
   const recv = ctxA.pages()[0] || (await ctxA.newPage())
+  // 每个 GET /chunks/{index} 记账：index + 状态 + 相对时间（用来判「收满没有」，不看进度条）
+  recv.on('response', (r) => {
+    const m = r.url().match(/\/transfers\/[^/]+\/chunks\/(\d+)/)
+    if (!m || r.request().method() !== 'GET') return
+    const i = Number(m[1])
+    if (!chunkSeen.has(i)) chunkSeen.set(i, [])
+    chunkSeen.get(i).push({ status: r.status(), t: +((Date.now() - t0) / 1000).toFixed(1) })
+  })
   recv.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') say(`RECV-CONSOLE(${m.type()}) ${m.text().slice(0, 180)}`) })
   recv.on('pageerror', (e) => say(`RECV-PAGEERROR ${String(e && e.message || e).slice(0, 180)}`))
   recv.on('requestfailed', (r) => say(`RECV-REQFAIL ${r.method()} ${r.url().slice(0, 90)} ${r.failure()?.errorText || ''}`))
@@ -175,8 +202,11 @@ try {
   if (got !== expectBytes) await fail(`落地 ${got} B ≠ 源 ${expectBytes} B`)
 
   ok = true
+  const cov = coverageReport()
+  writeFileSync(join(ev, 'chunk-coverage.json'), JSON.stringify(cov, null, 2))
+  say(`块覆盖：unique_200=${cov.unique_200} index=[${cov.min_index}..${cov.max_index}] 缺 ${cov.missing_count} 个，重试 ${cov.retries} 次`)
   writeFileSync(join(ev, 'browser-transfer.json'), JSON.stringify({
-    ok, src, out, recv_code: recvCode, send_code: sendCode ?? null, inbox_auto_appeared: autoAppeared,
+    ok, src, out, coverage: cov, recv_code: recvCode, send_code: sendCode ?? null, inbox_auto_appeared: autoAppeared,
     bytes: got, elapsed_s: (Date.now() - t0) / 1000, chromium: exe, log
   }, null, 2))
   say('传输完成（sha256 结论由 verify-sha256.sh 给）')
