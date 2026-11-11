@@ -169,8 +169,9 @@ cmd_up() {
         printf '%s:%s %s\n' "$img" "$t" "$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$REG/$img:$t" 2>/dev/null | tr '\n' ' ')"
       done ) > "$EV/image-digests.txt"
     cat "$EV/image-digests.txt" | sed 's/^/      /'
-    if grep -q "${DIG_SERVER#sha256:}" "$EV/image-digests.txt" && grep -q "${DIG_WEB#sha256:}" "$EV/image-digests.txt"; then
-        ok "拉到的 yanshu 镜像 digest 与登记值一致（内容未被替换）"
+    if grep -q "${DIG_SERVER#sha256:}" "$EV/image-digests.txt" && grep -q "${DIG_WEB#sha256:}" "$EV/image-digests.txt" \
+       && grep -q "${DIG_ALPINE#sha256:}" "$EV/image-digests.txt" && grep -q "${DIG_PG#sha256:}" "$EV/image-digests.txt"; then
+        ok "四个镜像 digest 全与登记值一致（内容未被替换，等价「按 digest 固定」）"
     else bad "镜像 digest 与登记值不一致（见 image-digests.txt）"; fi
 
     echo "== 起服务 =="

@@ -15,6 +15,32 @@
 来源 sha256（已算出）：`39094ee9f6ba02c4b18f120f8bfae347d96eefd33da4e30ef08e780277b2c315`（1 GiB，1073741824 B）
 落地 sha256：**没有**（接收端未产出文件）→ 口径 2 判 FAIL。
 
+## 0.5 沙箱必须具备的条件（开机器时照这张单子核）
+
+| 项 | 要求 | 不满足会怎样 |
+|---|---|---|
+| docker | 真 root docker，**能 `docker run`**（不是只给 socket）；`docker info` 里 Driver 正常 | `docker run` 报 `error during container init: operation not permitted` → 直接 INCONCLUSIVE，别指望 |
+| docker.sock | 执行用户能访问 `/var/run/docker.sock`（在 docker 组，或 root） | compose 全线不可用 |
+| 端口 | 只需 **18080/tcp 本机可用**（compose 里 `web` 发布 18080→80）；不外联也不需要开放入站 | 起服务报 port already allocated |
+| 浏览器 | chromium/chrome 与 docker **必须在同一台机器**（脚本走 `http://127.0.0.1:18080`） | 跨机器需改 `--url`，且两端 profile 也得在能访问该地址的机器上 |
+| node | `node` ≥ 18 + `npm i playwright-core`（不下载 bundled browser，用系统 chromium） | transfer 阶段只能手工跑 |
+| 磁盘 | `/data` 这类大盘 ≥ 6 GiB 空闲（1 GiB 用例：源 + 落地 + 镜像/卷）；**别用 `/tmp`** | 中途 ENOSPC，落地文件残缺 |
+| 网络 | 能到 `swr.cn-east-5.myhuaweicloud.com`（匿名拉取；要登录就用一次性 pull token，别落长期凭据）、能到 `raw.githubusercontent.com` 取 compose | 拉不到镜像/compose → INCONCLUSIVE |
+| 时间 | 整轮 ~15 分钟（1 GiB 加密+上传 76s，下载视限速而定） | 机器到期会腰斩 |
+
+## 0.6 静态核验（**未含运行期**，只在镜像/文件层面）
+
+| 项 | 值 | 判定 |
+|---|---|---|
+| SWR 上四个镜像的 tag | `yanshu-server:v0.2.4`、`yanshu-web:v0.2.4`、`library-alpine:3.20`、`library-postgres:16-alpine` 全部存在 | 齐全 |
+| 镜像 label `org.opencontainers.image.revision` | `e886fc6c2a259229236284e257b9d81d23102bf6` | = `git rev-parse v0.2.4^{commit}`，逐字相同 |
+| 镜像内 `/app/kernel/yanshu_sm.wasm` sha256 | `daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de` | = 仓库 `v0.2.4` 同文件，且 = `verifier.go` 白名单首条 |
+| 镜像内 `/app/yanshu-server` sha256 | `4f3a4ba5fb9d45de29ea8cae1f2a26b1d9c555c41b5fdd09a6fc622c859eb5ec` | Go 1.27.4 / CGO_ENABLED=0 / -trimpath |
+| `docker-compose.yml`（tag v0.2.4） | sha256 `16baed7e89f848386edfa00da9f0fcc4f48f43103ef0cab86ea8d5689a76884d` | = `origin/main` 同文件 |
+| `docker compose config` | 三服务镜像 tag 解析为 v0.2.4 / 3.20 / 16-alpine，`web` 发布 18080→80，无 `build:` 段 | 无本地构建 |
+
+> 这块**不能**代替运行期结论：镜像里有正确的二进制，不等于 `compose up` 后真能收发。
+
 ## 1. 怎么复跑（一条命令）
 
 ```sh
