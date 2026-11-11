@@ -1,0 +1,4 @@
+yanshu-server:v0.2.4 swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server@sha256:e253e71ee238fec49bf0e0eff84dcfa126241d608bc708e3865a1be79a677370  
+yanshu-web:v0.2.4 swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web@sha256:ee3c8e7a085cb3974374b704c44a92467c7416be73ebb494443fd35705f3a6e0  
+library-alpine:3.20 swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-alpine@sha256:ec7ca0b6e94fe97eacac06ae7c8a5c20fca978adb4446af4abf1d46b7cdc818c  
+library-postgres:16-alpine swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres@sha256:14f55ab28d36faa81870fdb6d182677caf2729a2330bd5be84afecc77d1c9601  

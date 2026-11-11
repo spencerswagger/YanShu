@@ -1,0 +1,12 @@
+
+$ node /data/gate-pkg/browser-transfer.mjs --url http://127.0.0.1:18080/ --src /data/ys-fixtures/src-v0.2.4-1-GiB.bin --out /data/clean-v0.2.4/landed-v0.2.4.bin --gib 1 --evidence /data/gate-pkg/results/20261111T150720-v0.2.4 --dl-dir /data/ys-fixtures/downloads
+[5.2s] 下载落地目录 /data/ys-fixtures/downloads（CDP setDownloadBehavior=allow）
+[10.1s] 接收端已就绪，码 GVCN
+[13.5s] 发送端已就绪，码 0EZH
+[13.5s] 填入对方码 GVCN
+[14.8s] 已选文件 /data/ys-fixtures/src-v0.2.4-1-GiB.bin（1.00 GiB）
+[14.9s] 已点发送，等加密+上传完成
+[91.2s] 发送端显示已发送
+[121.2s] 30s 内列表未自动出现新文件 → 点「刷新」（记为产品观察项：接收端不自动刷新）
+[121.3s] 接收端出现待接收项（自动出现=false），点「下载并解密」
+[421.3s] 没收到 download 事件，改盯 downloadsPath 目录

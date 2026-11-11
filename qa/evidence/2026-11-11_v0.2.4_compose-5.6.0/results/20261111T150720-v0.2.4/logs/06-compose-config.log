@@ -1,0 +1,137 @@
+name: clean-v024
+services:
+  init:
+    restart: 'no'
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mkdir -p /secrets
+        # 一律用十六进制：base64 可能含 '/' 或 '+'，会把 DSN 解析打断（invalid port）
+        [ -s /secrets/token_secret ] || od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > /secrets/token_secret
+        [ -s /secrets/pg_password ] || od -An -tx1 -N24 /dev/urandom | tr -d ' \n' > /secrets/pg_password
+        # 密钥由业务容器的运行用户（10001）读取；postgres 以 root 读，不受影响
+        chown 10001:10001 /secrets/token_secret /secrets/pg_password
+        chmod 600 /secrets/token_secret /secrets/pg_password
+        chmod 755 /secrets
+        chown -R 10001:10001 /data/blobs /data/logs
+        echo "[init] ./secrets 已就绪，数据卷属主已修正"
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-alpine:3.20
+    networks:
+      default: null
+    volumes:
+      - type: bind
+        source: /data/clean-v0.2.4/secrets
+        target: /secrets
+        bind: {}
+      - type: volume
+        source: blobdata
+        target: /data/blobs
+        volume: {}
+      - type: volume
+        source: logdata
+        target: /data/logs
+        volume: {}
+  postgres:
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: yanshu
+      POSTGRES_PASSWORD_FILE: /secrets/pg_password
+      POSTGRES_USER: yanshu
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine
+    networks:
+      default: null
+    volumes:
+      - type: volume
+        source: pgdata
+        target: /var/lib/postgresql/data
+        volume: {}
+      - type: bind
+        source: /data/clean-v0.2.4/secrets
+        target: /secrets
+        read_only: true
+        bind: {}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+        required: true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U yanshu -d yanshu
+      timeout: 5s
+      interval: 10s
+      retries: 10
+      start_period: 20s
+  web:
+    restart: unless-stopped
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:v0.2.4
+    networks:
+      default: null
+    depends_on:
+      yanshu-server:
+        condition: service_healthy
+        required: true
+    ports:
+      - mode: ingress
+        target: 80
+        published: "18080"
+        protocol: tcp
+  yanshu-server:
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        YANSHU_TOKEN_SECRET="$$(cat /secrets/token_secret)"; export YANSHU_TOKEN_SECRET
+        # 口令做 URL 编码再拼 DSN：老版本可能生成过含 '/' 或 '+' 的口令（base64），
+        # 不编码会把 DSN 截断成 invalid port —— 编码后老部署无需删数据即可恢复。
+        PG_PW_ENC="$$(sed 's|%|%25|g; s|/|%2F|g; s|@|%40|g; s|:|%3A|g; s|+|%2B|g' /secrets/pg_password)"
+        YANSHU_DATABASE_URL="postgres://yanshu:$${PG_PW_ENC}@postgres:5432/yanshu?sslmode=disable"; export YANSHU_DATABASE_URL
+        /app/yanshu-server -migrate-only
+        exec /app/yanshu-server
+    environment:
+      YANSHU_ADDR: 0.0.0.0:8080
+      YANSHU_BLOB_DIR: /app/data/blobs
+      YANSHU_ENV: production
+      YANSHU_KERNEL_WASM: /app/kernel/yanshu_sm.wasm
+      YANSHU_LOG_DIR: /app/data/logs
+      YANSHU_STORAGE_QUOTA_BYTES: "8589934592"
+      YANSHU_TOKEN_EPOCH: "1"
+      YANSHU_VERIFIER: sm2
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:v0.2.4
+    networks:
+      default: null
+    volumes:
+      - type: volume
+        source: blobdata
+        target: /app/data/blobs
+        volume: {}
+      - type: volume
+        source: logdata
+        target: /app/data/logs
+        volume: {}
+      - type: bind
+        source: /data/clean-v0.2.4/secrets
+        target: /secrets
+        read_only: true
+        bind: {}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+        required: true
+      postgres:
+        condition: service_healthy
+        required: true
+networks:
+  default:
+    name: clean-v024_default
+volumes:
+  blobdata:
+    name: clean-v024_blobdata
+  logdata:
+    name: clean-v024_logdata
+  pgdata:
+    name: clean-v024_pgdata

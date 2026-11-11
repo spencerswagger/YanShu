@@ -1,0 +1,9 @@
+yanshu-server-1  | time=2026-11-11T15:08:07.031Z level=INFO msg="migrations applied" logPath=/app/data/logs/yanshu-server-2026-11-11.log
+yanshu-server-1  | time=2026-11-11T15:08:07.034Z level=INFO msg="starting yanshu-server" addr=0.0.0.0:8080 verifier=sm2 contract=v1 logPath=/app/data/logs/yanshu-server-2026-11-11.log logRetentionDays=7
+yanshu-server-1  | time=2026-11-11T15:08:07.041Z level=INFO msg="token epoch" provided=1 current=1
+yanshu-server-1  | time=2026-11-11T15:08:07.074Z level=INFO msg="sm2 verifier loaded" kernel=/app/kernel/yanshu_sm.wasm version=0x00010000
+yanshu-server-1  | time=2026-11-11T15:08:07.075Z level=INFO msg="kernel verified" sha256=daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de version=0x00010000 exports=44
+yanshu-server-1  | time=2026-11-11T15:08:07.075Z level=INFO msg=listening addr=0.0.0.0:8080
+yanshu-server-1  | time=2026-11-11T15:08:07.083Z level=INFO msg="stats reconcile ok" day=2026-11-10 deviation=0 countersConsumed=0 actualConsumed=0 countersCreated=0 actualCreated=0
+yanshu-server-1  | time=2026-11-11T15:08:11.931Z level=INFO msg=http requestId=req_b308a721df8612a6 method=GET route="GET /healthz" status=200 bytes=51 durationMs=0
+yanshu-server-1  | time=2026-11-11T15:08:17.661Z level=INFO msg=http requestId=req_7c2577603fd97dbe method=GET route="GET /healthz" status=200 bytes=51 durationMs=1

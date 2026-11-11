@@ -1,0 +1,2 @@
+
+$ curl -fsS -o /data/clean-v0.2.4/docker-compose.yml https://raw.githubusercontent.com/spencerswagger/YanShu/v0.2.4/docker-compose.yml

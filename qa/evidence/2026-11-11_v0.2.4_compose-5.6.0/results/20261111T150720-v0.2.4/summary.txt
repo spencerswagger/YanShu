@@ -1,0 +1,22 @@
+  PASS  工作目录是新建空目录：/data/clean-v0.2.4
+  PASS  compose sha256 = 16baed7e89f848386edfa00da9f0fcc4f48f43103ef0cab86ea8d5689a76884d（与已知值一致）
+  PASS  compose 无 build: 段
+  PASS  docker compose config 解析通过
+  PASS  镜像 tag 解析为 v0.2.4（未被改写）
+  PASS  docker compose pull 成功
+  PASS  拉到的 yanshu 镜像 digest 与登记值一致（内容未被替换）
+  PASS  docker compose up -d --wait 返回 0
+  PASS  running 服务数 3 ≥ 3（postgres/server/web）
+  PASS  web 18080 /healthz 返回 status=ok
+  PASS  server 日志含 sm2 verifier loaded
+  PASS  首次启动自动生成 ./secrets/{token_secret,pg_password}
+PASS=12 FAIL=0 SKIP=0
+  PASS  docker compose down 返回 0
+  PASS  down 之后 ./secrets 仍在（未删密钥）
+  PASS  再次 up -d --wait 返回 0
+  PASS  docker compose down 返回 0
+  PASS  down 之后 ./secrets 仍在（未删密钥）
+  PASS  再次 up -d --wait 返回 0
+  PASS  重启前后两个密钥 sha256 完全一致（token 与 pg 都复用）
+  PASS  重启后 /healthz 仍 ok（旧密钥能开旧库）
+PASS=5 FAIL=0 SKIP=0
