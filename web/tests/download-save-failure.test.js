@@ -65,7 +65,7 @@ function fakeApi() {
 
 const fastPacer = () => createChunkPacer({ ratePerSec: 1000, burst: 1000, maxRatePerSec: 1000, sleep: async () => {} })
 
-function run({ sink, save, api = fakeApi(), onProgress = () => {} }) {
+function run({ sink, save, api = fakeApi(), onProgress = () => {}, cleanupDelayMs = 0 }) {
   return receiveTransfer({
     api,
     kernel: fakeKernel(),
@@ -75,8 +75,12 @@ function run({ sink, save, api = fakeApi(), onProgress = () => {} }) {
     save,
     pacer: fastPacer(),
     onProgress,
+    cleanupDelayMs,
   })
 }
+
+/** 让 setTimeout(0) 跑完 */
+const tick = () => new Promise((r) => setTimeout(r, 20))
 
 test('写盘失败（OPFS 配额满）：报 SAVE_QUOTA_EXCEEDED、不 ack、不报成功', async () => {
   const root = {
@@ -199,6 +203,9 @@ test('成功路径顺序：close → save → ack（save 抛错则整单失败�
     },
     api,
   })
-  assert.deepEqual(order, ['close', 'save', 'cleanup', 'ack'], `顺序必须是 close→save→cleanup→ack（实际 ${order}）`)
+  // cleanup 必须在 ack **之后**（OPFS 副本是「click 成功但没写盘」的唯一兜底，不能删在 ack 前）
+  assert.deepEqual(order, ['close', 'save', 'ack'], `ack 前的顺序必须是 close→save→ack（实际 ${order}）`)
   assert.equal(r.size, COUNT * CHUNK)
+  await tick()
+  assert.deepEqual(order, ['close', 'save', 'ack', 'cleanup'], `副本要在 ack 之后才清（实际 ${order}）`)
 })

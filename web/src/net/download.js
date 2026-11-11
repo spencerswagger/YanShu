@@ -102,6 +102,8 @@ async function receiveStreaming({
   sinkFactory,
   save,
   pacer: injectedPacer,
+  /** 测试可注入；生产固定 60s（给浏览器把流接过去的时间） */
+  cleanupDelayMs = 60_000,
   ack = true,
   directBuffer,
 }) {
@@ -246,8 +248,6 @@ async function receiveStreaming({
       report({ phase: 'saving', done: totalSize, total: totalSize, message: '交给浏览器保存…', verified: true })
       await save(out.blob || out.file, out.name || safeFileName(meta.name, meta.ext))
     }
-    // OPFS 副本在交给浏览器之后（saveBlob 的 revoke 之后）才清，避免把唯一副本删掉
-    await sink.cleanup?.()
   } catch (err) {
     await sink.abort?.()
     throw err
@@ -257,6 +257,11 @@ async function receiveStreaming({
     // ack 必须带租约 id（契约 §8.5）：不带会被判 409 DOWNLOAD_NOT_STARTED
     await api.ack({ transferId, downloadId: prelude.downloadId })
   }
+  // **OPFS 副本必须在 ack 之后才清**：`a.click()` 成功只代表浏览器接受了这次下载请求，
+  // 「接受但没写盘」（阻止多个自动下载 / Downloads 满 / 策略拦截）客户端没有任何回调可观测——
+  // 这份副本是唯一兜底。删在 ack 之前，就会重演 v0.2.4「界面说已保存 → 密文已删 → 没文件」。
+  // 延迟 60s 是为了给浏览器留时间把流接过去；期间同名文件会被下次 open() 清掉（open 里有 removeEntry）。
+  if (sink.cleanup) setTimeout(() => sink.cleanup(), cleanupDelayMs)
   info('接收完成（流式）', { bytes: done, chunks: chunkCount })
   return { name: sink.name, size: done, transferId, dataVerified: true }
 }
