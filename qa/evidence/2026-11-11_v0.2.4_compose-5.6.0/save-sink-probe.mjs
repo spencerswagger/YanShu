@@ -18,7 +18,8 @@
  * 退出码：0 成功且两侧 sha256 相同；1 失败；2 用法错误。
  */
 import { chromium } from 'playwright-core'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
+import { connect as netConnect } from 'node:net'
 import { createHash } from 'node:crypto'
 import { createWriteStream, existsSync, mkdirSync, statSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -28,14 +29,17 @@ const arg = (k, d = '') => {
   const i = process.argv.indexOf(k)
   return i > 0 ? process.argv[i + 1] : d
 }
-const url = arg('--url', 'http://127.0.0.1:18080/')
+// 注意：页面自带 CSP `connect-src 'self'`，所以**不能**从页面直接 fetch 到另一个端口。
+// 做法：本脚本起一个同源反向代理（页面访问它），`/__ys_sink/*` 由本进程接住写盘，其余全部转发给 --target。
+const target = new URL(arg('--target', 'http://127.0.0.1:18080'))
+const listenPort = Number(arg('--port', '18081'))
+const url = arg('--url', `http://127.0.0.1:${listenPort}/`)
 const src = arg('--src')
 const out = arg('--out')
 const ev = arg('--evidence', 'results')
 const gib = Number(arg('--gib', '1'))
-const host = arg('--host', '127.0.0.1')
-const port = Number(arg('--port', '19090'))
 const exe = arg('--executable', process.env.CHROMIUM_BIN || '/usr/bin/chromium')
+const SINK = '/__ys_sink'
 if (!src || !out) { console.error('用法：--src <源文件> --out <落地文件>'); process.exit(2) }
 
 mkdirSync(ev, { recursive: true })
@@ -53,31 +57,52 @@ const expectBytes = Math.round(gib * 1024 * 1024 * 1024)
 try { if (statSync(src).size < expectBytes) { console.error('源文件小于要求'); process.exit(2) } }
 catch { console.error(`源文件不存在：${src}`); process.exit(2) }
 
-// ---------- 落地端：把页面写来的块按顺序追加到 out ----------
+// ---------- 同源代理 + 落地端：把页面写来的块按顺序追加到 out ----------
 const fd = createWriteStream(out)
 let written = 0
 let writes = 0
 const server = createServer((req, res) => {
-  if (req.method !== 'POST') { res.writeHead(405).end(); return }
-  const parts = []
-  req.on('data', (c) => parts.push(c))
-  req.on('end', () => {
-    const buf = Buffer.concat(parts)
-    if (req.url.startsWith('/w')) {
-      written += buf.length
-      writes += 1
-      fd.write(buf)
-      res.writeHead(200).end()
-    } else if (req.url.startsWith('/close')) {
-      fd.end(() => { res.writeHead(200).end() })
-    } else { res.writeHead(404).end() }
-  })
+  if (req.url.startsWith(SINK)) {
+    if (req.method !== 'POST') { res.writeHead(405).end(); return }
+    const parts = []
+    req.on('data', (c) => parts.push(c))
+    req.on('end', () => {
+      const buf = Buffer.concat(parts)
+      if (req.url.startsWith(`${SINK}/w`)) {
+        written += buf.length
+        writes += 1
+        fd.write(buf)
+        res.writeHead(200, { 'content-type': 'text/plain' }).end('ok')
+      } else if (req.url.startsWith(`${SINK}/close`)) {
+        fd.end(() => { res.writeHead(200, { 'content-type': 'text/plain' }).end('ok') })
+      } else { res.writeHead(404).end() }
+    })
+    return
+  }
+  // 其余一律转发给产品服务（含 /v1/*、静态资源）
+  const pr = httpRequest({
+    host: target.hostname, port: target.port, path: req.url, method: req.method, headers: req.headers,
+  }, (pres) => { res.writeHead(pres.statusCode, pres.headers); pres.pipe(res) })
+  pr.on('error', () => { try { res.writeHead(502).end() } catch {} })
+  req.pipe(pr)
 })
-await new Promise((r) => server.listen(port, host, r))
-say(`落地服务 ${host}:${port} → ${out}`)
+// WebSocket 透传（产品的 /v1/ws 是 upgrade）：直接管道 TCP，不改帧
+server.on('upgrade', (req, socket, head) => {
+  const up = netConnect(Number(target.port), target.hostname, () => {
+    const raw = [`${req.method} ${req.url} HTTP/1.1`]
+    for (let i = 0; i < req.rawHeaders.length; i += 2) raw.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`)
+    up.write(raw.join('\r\n') + '\r\n\r\n')
+    if (head && head.length) up.write(head)
+    up.pipe(socket); socket.pipe(up)
+  })
+  up.on('error', () => { try { socket.destroy() } catch {} })
+  socket.on('error', () => { try { up.destroy() } catch {} })
+})
+await new Promise((r) => server.listen(listenPort, '127.0.0.1', r))
+say(`同源代理 127.0.0.1:${listenPort} → ${target.origin}；落地 ${out}`)
 
-// ---------- 页面里装 showSaveFilePicker 的测试替身 ----------
-const sinkStub = () => {
+// ---------- 页面里装 showSaveFilePicker 的测试替身（同源 POST，避开 CSP） ----------
+const sinkStub = (sinkPath) => {
   window.showSaveFilePicker = async (opts) => {
     const name = (opts && opts.suggestedName) || 'out.bin'
     return {
@@ -87,9 +112,10 @@ const sinkStub = () => {
         return {
           async write(data) {
             const u8 = data instanceof Uint8Array ? data : new Uint8Array(data)
-            await fetch(`http://${window.__ysSinkHost}/w`, { method: 'POST', body: u8 })
+            const r = await fetch(`${sinkPath}/w`, { method: 'POST', body: u8 })
+            if (!r.ok) throw new Error(`sink ${r.status}`)
           },
-          async close() { await fetch(`http://${window.__ysSinkHost}/close`, { method: 'POST', body: '' }) },
+          async close() { await fetch(`${sinkPath}/close`, { method: 'POST', body: '' }) },
           async abort() {},
         }
       },
@@ -104,8 +130,8 @@ try {
   ctxA = await chromium.launchPersistentContext(join(profileRoot, 'recv'), {
     executablePath: exe, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'],
   })
-  await ctxA.addInitScript(`window.__ysSinkHost = ${JSON.stringify(`${host}:${port}`)}`)
-  await ctxA.addInitScript(sinkStub)
+  await ctxA.addInitScript(`window.__ysSinkPath = ${JSON.stringify(SINK)}`)
+  await ctxA.addInitScript(sinkStub, SINK)
   const recv = ctxA.pages()[0] || (await ctxA.newPage())
   recv.on('console', (m) => { if (m.type() === 'error') say(`RECV-CONSOLE(error) ${m.text().slice(0, 160)}`) })
   recv.on('pageerror', (e) => say(`RECV-PAGEERROR ${String(e && e.message || e).slice(0, 160)}`))

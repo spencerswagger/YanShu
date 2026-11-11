@@ -9,7 +9,7 @@
 | # | 口径 | 结果 |
 |---|---|---|
 | 1 | 干净空目录 + 官方 compose + SWR 官方镜像，无本地 build、无改 tag | **PASS（12/12）** |
-| 2 | 双浏览器 ≥1 GiB 真收发，源/落地 sha256 逐字相同 | **FAIL** —— 发送端 76s 完成；接收端拉到 1072 个块（含 81 次 429 限速重试）但**没有落地文件**，28 分钟内未产出 sha256 |
+| 2 | 双浏览器 ≥1 GiB 真收发，源/落地 sha256 逐字相同 | **FAIL** —— 发送端 76s 完成；接收端拉到 1072 个块（含 81 次 429 限速重试）但**没有落地文件**，28 分钟内未产出 sha256。**根因已定案（§6.6）**：流式接收路径从不把数据交给浏览器（P0），429 只是把速率顶到 2 MiB/s 的独立设计问题 |
 | 3 | `down && up -d` 后 `./secrets/` 两个密钥 sha256 不变 | **PASS**（前后两值逐字相同） |
 
 来源 sha256（已算出）：`39094ee9f6ba02c4b18f120f8bfae347d96eefd33da4e30ef08e780277b2c315`（1 GiB，1073741824 B）
@@ -195,7 +195,56 @@ pg_password  667ccf1225949321088d729715684a3242dda05859c4aea4a760a27b61ad9a04
 - **1 GiB 等级下载会撞 429 限速**：81 次 429，客户端重试能继续，但整单落地未完成，需要定位是限速策略、
   还是浏览器侧 1 GiB Blob 组装/保存的问题（下一步：在同一沙箱复跑并抓浏览器 console + 内存峰值）。
 
-## 7. 处置建议（按口径第 4 条）
+## 6.6 根因定案（2026-11-12 00:51–01:02 CST，新机 `sbx-yanshu-yanshu-v025-767e`）
+
+§6.5 的判读方向对（卡在最后一步），但**具体机理说错了**：不是「1 GiB Blob 组装太慢/没走通」，
+而是**流式路径根本没有调用 `save()`**。证据链三步：
+
+### ① 代码：`sink.close()` 的返回值被丢掉
+
+```js
+// web/src/net/download.js:139（流式接收，默认路径）
+await sink.close()          // ← 返回 {blob,name} 或 {file,name}，这里丢弃
+// :145
+return { name: sink.name, size: done, transferId, dataVerified: true }
+```
+
+`save()`（`saveBlob`）**只**在非流式 `receiveOnce` 的 `:257` 调用。而 `receiveStreaming` 是否启用取决于
+`kernel.supportsStreaming && sinkFactory` —— App 恒传 `sinkFactory`，内核支持流式 → **走的一直是流式**。
+
+### ② 环境：没有 File System Access 时退回内存 sink，然后丢弃
+
+实测 headless Chromium 154：`typeof window.showSaveFilePicker === "undefined"`
+→ `defaultSinkFactory` 返回 `createMemorySink()`（明文全攒在 JS 内存里）
+→ 1 GiB 组装完，`close()` 的结果没人接 → 数据进垃圾桶。
+**Safari / Firefox 同样没有该 API**（`lib/saveStream.js` 注释自己写了）→ 真实用户同样中招。
+
+### ③ 实测：同一镜像，两种落盘环境
+
+| 用例 | 结果 |
+|---|---|
+| A 真 headless（产品原样） | 1024/1024 块、100%、584.5 s 完成；UI 报「已保存至本机：…（1.0 GB）」；**磁盘 0 B**（`downloads/` 与全盘都找不到） |
+| B 同镜像 + `showSaveFilePicker` 测试替身（`save-sink-probe.mjs`，字节写到真实文件） | 1073741824 B / 1024 次写入 / 601.8 s；`src` 与 `out` sha256 **逐字相同** `424f4769…f58a8e4` |
+
+→ **解密链路逐字节正确**，断点唯一：浏览器落盘这一跳。
+
+### ④ 顺带把 429 说清楚（与本 FAIL 无关，但同为缺陷）
+
+`spec/limits.go` `TransferReadPerIP = {60s, 120, 120}`，每块 ≈1 MiB → **2 MiB/s 硬顶**；`handlers_blobs.go:211`
+先查 `read:ip` 再查 `read:transfer`。本轮服务端实测：`GET chunks` **1097 = 1024×200 + 73×429**，跨度 456.7 s，
+任意 60 s 窗口最多 245 次；令牌桶预测 `120 + 2/s×456.7 = 1033`，实测 1024（差 0.9%）→ 就是这个桶在限。
+429 间隔中位 6.02 s。**单浏览器也照样打满**，与「双浏览器共用出口 IP」无关。
+
+### ⑤ 我方 harness 的错（已修）
+
+`browser-transfer.mjs` 的 `waitForEvent('download')` 硬编码 **5 分钟**，而 1 GiB 在 2 MiB/s 下要 8.5 分钟
+→ 必然先超时；旧证据里「进度停在 69%/74%」是**采样器在 423 s 被 `clearInterval` 停掉**，不是产品停住。
+已加 `--dl-timeout-s`（默认 900）并在日志里打印该值。
+
+原始数据：`results/20261112T0051-v0.2.4-rerun/`（`summary.txt`、`save-sink-probe.json`、`probe.log`、
+`server-chunks-get.log.gz`）。
+
+
 
 口径 2 未通过 → 不能当「发布出去的东西真能用」。根因已在两次复跑中收敛到**浏览器侧「1 GiB 组装 Blob → 保存」**
 （§6.5：1024 块全 200 拿到，但进度停在 69%、无落地文件、无 download 事件）。建议顺序：
