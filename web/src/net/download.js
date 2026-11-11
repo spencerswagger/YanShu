@@ -237,7 +237,10 @@ async function receiveStreaming({
       verified: true,
     })
     const out = await sink.close()
-    // 落盘成功（内存 Blob / OPFS 文件 / 用户选的目标文件）之后，才把文件交给浏览器下载。
+    // close() 成功 = 明文字节确实写到了本机（内存 Blob / OPFS 文件 / 用户选的目标文件）；
+    // 之后才把它交给浏览器下载，再 ack。**注意口径**：浏览器是否真把文件写进 downloads/ 不可观测，
+    // 所以 ack 的判据是「写进 OPFS/目标文件成功」+「浏览器接受了下载请求（a.click 没抛）」，
+    // 不是「downloads/ 里出现文件」——后者只能靠 Gate 在镜像上验。
     // 「用户选路径」那条在 close() 时已经写到目标位置，不需要再点 <a download>。
     if (save && (out?.blob || out?.file)) {
       report({ phase: 'saving', done: totalSize, total: totalSize, message: '交给浏览器保存…', verified: true })

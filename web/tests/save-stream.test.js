@@ -114,3 +114,39 @@ test('OPFS sink 中途 abort 要把半成品删掉', async () => {
 test('内存上限就是 64 MiB（超过必须换流式落盘）', () => {
   assert.equal(MAX_MEMORY_SAVE_BYTES, 64 * 1024 * 1024)
 })
+
+test('OPFS 成功后 cleanup() 必须删掉暂存副本（否则每个大文件留一份）', async () => {
+  const root = fakeOpfs()
+  const sink = createOpfsSink('big.bin', { root })
+  await sink.open()
+  await sink.write(new Uint8Array(16))
+  await sink.close()
+  assert.equal(root.files.has('big.bin'), true, 'close 之后副本还在（交给浏览器下载要用）')
+  await sink.cleanup()
+  assert.equal(root.files.has('big.bin'), false, '交付之后必须清掉，别一直占 origin 存储')
+})
+
+test('OPFS 写盘撞配额 → SAVE_QUOTA_EXCEEDED（不是裸 QuotaExceededError）', async () => {
+  const root = {
+    async getFileHandle() {
+      return {
+        async createWritable() {
+          return {
+            async write() {
+              throw new DOMException('quota', 'QuotaExceededError')
+            },
+            async close() {},
+            async abort() {},
+          }
+        },
+        async getFile() {
+          return { size: 0 }
+        },
+      }
+    },
+    async removeEntry() {},
+  }
+  const sink = createOpfsSink('q.bin', { root })
+  await sink.open()
+  await assert.rejects(() => sink.write(new Uint8Array(4)), (err) => err.code === 'SAVE_QUOTA_EXCEEDED')
+})

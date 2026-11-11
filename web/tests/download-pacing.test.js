@@ -167,8 +167,11 @@ test('pacer：429 降速并按 Retry-After 等（不套 5s 地板），连续成
   assert.equal(waitMs, 1000, '429 时必须按服务端 Retry-After 等，而不是固定 5 秒')
   assert.ok(pacer.ratePerSec < before, '吃 429 必须降速')
   assert.match(pacer.summary(), /限速 1 次/)
+  // AI 必须是**加性**：24 次成功后只加一档 +0.1（乘性 ×1.5 会直接冲到 2，越界；这里钉住斜率）
+  for (let i = 0; i < 24; i++) pacer.onSuccess()
+  assert.ok(Math.abs(pacer.ratePerSec - 1.1) < 1e-9, `AI 必须加性 +0.1（实际 ${pacer.ratePerSec}）`)
   for (let i = 0; i < 240; i++) pacer.onSuccess()
-  assert.ok(pacer.ratePerSec > 2 - 1e-9 && pacer.ratePerSec <= 2, `AIMD 必须收敛在 2 次/秒以内（实际 ${pacer.ratePerSec}）`)
+  assert.ok(pacer.ratePerSec <= 2, `稳态不许越过服务端 2 次/秒（实际 ${pacer.ratePerSec}）`)
   await pacer.acquire()
   assert.ok(waits.length >= 1)
 })

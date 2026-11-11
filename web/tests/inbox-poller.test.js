@@ -117,3 +117,24 @@ test('stop 之后不再触发', async () => {
   assert.equal(t.q.every((x) => x.cancelled), true)
   assert.equal(runs, 1)
 })
+
+test('任务返回 false（下载中主动跳过）时，不得更新「上次更新」时间（防假活）', async () => {
+  const t = timers()
+  let runs = 0
+  const seen = []
+  const poller = createPoller({
+    task: async () => {
+      runs += 1
+      return false // 这次没真发请求
+    },
+    intervalMs: 1000,
+    setTimer: t.setTimer,
+    clearTimer: t.clearTimer,
+    onRun: (at) => seen.push(at),
+  })
+  poller.start()
+  await new Promise((r) => setImmediate(r))
+  assert.equal(runs, 1)
+  assert.deepEqual(seen, [], '没真发请求就不许刷新「自动更新 hh:mm:ss」')
+  assert.equal(poller.lastAt, 0)
+})
