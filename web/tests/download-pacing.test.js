@@ -171,3 +171,34 @@ test('pacer：429 降速并按 Retry-After 等（不套 5s 地板），连续成
   await pacer.acquire()
   assert.ok(waits.length >= 1)
 })
+
+test('回退路径（无流式内核）遇到超过 maxPackSize 的明文：取块之前就明确报 FILE_TOO_LARGE', async () => {
+  const api = {
+    calls: 0,
+    async getTransfer() {
+      return { state: 'READY', plaintext_size: 1024 * 1024 * 1024, chunk_count: 1024, sender_code: 'AAAA' }
+    },
+    async getPrelude() {
+      api.calls += 1
+      return { bytes: new Uint8Array([1]), downloadId: 'd' }
+    },
+    async getChunk() {
+      api.calls += 1
+      return new Uint8Array(1)
+    },
+  }
+  const kernel = { supportsStreaming: false } // 没有流式入口 → 只能整包
+  await assert.rejects(
+    () =>
+      receiveTransfer({
+        api,
+        kernel,
+        session: { privateKey: new Uint8Array(32) },
+        transferId: 't-legacy',
+        senderPublic: async () => new Uint8Array(65),
+        save: null,
+      }),
+    (err) => err.code === 'FILE_TOO_LARGE',
+  )
+  assert.equal(api.calls, 0, '必须在取 prelude/块之前挡住，不能先把 1 GiB 拉下来')
+})

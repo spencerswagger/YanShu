@@ -249,6 +249,16 @@ async function receiveOnce({
     throw terminalError(meta.state, meta.terminal_reason)
   }
 
+  // 回退路径（没有流式内核 / 没给 sink）只能整包解、整包拼 Blob：先按 maxPackSize 挡住，
+  // 别先把 1 GiB 拉下来再在收尾处被内存撑死（v0.2.4 就是「无报错、无文件」的死龟）。
+  const plaintextSize = Number(meta.plaintext_size) || 0
+  if (plaintextSize > config.maxPackSize) {
+    const err = new Error(
+      `当前内核不支持流式解包，${plaintextSize} 字节超过整包上限 ${config.maxPackSize} 字节，无法安全下载（否则会整包进内存）`,
+    )
+    err.code = 'FILE_TOO_LARGE'
+    throw err
+  }
   report({ phase: 'prelude', done: 0, total: meta.plaintext_size || 0, message: '取回包头' })
   const prelude = await api.getPrelude(transferId)
   if (!prelude.downloadId) throw new ApiError({ code: 'DOWNLOAD_NOT_STARTED', status: 409, message: 'no download id' })

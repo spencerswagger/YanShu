@@ -35,7 +35,7 @@ export const config = {
    * 块下载的客户端限速（次/秒）：契约 §11.1 把内容端点限到「按传输 600 次/分、按 IP 120 次/分」，
    * 最紧的一档只有 2 次/秒。接收主循环按这个值排队，吃到 429 再自己减半降速。
    */
-  chunkRatePerSec: 2.5,
+  chunkRatePerSec: 1.8,
 
   /** 接收侧「小文件直接内存拼 Blob」的上限；超过就必须流式落盘（OPFS/用户选路径），不再整包进内存 */
   maxMemorySaveBytes: 64 * 1024 * 1024,
@@ -60,7 +60,14 @@ export const config = {
    * 端侧内核当前是**整包**接口（ys_pack 一次吃整份明文），所以要给内存留上限：
    * 明文 + 密文包同时在内存里，取 64 MiB 作为可用上限；超过提示等流式接口（Ark 已排期）。
    */
-  /** 整包接口（无流式内核时）的硬上限 */
+  /**
+   * **整包接口**的硬上限，只对「没有流式内核」的分支生效：
+   * - 上传：`sendFile()` 里 `canStream && size > streamThresholdBytes` 会先短路走流式，
+   *   所以有流式内核时 1 GiB 上传**不会**碰到这个值（`net/upload.js:190-206`）；
+   * - 下载：`receiveOnce()` 是没流式内核/没 sink 才会进的回退路径，那里在**取块之前**用它挡
+   *   （明文超过它就报 `FILE_TOO_LARGE`），避免先把 1 GiB 拉下来再整包拼 Blob 把自己撑死。
+   * 它**不**决定下载是否走流式——那条由 `kernel.supportsStreaming && sinkFactory` 决定。
+   */
   maxPackSize: 64 * 1024 * 1024,
 
   /** 刷新后续传要用：把 ≤8 MiB 的密文包留在本机 IndexedDB（更大就只能在当前页面内续传） */
