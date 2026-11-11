@@ -202,7 +202,15 @@ async function receiveStreaming({
     }
     kernel.streamUnpackEnd()
 
-    report({ phase: 'saving', done, decrypted: done, total: totalSize, message: '校验通过，正在落盘…', verified: true })
+    // 块已取齐：进度必须立刻跳到 100%，否则「69%」会被误读成"卡在传输"（v0.2.4 就是这么被误判的）
+    report({
+      phase: 'saving',
+      done: totalSize,
+      decrypted: done,
+      total: totalSize,
+      message: `已收齐 ${chunkCount}/${chunkCount} 块（${done} 字节），校验并落盘…`,
+      verified: true,
+    })
     const out = await sink.close()
     // OPFS / 内存路径交出一个 Blob（OPFS 的 File 由磁盘承载，不复制进 JS 堆）；
     // 「用户选路径」那条已经把块写进目标文件，不需要再点 <a download>。

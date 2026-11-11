@@ -59,6 +59,9 @@ async function refresh({ quiet = false } = {}) {
  * 可见时 8 秒一轮、后台 30 秒一轮，切回页面立刻补一次；`lastSyncText` 让用户知道列表是活的。
  */
 const lastSync = ref(0)
+/** 「多久没有新进展」——v0.2.4 的教训：页面纯静默转圈 10 分钟，用户/测试都以为在下载 */
+const lastProgressAt = ref(0)
+const stallSec = ref(0)
 const lastSyncText = computed(() => {
   if (!lastSync.value) return ''
   const d = new Date(lastSync.value)
@@ -87,6 +90,8 @@ async function take(item) {
     return
   }
   activeId.value = item.transfer_id
+  lastProgressAt.value = Date.now()
+  stallSec.value = 0
   errorText.value = ''
   notice.value = ''
   rxMeter.reset()
@@ -95,6 +100,7 @@ async function take(item) {
     const result = await props.receive({
       transferId: item.transfer_id,
       onProgress: (p) => {
+        lastProgressAt.value = Date.now()
         progress.value = {
           phase: p.phase || '',
           done: p.done || 0,
@@ -144,12 +150,17 @@ watch(
   { immediate: true },
 )
 
+const stallTimer = setInterval(() => {
+  stallSec.value = lastProgressAt.value ? Math.max(0, Math.floor((Date.now() - lastProgressAt.value) / 1000)) : 0
+}, 5000)
+
 onMounted(() => {
   poller.start()
   document.addEventListener('visibilitychange', onVisible)
   window.addEventListener('focus', onFocus)
 })
 onUnmounted(() => {
+  clearInterval(stallTimer)
   poller.stop()
   document.removeEventListener('visibilitychange', onVisible)
   window.removeEventListener('focus', onFocus)
@@ -168,6 +179,9 @@ onUnmounted(() => {
     </div>
 
     <p v-if="lastSyncText && !errorText" class="meta sync">{{ lastSyncText }}（新文件会自动出现在这里）</p>
+    <p v-if="activeId && stallSec >= 30" class="banner warn">
+      已 {{ stallSec }} 秒没有新进展 —— 不是卡在「已保存」，本次仍在进行；若持续不动可刷新后重试（服务端不会删未确认的密文）。
+    </p>
     <p v-if="notice" class="banner info">{{ notice }}</p>
     <p v-if="errorText" class="banner warn">{{ errorText }}</p>
 
