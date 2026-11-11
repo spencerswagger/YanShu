@@ -1,0 +1,154 @@
+
+$ node /data/gate-pkg/browser-transfer.mjs --url http://127.0.0.1:18080/ --src /data/ys-fixtures/src-v0.2.4-1-GiB.bin --out /data/clean-v0.2.4-c/landed-v0.2.4.bin --gib 1 --evidence /data/gate-pkg/results/20261111T155607-v0.2.4 --dl-dir /data/ys-fixtures/downloads
+[1.3s] 下载落地目录 /data/ys-fixtures/downloads（CDP setDownloadBehavior=allow）
+[1.3s] RECV-CONSOLE(error) The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element.
+[1.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 404 (Not Found)
+[4.4s] 接收端已就绪，码 KVWK
+[7.8s] 发送端已就绪，码 37SF
+[7.8s] 填入对方码 KVWK
+[9.1s] 已选文件 /data/ys-fixtures/src-v0.2.4-1-GiB.bin（1.00 GiB）
+[9.2s] 已点发送，等加密+上传完成
+[93.6s] 发送端显示已发送
+[123.6s] 30s 内列表未自动出现新文件 → 点「刷新」（记为产品观察项：接收端不自动刷新）
+[123.7s] 接收端出现待接收项（自动出现=false），点「下载并解密」
+[128.7s] RECV-PROGRESS … 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 10% · 解密中 10% 21.6 MB/s 剩 42 秒 107 MB / 1.00 GB 解密块 107/1024 最近传输 还没有传输记录
+[129.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[133.7s] RECV-PROGRESS … 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 13% · 解密中 13% 22.1 MB/s 剩 40 秒 131 MB / 1.00 GB 解密块 131/1024 最近传输 还没有传输记录
+[135.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[138.7s] RECV-PROGRESS … 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 14% · 解密中 14% 16.5 MB/s 剩 53 秒 142 MB / 1.00 GB 解密块 142/1024 最近传输 还没有传输记录
+[141.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[143.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 15% · 解密中 15% 14.1 MB/s 剩 2 分 153 MB / 1.00 GB 解密块 153/1024 最近传输 还没有传输记录
+[146.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[148.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 16% · 解密中 16% 12.7 MB/s 剩 2 分 164 MB / 1.00 GB 解密块 164/1024 最近传输 还没有传输记录
+[152.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[153.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 17% · 解密中 17% 12.0 MB/s 剩 2 分 175 MB / 1.00 GB 解密块 175/1024 最近传输 还没有传输记录
+[157.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[158.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 18% · 解密中 18% 8.5 MB/s 剩 2 分 186 MB / 1.00 GB 解密块 186/1024 最近传输 还没有传输记录
+[163.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[163.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 19% · 解密中 19% 10.4 MB/s 剩 2 分 197 MB / 1.00 GB 解密块 197/1024 最近传输 还没有传输记录
+[168.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[168.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 20% · 解密中 20% 11.1 MB/s 剩 2 分 208 MB / 1.00 GB 解密块 208/1024 最近传输 还没有传输记录
+[173.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 20% · 解密中 20% 7.8 MB/s 剩 2 分 209 MB / 1.00 GB 解密块 209/1024 最近传输 还没有传输记录
+[174.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[178.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 21% · 解密中 21% 11.4 MB/s 剩 2 分 219 MB / 1.00 GB 解密块 219/1024 最近传输 还没有传输记录
+[179.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[183.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 23% · 解密中 23% 11.0 MB/s 剩 2 分 231 MB / 1.00 GB 解密块 231/1024 最近传输 还没有传输记录
+[185.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[188.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 24% · 解密中 24% 7.8 MB/s 剩 2 分 242 MB / 1.00 GB 解密块 242/1024 最近传输 还没有传输记录
+[190.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[193.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 25% · 解密中 25% 10.1 MB/s 剩 2 分 253 MB / 1.00 GB 解密块 253/1024 最近传输 还没有传输记录
+[196.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[198.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 26% · 解密中 26% 10.9 MB/s 剩 2 分 264 MB / 1.00 GB 解密块 264/1024 最近传输 还没有传输记录
+[202.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[203.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 27% · 解密中 27% 10.6 MB/s 剩 2 分 275 MB / 1.00 GB 解密块 275/1024 最近传输 还没有传输记录
+[207.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[208.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 28% · 解密中 28% 10.9 MB/s 剩 2 分 286 MB / 1.00 GB 解密块 286/1024 最近传输 还没有传输记录
+[213.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[213.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 29% · 解密中 29% 10.7 MB/s 剩 2 分 297 MB / 1.00 GB 解密块 297/1024 最近传输 还没有传输记录
+[218.7s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[218.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 30% · 解密中 30% 7.6 MB/s 剩 2 分 308 MB / 1.00 GB 解密块 308/1024 最近传输 还没有传输记录
+[223.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 30% · 解密中 30% 5.9 MB/s 剩 2 分 309 MB / 1.00 GB 解密块 309/1024 最近传输 还没有传输记录
+[224.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[228.7s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 31% · 解密中 31% 10.1 MB/s 剩 2 分 319 MB / 1.00 GB 解密块 319/1024 最近传输 还没有传输记录
+[229.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[233.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 32% · 解密中 32% 7.1 MB/s 剩 2 分 330 MB / 1.00 GB 解密块 330/1024 最近传输 还没有传输记录
+[235.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[238.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 33% · 解密中 33% 5.6 MB/s 剩 3 分 341 MB / 1.00 GB 解密块 341/1024 最近传输 还没有传输记录
+[240.7s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[243.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 34% · 解密中 34% 4.5 MB/s 剩 3 分 352 MB / 1.00 GB 解密块 352/1024 最近传输 还没有传输记录
+[246.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[248.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 35% · 解密中 35% 3.8 MB/s 剩 3 分 363 MB / 1.00 GB 解密块 363/1024 最近传输 还没有传输记录
+[251.7s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[253.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 37% · 解密中 37% 3.2 MB/s 剩 4 分 374 MB / 1.00 GB 解密块 374/1024 最近传输 还没有传输记录
+[257.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[258.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 38% · 解密中 38% 2.9 MB/s 剩 4 分 385 MB / 1.00 GB 解密块 385/1024 最近传输 还没有传输记录
+[262.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[263.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 39% · 解密中 39% 2.6 MB/s 剩 4 分 396 MB / 1.00 GB 解密块 396/1024 最近传输 还没有传输记录
+[268.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[268.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 40% · 解密中 40% 2.4 MB/s 剩 5 分 407 MB / 1.00 GB 解密块 407/1024 最近传输 还没有传输记录
+[273.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 41% · 解密中 41% 2.3 MB/s 剩 5 分 417 MB / 1.00 GB 解密块 417/1024 最近传输 还没有传输记录
+[273.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[278.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 41% · 解密中 41% 7.4 MB/s 剩 2 分 419 MB / 1.00 GB 解密块 419/1024 最近传输 还没有传输记录
+[279.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[283.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 42% · 解密中 42% 5.3 MB/s 剩 2 分 430 MB / 1.00 GB 解密块 430/1024 最近传输 还没有传输记录
+[284.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[288.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 43% · 解密中 43% 4.3 MB/s 剩 3 分 441 MB / 1.00 GB 解密块 441/1024 最近传输 还没有传输记录
+[290.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[293.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 44% · 解密中 44% 3.6 MB/s 剩 3 分 452 MB / 1.00 GB 解密块 452/1024 最近传输 还没有传输记录
+[295.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[298.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 45% · 解密中 45% 3.1 MB/s 剩 3 分 463 MB / 1.00 GB 解密块 463/1024 最近传输 还没有传输记录
+[301.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[303.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 46% · 解密中 46% 2.8 MB/s 剩 4 分 474 MB / 1.00 GB 解密块 474/1024 最近传输 还没有传输记录
+[306.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[308.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 47% · 解密中 47% 2.6 MB/s 剩 4 分 485 MB / 1.00 GB 解密块 485/1024 最近传输 还没有传输记录
+[312.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[313.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 48% · 解密中 48% 2.4 MB/s 剩 4 分 496 MB / 1.00 GB 解密块 496/1024 最近传输 还没有传输记录
+[317.7s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[318.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 49% · 解密中 49% 2.3 MB/s 剩 4 分 506 MB / 1.00 GB 解密块 506/1024 最近传输 还没有传输记录
+[323.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[323.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 50% · 解密中 50% 2.1 MB/s 剩 4 分 517 MB / 1.00 GB 解密块 517/1024 最近传输 还没有传输记录
+[328.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[328.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 52% · 解密中 52% 2.1 MB/s 剩 4 分 528 MB / 1.00 GB 解密块 528/1024 最近传输 还没有传输记录
+[333.7s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 52% · 解密中 52% 2.1 MB/s 剩 4 分 533 MB / 1.00 GB 解密块 533/1024 最近传输 还没有传输记录
+[334.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[338.8s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 53% · 解密中 53% 2.1 MB/s 剩 4 分 539 MB / 1.00 GB 解密块 539/1024 最近传输 还没有传输记录
+[339.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[343.8s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 54% · 解密中 54% 2.1 MB/s 剩 4 分 550 MB / 1.00 GB 解密块 550/1024 最近传输 还没有传输记录
+[345.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[348.8s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 55% · 解密中 55% 2.0 MB/s 剩 4 分 561 MB / 1.00 GB 解密块 561/1024 最近传输 还没有传输记录
+[350.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[353.8s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 56% · 解密中 56% 2.0 MB/s 剩 4 分 572 MB / 1.00 GB 解密块 572/1024 最近传输 还没有传输记录
+[356.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[358.8s] RECV-PROGRESS …文件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 57% · 解密中 57% 2.0 MB/s 剩 4 分 583 MB / 1.00 GB 解密块 583/1024 最近传输 还没有传输记录
+[361.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[363.8s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 58% · 解密中 58% 7.4 MB/s 剩 58 秒 594 MB / 1.00 GB 解密块 594/1024 最近传输 还没有传输记录
+[367.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[368.8s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 59% · 解密中 59% 9.0 MB/s 剩 46 秒 605 MB / 1.00 GB 解密块 605/1024 最近传输 还没有传输记录
+[372.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[373.8s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 60% · 解密中 60% 9.8 MB/s 剩 41 秒 617 MB / 1.00 GB 解密块 617/1024 最近传输 还没有传输记录
+[378.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[378.8s] RECV-PROGRESS … 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 61% · 解密中 61% 10.9 MB/s 剩 36 秒 628 MB / 1.00 GB 解密块 628/1024 最近传输 还没有传输记录
+[383.8s] RECV-PROGRESS …件 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 62% · 解密中 62% 7.7 MB/s 剩 50 秒 634 MB / 1.00 GB 解密块 634/1024 最近传输 还没有传输记录
+[384.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[388.8s] RECV-PROGRESS … 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 62% · 解密中 62% 10.7 MB/s 剩 36 秒 639 MB / 1.00 GB 解密块 639/1024 最近传输 还没有传输记录
+[389.7s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[393.8s] RECV-PROGRESS … 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 63% · 解密中 63% 10.6 MB/s 剩 35 秒 650 MB / 1.00 GB 解密块 650/1024 最近传输 还没有传输记录
+[395.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[398.8s] RECV-PROGRESS … 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 65% · 解密中 65% 11.2 MB/s 剩 32 秒 662 MB / 1.00 GB 解密块 662/1024 最近传输 还没有传输记录
+[400.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[403.8s] RECV-PROGRESS … 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 66% · 解密中 66% 10.7 MB/s 剩 32 秒 673 MB / 1.00 GB 解密块 673/1024 最近传输 还没有传输记录
+[406.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[408.8s] RECV-PROGRESS … 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 67% · 解密中 67% 10.5 MB/s 剩 32 秒 684 MB / 1.00 GB 解密块 684/1024 最近传输 还没有传输记录
+[412.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[413.8s] RECV-PROGRESS … 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 68% · 解密中 68% 11.1 MB/s 剩 29 秒 695 MB / 1.00 GB 解密块 695/1024 最近传输 还没有传输记录
+[417.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[418.8s] RECV-PROGRESS … 1 个文件待接收 雁 雁37SF 1.0 GB · 1024 块 23 小时后过期 下载中 69% · 解密中 69% 10.7 MB/s 剩 29 秒 707 MB / 1.00 GB 解密块 707/1024 最近传输 还没有传输记录
+[423.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[423.7s] 没收到 download 事件，改盯 downloadsPath 目录
+[429.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[434.7s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[440.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[445.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[451.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[457.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[462.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[468.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[473.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[479.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[485.0s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[490.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[496.4s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[501.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[507.6s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[513.2s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[518.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[524.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[530.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[535.7s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[541.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[546.9s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[552.5s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[558.1s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[563.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[569.3s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
+[574.8s] RECV-CONSOLE(error) Failed to load resource: the server responded with a status of 429 (Too Many Requests)
