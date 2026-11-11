@@ -27,9 +27,12 @@ export function createPoller({
     if (inFlight) return schedule()
     inFlight = true
     try {
-      await task()
-      lastAt = now()
-      onRun?.(lastAt)
+      // 任务返回 false = 这一次没真发请求（例如正在下载、主动跳过），不能当成"刚更新过"
+      const sent = await task()
+      if (sent !== false) {
+        lastAt = now()
+        onRun?.(lastAt)
+      }
     } catch {
       /* 任务自己负责报错；轮询只保证下一次还会来 */
     } finally {

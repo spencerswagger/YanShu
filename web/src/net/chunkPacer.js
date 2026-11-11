@@ -9,7 +9,8 @@
  * 所以客户端必须自己排队：
  * - 常态按 `ratePerSec` 发令牌（默认 2.5/s，略高于最紧的 2/s 用于探测，超了会自己降）；
  * - 吃到 429：立刻把速率减半（不低于 `minRatePerSec`），并按 `Retry-After` 等（**不再套 5s 地板**）；
- * - 连续成功 `rampAfter` 次：速率加回一档（不超过 `maxRatePerSec`）。
+ * - 连续成功 `rampAfter` 次：速率**加性**加回一档（+0.1/秒，且不超过 `maxRatePerSec` = 2 次/秒，
+ *   也就是服务端 per-IP 的天花板——乘性增长会稳定越界，这里刻意不用）。
  *
  * 纯逻辑、可注入时钟与定时器，便于单测（真实浏览器里就是 setTimeout）。
  */
@@ -17,11 +18,14 @@
 export const DEFAULT_PACING = {
   ratePerSec: 2.5,
   minRatePerSec: 0.5,
-  maxRatePerSec: 8,
+  /** 契约最紧一档是「按 IP 120 次/分」= 2 次/秒：稳态**不许越过它**，否则「按额度排队」就是空话 */
+  maxRatePerSec: 2,
   /** 桶容量：允许一点点突发，别把 RTT 全花在等令牌上 */
   burst: 3,
-  /** 连续成功多少次加一档（AIMD 的 AI） */
+  /** 连续成功多少次加一档（AIMD 的 AI，**加性** +0.1，不是乘性） */
   rampAfter: 24,
+  /** 每次 AI 加多少（次/秒） */
+  stepPerSec: 0.1,
   /** 429 时的最小等待（秒）；`Retry-After` 缺失时用它 */
   minBackoffSec: 1,
 }
@@ -85,7 +89,7 @@ export function createChunkPacer(options = {}) {
     okStreak += 1
     if (okStreak >= cfg.rampAfter) {
       okStreak = 0
-      rate = clamp(rate * 1.5, cfg.minRatePerSec, cfg.maxRatePerSec)
+      rate = clamp(rate + cfg.stepPerSec, cfg.minRatePerSec, cfg.maxRatePerSec)
     }
   }
 

@@ -26,6 +26,18 @@ export class SaveError extends Error {
 /** 小文件内存累积的上限（超过就换 OPFS / 用户选路径，或明确报错） */
 export const MAX_MEMORY_SAVE_BYTES = 64 * 1024 * 1024
 
+/** 写盘失败的统一收口：配额单独给一个码，别让用户看到 `QuotaExceededError` 这种生词 */
+function asSaveError(err, fallbackCode, what) {
+  const quota =
+    err?.name === 'QuotaExceededError' ||
+    err?.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    /quota/i.test(String(err?.message || ''))
+  if (quota) {
+    return new SaveError('SAVE_QUOTA_EXCEEDED', `本机存储不足，${what}失败（清理浏览器存储后重试）`)
+  }
+  return new SaveError(fallbackCode, `${what}失败：${err?.message || err}`)
+}
+
 function cleanName(name) {
   const base = String(name || '').split(/[\\/]/).pop()
   // eslint-disable-next-line no-control-regex
@@ -52,7 +64,14 @@ export function createMemorySink({ maxBytes = MAX_MEMORY_SAVE_BYTES } = {}) {
       parts.push(bytes)
     },
     async close() {
-      return { name: this.name, blob: new Blob(parts) }
+      try {
+        return { name: this.name, blob: new Blob(parts) }
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '组装文件')
+      }
+    },
+    async cleanup() {
+      parts.length = 0
     },
     async abort() {
       parts.length = 0
@@ -75,12 +94,23 @@ export function createFileSink() {
       return true
     },
     async write(bytes) {
-      await this.writable.write(bytes)
+      try {
+        await this.writable.write(bytes)
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '写入目标文件')
+      }
     },
     async close() {
-      await this.writable.close()
+      try {
+        await this.writable.close()
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '收尾目标文件')
+      }
       // 已经写到用户选的位置，不需要再点一次 <a download>
       return { name: this.name, delivered: true }
+    },
+    async cleanup() {
+      /* 用户选的路径由用户自己管，不动 */
     },
     async abort() {
       try {
@@ -102,17 +132,43 @@ export function createOpfsSink(name, { root = null } = {}) {
     name,
     async open() {
       dir = dir || (await globalThis.navigator.storage.getDirectory())
-      handle = await dir.getFileHandle(name, { create: true })
-      writable = await handle.createWritable()
+      // 同名残留（上次失败/上次没清）先删，避免把两个文件接在一起
+      try {
+        await dir.removeEntry(name)
+      } catch {
+        /* 没有就算了 */
+      }
+      try {
+        handle = await dir.getFileHandle(name, { create: true })
+        writable = await handle.createWritable()
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '创建浏览器内部暂存')
+      }
       return true
     },
     async write(bytes) {
-      await writable.write(bytes)
+      try {
+        await writable.write(bytes)
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '写入浏览器内部暂存')
+      }
     },
     async close() {
-      await writable.close()
+      try {
+        await writable.close()
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '收尾浏览器内部暂存')
+      }
       const file = await handle.getFile()
       return { name, file }
+    },
+    /** 交给浏览器下载之后再删（**别在 save 之前删**，那是唯一副本） */
+    async cleanup() {
+      try {
+        await dir?.removeEntry(name)
+      } catch {
+        /* 忽略 */
+      }
     },
     async abort() {
       try {

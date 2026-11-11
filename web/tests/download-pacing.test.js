@@ -146,8 +146,9 @@ test('接收：连续 9 次 429 → 明确报 RATE_LIMITED，不静默转圈', a
         sinkFactory: () => sink,
         onProgress: () => {},
       }),
-    (err) => err.code === 'RATE_LIMITED' || err.name === 'ApiError',
+    (err) => err.code === 'RATE_LIMITED',
   )
+  assert.equal(api.calls.get(0), 9, '必须第 9 次 429 才放弃（阈值钉死：>8 才报错）')
   assert.equal(kernel.ended, false, '没到齐就不能 end')
   assert.ok(sink.parts.every((p) => p.length === CHUNK), '失败时不能交残缺块')
 })
@@ -166,8 +167,8 @@ test('pacer：429 降速并按 Retry-After 等（不套 5s 地板），连续成
   assert.equal(waitMs, 1000, '429 时必须按服务端 Retry-After 等，而不是固定 5 秒')
   assert.ok(pacer.ratePerSec < before, '吃 429 必须降速')
   assert.match(pacer.summary(), /限速 1 次/)
-  for (let i = 0; i < 48; i++) pacer.onSuccess()
-  assert.ok(pacer.ratePerSec > 2, `连续成功后速率要回升（实际 ${pacer.ratePerSec}）`)
+  for (let i = 0; i < 240; i++) pacer.onSuccess()
+  assert.ok(pacer.ratePerSec > 2 - 1e-9 && pacer.ratePerSec <= 2, `AIMD 必须收敛在 2 次/秒以内（实际 ${pacer.ratePerSec}）`)
   await pacer.acquire()
   assert.ok(waits.length >= 1)
 })
@@ -201,4 +202,60 @@ test('回退路径（无流式内核）遇到超过 maxPackSize 的明文：取�
     (err) => err.code === 'FILE_TOO_LARGE',
   )
   assert.equal(api.calls, 0, '必须在取 prelude/块之前挡住，不能先把 1 GiB 拉下来')
+})
+
+test('恰好 8 次 429：必须扛过去（阈值另一侧钉死）', async () => {
+  const api = makeApi({ throttle: new Map([[0, 8]]) })
+  const kernel = fakeKernel()
+  const sink = makeSink()
+  await receiveTransfer({
+    pacer: createChunkPacer({ ratePerSec: 1000, burst: 1000, maxRatePerSec: 1000, sleep: async () => {} }),
+    api,
+    kernel,
+    session: { privateKey: new Uint8Array(32) },
+    transferId: 't-8',
+    sinkFactory: () => sink,
+    onProgress: () => {},
+    save: null,
+  })
+  assert.equal(api.calls.get(0), 9, '8 次 429 + 1 次成功')
+  assert.deepEqual(kernel.order, [...Array(COUNT).keys()])
+})
+
+test('单块一次瞬时 5xx：必须原地重试，不许打死整条下载（相对 main 是回退）', async () => {
+  for (const status of [500, 502, 503, 504]) {
+    const kernel = fakeKernel()
+    const sink = makeSink()
+    const calls = new Map()
+    const api = {
+      async getPrelude() {
+        return { bytes: new Uint8Array([1]), downloadId: 'dl-1' }
+      },
+      async getChunk({ index }) {
+        const n = (calls.get(index) || 0) + 1
+        calls.set(index, n)
+        if (index === 3 && n === 1) throw new ApiError({ code: `HTTP_${status}`, status, message: 'boom' })
+        const rec = new Uint8Array(HEADER + CHUNK)
+        new DataView(rec.buffer).setUint32(0, index, false)
+        new DataView(rec.buffer).setUint32(4, CHUNK, false)
+        rec.set(new Uint8Array(CHUNK).fill(index & 0xff), HEADER)
+        return rec
+      },
+      async ack() {},
+    }
+    const events = []
+    await receiveTransfer({
+      pacer: createChunkPacer({ ratePerSec: 1000, burst: 1000, maxRatePerSec: 1000, sleep: async () => {} }),
+      api,
+      kernel,
+      session: { privateKey: new Uint8Array(32) },
+      transferId: `t-5xx-${status}`,
+      sinkFactory: () => sink,
+      onProgress: (p) => events.push(p),
+      save: null,
+    })
+    assert.equal(calls.get(3), 2, `${status}：该块必须重试一次`)
+    assert.deepEqual(kernel.order, [...Array(COUNT).keys()], `${status}：块顺序不能乱`)
+    assert.ok(events.some((e) => String(e.message || '').includes(String(status))), `${status}：必须给可见提示`)
+  }
 })

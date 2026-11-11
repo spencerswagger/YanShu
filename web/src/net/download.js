@@ -124,28 +124,35 @@ async function receiveStreaming({
   })
 
   const sink = await (sinkFactory ? sinkFactory(meta) : createMemorySink())
-  const relayGet = (i) =>
-    api.getChunk({ transferId, downloadId: prelude.downloadId, index: i, retry: false })
+  const relayGet = (i) => api.getChunk({ transferId, downloadId: prelude.downloadId, index: i, retry: false })
   const unpackSlice = (index, slice) =>
     kernel.streamUnpackChunk(
       bytes(kernel.segmenter.buildRecordHeader(index, slice.length - 16, chunkCount), slice),
     )
 
-  // 客户端自己排队：契约把内容端点限到「按传输 600 次/分、按 IP 120 次/分」（最紧 2 次/秒），
-  // 猛拉必吃 429；而固定 5s 退避会把 1 GiB 拖成 85 分钟（v0.2.4 实测 69% 后每块 5.6 秒）。
+  // 客户端自己排队：契约 §11.1 把内容端点限到「按传输 600 次/分、按 IP 120 次/分」（最紧 2 次/秒）。
   const pacer = injectedPacer || createChunkPacer({ ratePerSec: config.chunkRatePerSec })
-  let done = 0 // 已解密并写出的明文字节
-  let fetched = 0 // 已取到的密文字节（含尚未解密的块）
-  let throttleStreak = 0
-  try {
-    for (let index = 0; index < chunkCount; index++) {
+
+  /**
+   * 取一块（含重试策略）：
+   * - 429 → 交给 pacer（按 `Retry-After` 等，不套 5s 地板），同一块原地重试；连吃 9 次才报错；
+   * - 500/502/503/504 → 1s/2s/4s 原地重试最多 3 次（**不能让学生单次 5xx 打死整条 1 GiB 下载**：
+   *   `retry:false` 关掉了 client 层 withRetry，这层必须自己补上，否则比 main 还差）；
+   * - 其它错误 → 直接抛（不静默、不吞）。
+   */
+  const fetchPaced = async (index, { relayOnly = false } = {}) => {
+    let throttleStreak = 0
+    let transient = 0
+    for (;;) {
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
       await pacer.acquire()
-      let picked
       try {
-        picked = await fetchChunkOnce({ directBuffer, index, relayGet })
+        const picked = relayOnly
+          ? { bytes: await relayGet(index), source: 'relay' }
+          : await fetchChunkOnce({ directBuffer, index, relayGet })
+        pacer.onSuccess()
+        return picked
       } catch (err) {
-        // 429：按服务端 Retry-After 等（不套 5s 地板），并在进度里**明说**在限速，别让用户看死龟
         if (err?.status === 429) {
           throttleStreak += 1
           const waitMs = pacer.onThrottled(err.retryAfter)
@@ -166,13 +173,32 @@ async function receiveStreaming({
             })
           }
           await sleepAbortable(waitMs, signal)
-          index -= 1 // 重试同一块：顺序不能乱，也不能跳过
+          continue
+        }
+        if ([500, 502, 503, 504].includes(err?.status)) {
+          transient += 1
+          if (transient > 3) throw err
+          const waitMs = 1000 * 2 ** (transient - 1) // 1s / 2s / 4s
+          report({
+            phase: 'downloading',
+            done: fetched,
+            decrypted: done,
+            total: totalSize,
+            message: `服务端 ${err.status}：${Math.round(waitMs / 1000)} 秒后重试第 ${index + 1}/${chunkCount} 块（第 ${transient}/3 次）`,
+          })
+          await sleepAbortable(waitMs, signal)
           continue
         }
         throw err
       }
-      throttleStreak = 0
-      pacer.onSuccess()
+    }
+  }
+
+  let done = 0 // 已解密并写出的明文字节
+  let fetched = 0 // 已取到的密文字节（含尚未解密的块）
+  try {
+    for (let index = 0; index < chunkCount; index++) {
+      const picked = await fetchPaced(index)
       // 先记「已取到」再解密：两个百分比因此会差一块左右，能看出解密落后于网络
       fetched += picked.bytes.length
       report({
@@ -187,8 +213,8 @@ async function receiveStreaming({
         plain = unpackSlice(index, picked.bytes)
       } catch (err) {
         if (picked.source !== 'direct') throw err
-        // 直连块不可信 → 当块回落中转补齐（不交残缺文件）
-        plain = unpackSlice(index, await relayGet(index))
+        // 直连块不可信 → 当块回落中转补齐（同样走 429/5xx 重试，不交残缺文件）
+        plain = unpackSlice(index, (await fetchPaced(index, { relayOnly: true })).bytes)
       }
       await sink.write(plain)
       done += plain.length
@@ -202,19 +228,23 @@ async function receiveStreaming({
     }
     kernel.streamUnpackEnd()
 
-    // 块已取齐：进度必须立刻跳到 100%，否则「69%」会被误读成"卡在传输"（v0.2.4 就是这么被误判的）
     report({
       phase: 'saving',
       done: totalSize,
       decrypted: done,
       total: totalSize,
-      message: `已收齐 ${chunkCount}/${chunkCount} 块（${done} 字节），校验并落盘…`,
+      message: `块已全部处理（${chunkCount} 块 · ${done} 字节），校验并落盘…`,
       verified: true,
     })
     const out = await sink.close()
-    // OPFS / 内存路径交出一个 Blob（OPFS 的 File 由磁盘承载，不复制进 JS 堆）；
-    // 「用户选路径」那条已经把块写进目标文件，不需要再点 <a download>。
-    if (save && (out?.blob || out?.file)) save(out.blob || out.file, out.name || safeFileName(meta.name, meta.ext))
+    // 落盘成功（内存 Blob / OPFS 文件 / 用户选的目标文件）之后，才把文件交给浏览器下载。
+    // 「用户选路径」那条在 close() 时已经写到目标位置，不需要再点 <a download>。
+    if (save && (out?.blob || out?.file)) {
+      report({ phase: 'saving', done: totalSize, total: totalSize, message: '交给浏览器保存…', verified: true })
+      await save(out.blob || out.file, out.name || safeFileName(meta.name, meta.ext))
+    }
+    // OPFS 副本在交给浏览器之后（saveBlob 的 revoke 之后）才清，避免把唯一副本删掉
+    await sink.cleanup?.()
   } catch (err) {
     await sink.abort?.()
     throw err
@@ -347,7 +377,8 @@ async function receiveOnce({
   const blob = new Blob([plain], { type: finalMeta.mime || 'application/octet-stream' })
   if (save) {
     report({ phase: 'saving', done: plain.length, total: plain.length, message: '落盘', verified: true })
-    save(blob, safeFileName(finalMeta.name, finalMeta.ext))
+    // 交付失败要抛（不 ack），别出现「界面说已保存、其实没交出去」
+    await save(blob, safeFileName(finalMeta.name, finalMeta.ext))
   }
   if (ack) {
     report({ phase: 'acking', done: plain.length, total: plain.length, message: '确认取件（服务端随即删除密文）' })
