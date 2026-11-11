@@ -1,0 +1,2 @@
+swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server@sha256:022f7424abf63bd1c6e4f175ee9a57cca87934b87d984fc27b44a531327e8a37
+

@@ -1,0 +1,48 @@
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-alpine:3.20 Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:v0.2.2 Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:v0.2.2 Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-alpine:3.20 Pulled 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine Pulled 
+ a3566928b519 Pulling fs layer 0B
+ 017ce6207601 Pulling fs layer 0B
+ 6c57ad08cbfb Pulling fs layer 0B
+ 5e5371fc7a29 Pulling fs layer 0B
+ 527cd9913639 Pulling fs layer 0B
+ 8eaa2dbab957 Pulling fs layer 0B
+ 09c6d4aa7a22 Pulling fs layer 0B
+ 2deff20ece26 Pulling fs layer 0B
+ 8eaa2dbab957 Download complete 0B
+ 5e5371fc7a29 Download complete 0B
+ 527cd9913639 Download complete 0B
+ 6c57ad08cbfb Downloading 1.049MB
+ 017ce6207601 Downloading 1.049MB
+ 6c57ad08cbfb Download complete 0B
+ 6c57ad08cbfb Extracting 1B
+ 017ce6207601 Downloading 1.049MB
+ 8eaa2dbab957 Pull complete 0B
+ 6c57ad08cbfb Pull complete 0B
+ 017ce6207601 Downloading 2.097MB
+ 017ce6207601 Downloading 3.146MB
+ 017ce6207601 Downloading 4.194MB
+ 017ce6207601 Downloading 4.194MB
+ 017ce6207601 Download complete 0B
+ 017ce6207601 Extracting 1B
+ 5e5371fc7a29 Pull complete 0B
+ 527cd9913639 Pull complete 0B
+ 017ce6207601 Pull complete 0B
+ a3566928b519 Downloading 1.049MB
+ 09c6d4aa7a22 Download complete 0B
+ a3566928b519 Downloading 1.049MB
+ 2deff20ece26 Download complete 0B
+ 09c6d4aa7a22 Pull complete 0B
+ 2deff20ece26 Pull complete 0B
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:v0.2.2 Pulled 
+ a3566928b519 Downloading 2.097MB
+ a3566928b519 Downloading 3.146MB
+ a3566928b519 Downloading 4.194MB
+ a3566928b519 Downloading 4.194MB
+ a3566928b519 Download complete 0B
+ a3566928b519 Extracting 1B
+ a3566928b519 Pull complete 0B
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:v0.2.2 Pulled 
