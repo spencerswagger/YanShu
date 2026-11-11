@@ -1,0 +1,4 @@
+NAME                         IMAGE                                                                       COMMAND                   SERVICE         CREATED          STATUS                    PORTS
+clean-v024-postgres-1        swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine   "docker-entrypoint.s…"    postgres        17 seconds ago   Up 16 seconds (healthy)   5432/tcp
+clean-v024-web-1             swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:v0.2.4            "/docker-entrypoint.…"    web             17 seconds ago   Up 5 seconds (healthy)    0.0.0.0:18080->80/tcp, [::]:18080->80/tcp
+clean-v024-yanshu-server-1   swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:v0.2.4         "/bin/sh -c 'set -e\n…"   yanshu-server   17 seconds ago   Up 10 seconds (healthy)   8080/tcp

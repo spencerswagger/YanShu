@@ -1,0 +1,4 @@
+$ curl -fsS -o /data/clean-v0.2.2/docker-compose.yml https://raw.githubusercontent.com/spencerswagger/YanShu/v0.2.2/docker-compose.yml
+rc=0
+$ node /data/fs-pkg/negative-save.mjs --url http://127.0.0.1:18080/ --src /data/ys-fixtures/neg-16MiB.bin --evidence /data/fs-pkg/results/v0.2.2 --dl-dir /data/ys-fixtures/neg-downloads-v0.2.2 --wait-s 180
+rc=1

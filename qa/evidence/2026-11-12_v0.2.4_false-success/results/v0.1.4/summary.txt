@@ -1,0 +1,17 @@
+  SKIP  老 tag 的 compose 与已知值不同（8abc0a7d974a09235897660402a4830a622d79ecbd966d31e6e0a94b088cc55b）—— 只做记录，不判 FAIL
+  PASS  compose 无 build 段
+  PASS  拉取 v0.1.4 镜像成功
+  PASS  v0.1.4 栈起来（up -d --wait）
+镜像 tag        : v0.1.4
+镜像 digest     : swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server@sha256:60fef79ab45e8e80a5dac118bf3dff9e5d64b419b310b5e9742c257a447f5a44
+界面「已保存至本机」: True,True
+下载目录文件数  : 0,0
+ack 计数        : 前 0 → 后 2（delta=2）
+ack 原始行      : yanshu-server-1  | time=2026-11-11T18:12:30.657Z level=INFO msg=http requestId=9c0f78032e7e6d80 method=POST route="POST /v1/transfers/{transferId}/ack" status=200 bytes=106 durationMs=5|yanshu-server-1  | time=2026-11-11T18:12:53.762Z level=INFO msg=http requestId=d602f838c6283632 method=POST route="POST /v1/transfers/{transferId}/ack" status=200 bytes=106 durationMs=5|
+页面可见报错    : -;-
+场景判定        : A-no-inject=FAIL(假绿：报成功但磁盘无文件); B-inject-fail=FAIL(假绿：写盘注入失败仍报成功)
+  FAIL  [v0.1.4] 假绿或静默失败（见 negative-save.json）
+  FAIL  [v0.1.4] 假成功且已 ack（delta=2）：密文已删、文件从未写出 = 数据丢失
+  PASS  [v0.1.4] 栈已停（释放 18080）
+PASS=4 FAIL=2 SKIP=1
+失败项：[v0.1.4] 假绿或静默失败（见 negative-save.json）;[v0.1.4] 假成功且已 ack（delta=2）：密文已删、文件从未写出 = 数据丢失

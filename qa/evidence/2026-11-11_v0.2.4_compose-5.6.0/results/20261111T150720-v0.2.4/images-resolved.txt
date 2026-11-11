@@ -1,0 +1,4 @@
+image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-alpine:3.20
+image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine
+image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:v0.2.4
+image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:v0.2.4

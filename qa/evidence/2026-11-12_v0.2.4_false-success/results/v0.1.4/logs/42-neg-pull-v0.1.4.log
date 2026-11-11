@@ -1,0 +1,109 @@
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:v0.1.4 Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-alpine:3.20 Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:v0.1.4 Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine Pulled 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-alpine:3.20 Pulled 
+ 435c562df009 Pulling fs layer 0B
+ 73a8da854323 Pulling fs layer 0B
+ 2232fb0a3e1f Pulling fs layer 0B
+ 48bd006f0b0e Pulling fs layer 0B
+ 550053ac6f78 Pulling fs layer 0B
+ 6195c0c7ace5 Pulling fs layer 0B
+ e5c203d833c9 Pulling fs layer 0B
+ 7cc330898115 Pulling fs layer 0B
+ 26185d08a3ec Pulling fs layer 0B
+ 7b229517ed22 Pulling fs layer 0B
+ 12b85cff06fd Pulling fs layer 0B
+ 657023555a2a Pulling fs layer 0B
+ 9b0f7dfe35b2 Pulling fs layer 0B
+ 2ec5fb117ffa Pulling fs layer 0B
+ b9b388a21ecf Pulling fs layer 0B
+ 579b3a882666 Pulling fs layer 0B
+ 73a8da854323 Download complete 0B
+ 2232fb0a3e1f Download complete 0B
+ 6195c0c7ace5 Downloading 1.049MB
+ 6195c0c7ace5 Download complete 0B
+ 6195c0c7ace5 Pull complete 0B
+ 435c562df009 Downloading 1.049MB
+ 48bd006f0b0e Download complete 0B
+ 48bd006f0b0e Pull complete 0B
+ 435c562df009 Downloading 1.049MB
+ 435c562df009 Downloading 2.097MB
+ 435c562df009 Downloading 2.097MB
+ 435c562df009 Downloading 3.146MB
+ 435c562df009 Downloading 4.194MB
+ 435c562df009 Downloading 4.194MB
+ 435c562df009 Download complete 0B
+ e5c203d833c9 Download complete 0B
+ 7cc330898115 Download complete 0B
+ 550053ac6f78 Downloading 1.049MB
+ 550053ac6f78 Downloading 1.049MB
+ 26185d08a3ec Download complete 0B
+ 550053ac6f78 Downloading 2.097MB
+ 550053ac6f78 Downloading 2.097MB
+ 550053ac6f78 Downloading 3.146MB
+ 550053ac6f78 Downloading 4.194MB
+ 550053ac6f78 Downloading 4.194MB
+ 550053ac6f78 Download complete 0B
+ 550053ac6f78 Pull complete 0B
+ 73a8da854323 Pull complete 0B
+ 2232fb0a3e1f Pull complete 0B
+ 435c562df009 Extracting 1B
+ 435c562df009 Pull complete 0B
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:v0.1.4 Pulled 
+ 12b85cff06fd Downloading 1.049MB
+ 12b85cff06fd Download complete 0B
+ 579b3a882666 Download complete 0B
+ 657023555a2a Download complete 0B
+ 9b0f7dfe35b2 Download complete 0B
+ 7b229517ed22 Downloading 1.049MB
+ 7b229517ed22 Downloading 2.097MB
+ 2ec5fb117ffa Download complete 0B
+ 7b229517ed22 Downloading 3.146MB
+ 7b229517ed22 Download complete 0B
+ 7b229517ed22 Extracting 1B
+ 12b85cff06fd Extracting 1B
+ 7b229517ed22 Pull complete 0B
+ 7cc330898115 Pull complete 0B
+ 26185d08a3ec Pull complete 0B
+ 12b85cff06fd Pull complete 0B
+ 657023555a2a Pull complete 0B
+ 9b0f7dfe35b2 Pull complete 0B
+ 2ec5fb117ffa Pull complete 0B
+ b9b388a21ecf Downloading 1.049MB
+ b9b388a21ecf Downloading 1.049MB
+ b9b388a21ecf Downloading 2.097MB
+ b9b388a21ecf Downloading 2.097MB
+ b9b388a21ecf Downloading 3.146MB
+ b9b388a21ecf Downloading 4.194MB
+ b9b388a21ecf Downloading 5.243MB
+ b9b388a21ecf Downloading 5.243MB
+ b9b388a21ecf Downloading 6.291MB
+ b9b388a21ecf Downloading 7.34MB
+ b9b388a21ecf Downloading 8.389MB
+ b9b388a21ecf Downloading 8.389MB
+ b9b388a21ecf Downloading 9.437MB
+ b9b388a21ecf Downloading 9.437MB
+ b9b388a21ecf Downloading 10.49MB
+ b9b388a21ecf Downloading 11.53MB
+ b9b388a21ecf Downloading 12.58MB
+ b9b388a21ecf Downloading 12.58MB
+ b9b388a21ecf Downloading 13.63MB
+ b9b388a21ecf Downloading 14.68MB
+ b9b388a21ecf Downloading 15.73MB
+ b9b388a21ecf Downloading 15.73MB
+ b9b388a21ecf Downloading 16.78MB
+ b9b388a21ecf Downloading 16.78MB
+ b9b388a21ecf Downloading 17.83MB
+ b9b388a21ecf Downloading 18.87MB
+ b9b388a21ecf Downloading 19.92MB
+ b9b388a21ecf Download complete 0B
+ b9b388a21ecf Extracting 1B
+ b9b388a21ecf Extracting 1B
+ b9b388a21ecf Extracting 1B
+ b9b388a21ecf Extracting 1B
+ e5c203d833c9 Pull complete 0B
+ 579b3a882666 Pull complete 0B
+ b9b388a21ecf Pull complete 0B
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:v0.1.4 Pulled 

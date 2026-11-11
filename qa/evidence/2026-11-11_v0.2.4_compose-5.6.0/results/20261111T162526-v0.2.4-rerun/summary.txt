@@ -1,0 +1,5 @@
+ack 计数：前 0 → 后 2（delta=2）
+  FAIL  存在假绿或静默失败（见 logs/40-negative-save.log 与 negative-save.json）
+  FAIL  假成功且已 ack（密文已删、文件从未写出 = 数据丢失）
+PASS=0 FAIL=2 SKIP=0
+失败项：存在假绿或静默失败（见 logs/40-negative-save.log 与 negative-save.json）;假成功且已 ack（密文已删、文件从未写出 = 数据丢失）

@@ -1,0 +1,47 @@
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:v0.2.3 Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:v0.2.3 Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-alpine:3.20 Pulling 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-postgres:16-alpine Pulled 
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/library-alpine:3.20 Pulled 
+ 84bf08cd247c Pulling fs layer 0B
+ 29a5744429ca Pulling fs layer 0B
+ fed4db5f4789 Pulling fs layer 0B
+ a153ba7b5f9d Pulling fs layer 0B
+ 38d943f6a233 Pulling fs layer 0B
+ 5141ddc964b9 Pulling fs layer 0B
+ bb6de2949286 Pulling fs layer 0B
+ ef231bc2702c Pulling fs layer 0B
+ 5141ddc964b9 Download complete 0B
+ 29a5744429ca Downloading 1.049MB
+ 29a5744429ca Download complete 0B
+ 29a5744429ca Extracting 1B
+ 29a5744429ca Pull complete 0B
+ fed4db5f4789 Download complete 0B
+ fed4db5f4789 Pull complete 0B
+ 38d943f6a233 Download complete 0B
+ a153ba7b5f9d Downloading 1.049MB
+ 84bf08cd247c Downloading 1.049MB
+ 84bf08cd247c Downloading 1.049MB
+ a153ba7b5f9d Downloading 1.049MB
+ 84bf08cd247c Downloading 2.097MB
+ a153ba7b5f9d Downloading 2.097MB
+ 84bf08cd247c Downloading 3.146MB
+ a153ba7b5f9d Downloading 2.097MB
+ ef231bc2702c Download complete 0B
+ ef231bc2702c Pull complete 0B
+ 84bf08cd247c Downloading 3.146MB
+ a153ba7b5f9d Downloading 3.146MB
+ 84bf08cd247c Downloading 4.194MB
+ a153ba7b5f9d Downloading 4.194MB
+ a153ba7b5f9d Downloading 4.194MB
+ 84bf08cd247c Download complete 0B
+ a153ba7b5f9d Download complete 0B
+ a153ba7b5f9d Pull complete 0B
+ 5141ddc964b9 Pull complete 0B
+ 38d943f6a233 Pull complete 0B
+ 84bf08cd247c Pull complete 0B
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:v0.2.3 Pulled 
+ bb6de2949286 Download complete 0B
+ bb6de2949286 Pull complete 0B
+ Image swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:v0.2.3 Pulled 

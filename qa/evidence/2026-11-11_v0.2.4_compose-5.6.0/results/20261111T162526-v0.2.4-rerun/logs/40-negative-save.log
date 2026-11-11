@@ -1,0 +1,12 @@
+
+$ node /data/gate-pkg/negative-save.mjs --url http://127.0.0.1:18080/ --src /data/ys-fixtures/neg-16MiB.bin --evidence /data/gate-pkg/results/20261111T162526-v0.2.4-rerun --dl-dir /data/ys-fixtures/neg-downloads --wait-s 180
+[15.7s] [A-no-inject] 已发送，等发送端完成
+[18.7s] [A-no-inject] 发送端完成
+[30.8s] [A-no-inject] 已点下载并解密
+[33.0s] 场景A：ui_says_saved=true files=0 error="" → FAIL(假绿：报成功但磁盘无文件)
+[40.6s] [B-inject-fail] 已发送，等发送端完成
+[42.0s] [B-inject-fail] 发送端完成
+[54.1s] [B-inject-fail] 已点下载并解密
+[56.4s] 场景B：ui_says_saved=true error="" → FAIL(假绿：写盘注入失败仍报成功)
+
+判定：FAIL —— 存在假绿/静默失败

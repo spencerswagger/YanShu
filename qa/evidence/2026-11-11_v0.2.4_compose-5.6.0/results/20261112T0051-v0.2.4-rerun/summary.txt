@@ -1,0 +1,33 @@
+v0.2.4 口径 2 根因定位（2026-11-12 00:51–01:02 CST）
+跑场 sbx-yanshu-yanshu-v025-767e · Docker 29.8.2 / Compose v5.6.0 / Chromium 154 headless
+栈：干净目录 + 官方 compose（sha 16baed7e…）+ SWR 官方镜像（4 个 digest 与登记值一致）
+
+结论 1（P0，产品缺陷）：流式接收路径**从不把数据交给浏览器**
+  web/src/net/download.js:139  await sink.close()   ← 返回值被丢弃
+  save()（saveBlob）只在非流式 receiveOnce:257 里调用
+  无 showSaveFilePicker 的浏览器（headless / Safari / Firefox）→ defaultSinkFactory 退回内存 sink
+  → 1 GiB 明文在 JS 内存里组装完被丢弃，InboxPanel.vue:76 仍写「已保存至本机」
+
+  实测 A（真 headless，产品原样）：1024/1024 块、100%、584.5 s，UI 报「已保存至本机」，
+    磁盘 0 B（downloads 目录与本机任意路径都找不到文件）。
+  实测 B（同镜像，只把 showSaveFilePicker 换成写真实文件的测试替身 save-sink-probe.mjs）：
+    src sha256 424f47694dce624070bfa995e584ddf0012bf4e40a74c5e726a71e241f58a8e4
+    out sha256 424f47694dce624070bfa995e584ddf0012bf4e40a74c5e726a71e241f58a8e4
+    1073741824 B / 1024 次写入 / 601.8 s → 解密链路逐字节正确，问题只在最后一步落盘。
+
+结论 2（P1，限速设计）：内容端点按 IP 120 次/分 = **2 MiB/s 硬顶**
+  spec/limits.go TransferReadPerIP {60s,120,120}；handlers_blobs.go:211 先查 read:ip 再查 read:transfer
+  本轮服务端 GET chunk 实测：1097 次 = 1024×200 + 73×429，跨度 456.7 s
+    吞吐 134.5 块/分 = 2.24 MiB/s；任意 60 s 窗口最大 245 次（额度 120）
+    令牌桶预测 120 + 2/s×456.7s = 1033，实测 1024（差 0.9%）→ 就是这个桶在限
+    429 间隔 中位 6.02 s（Retry-After 节拍）
+  后果：1 GiB ≥7.6 min，4 GiB（契约上限）≥30 min；**单浏览器也照样打满**，
+  「双浏览器共用出口 IP」不是必要条件。
+
+结论 3（我方 harness 错误，已修）
+  browser-transfer.mjs 的 waitForEvent('download') 硬编码 5 分钟超时 < 1 GiB 需要的 8.5 分钟
+  → 旧证据里「进度停在 69%/74%」是**我们自己的采样器被 clearInterval 停掉**，不是产品停住。
+  已加 --dl-timeout-s（默认 900）。
+
+回归：本轮同一台机、同一镜像，1 GiB 全链路完成（1024/1024），所以「数据面不通」这个判据不成立；
+真正不成立的是「落盘 + 成功提示」。

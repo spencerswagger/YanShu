@@ -1,0 +1,32 @@
+# sha256.txt —— 口径 2 / 口径 3 的原始值（有就写值，没有就写「未产出」，不编）
+
+## 口径 2：1 GiB 双端
+源文件   39094ee9f6ba02c4b18f120f8bfae347d96eefd33da4e30ef08e780277b2c315  src-v0.2.4-1-GiB.bin  1073741824 B
+落地文件 未产出（文件从未生成：downloads/ 为空、无 download 事件、页面无「已保存至本机」）
+逐字相同 **否 —— 无法比较（缺落地值）** → 判 FAIL
+
+对照（16 MiB，仅用于调试脚本，不走判定）
+源文件   1eeb87e345e6ea6f253a00110b622af0d823cfbf4805b6914ea7cfdd0ead547e  smoke16m.bin  16777216 B
+落地文件 未产出（该轮 headless 下载被浏览器静默丢弃；随后改用 CDP setDownloadBehavior，但当时未再取 sha）
+
+## 口径 3：docker compose down && up -d 前后 secrets
+token_secret 前 cf97310487aa2df166afa65d8b1302a0b3f976c5bfe4fa46fc2b71908b96bb1b
+token_secret 后 cf97310487aa2df166afa65d8b1302a0b3f976c5bfe4fa46fc2b71908b96bb1b
+pg_password  前 667ccf1225949321088d729715684a3242dda05859c4aea4a760a27b61ad9a04
+pg_password  后 667ccf1225949321088d729715684a3242dda05859c4aea4a760a27b61ad9a04
+一致 **是（两个文件前后逐字相同）**；重启后 /healthz 仍 {"status":"ok"} → PASS
+（注：文件 0600 属主 10001，宿主用户读不到，值为容器内 sha256sum 结果）
+
+## 关于宿主侧看到的「三次建传输 201」（15:19:53 / 15:21:19 / 15:22:41 UTC）
+
+**不是并行，也不是断线重开** —— 是我自己的三次调试跑，同一个 16 MiB fixture（sha 1eeb87e3…），
+串行、每条之间隔 ~1.5 分钟，每次都是新的两个浏览器实例：
+
+| # | UTC | 脚本 | 该轮目的 | 结局 |
+|---|---|---|---|---|
+| 1 | 15:19:53 | browser-transfer.mjs（初版） | 验证选择器/发送流程 | 发送成功；接收端 30s 内不出现待收项（**不自动刷新**），脚本超时退出，未下载 |
+| 2 | 15:21:19 | probe2.mjs | 确认「刷新后能看到」+ 抓 DOM | 刷新后出现条目，未点下载（只做 DOM 侦察） |
+| 3 | 15:22:41 | probe3.mjs | 验下载落盘与 ack | 页面显示「已保存至本机」，服务端 `POST ack 200` —— 三条里只有这条跑到 ack |
+
+80 次 chunk GET × 1048592 B ≈ 83.9 MB = 三次各 16 块（16 MiB）的 48 次成功 + 早期重试/预取，
+与「一条 1 GiB 传输」无关；1 GiB 那两轮的 chunk 是另外计的（1024 次 200）。

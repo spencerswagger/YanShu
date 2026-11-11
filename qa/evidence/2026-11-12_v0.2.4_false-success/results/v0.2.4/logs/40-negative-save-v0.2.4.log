@@ -1,0 +1,12 @@
+
+$ node /data/fs-pkg/negative-save.mjs --url http://127.0.0.1:18080/ --src /data/ys-fixtures/neg-16MiB.bin --evidence /data/fs-pkg/results/v0.2.4 --dl-dir /data/ys-fixtures/neg-downloads-v0.2.4 --wait-s 180
+[16.6s] [A-no-inject] 已发送，等发送端完成
+[18.2s] [A-no-inject] 发送端完成
+[30.3s] [A-no-inject] 已点下载并解密
+[32.9s] 场景A：ui_says_saved=true files=0 error="" → FAIL(假绿：报成功但磁盘无文件)
+[41.0s] [B-inject-fail] 已发送，等发送端完成
+[42.5s] [B-inject-fail] 发送端完成
+[54.6s] [B-inject-fail] 已点下载并解密
+[56.8s] 场景B：ui_says_saved=true error="" → FAIL(假绿：写盘注入失败仍报成功)
+
+判定：FAIL —— 存在假绿/静默失败

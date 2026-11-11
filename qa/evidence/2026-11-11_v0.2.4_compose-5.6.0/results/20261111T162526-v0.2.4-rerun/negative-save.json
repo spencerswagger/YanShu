@@ -1,0 +1,45 @@
+{
+  "ok": false,
+  "elapsed_s": 56.37,
+  "src": "/data/ys-fixtures/neg-16MiB.bin",
+  "verdicts": [
+    {
+      "tag": "A-no-inject",
+      "ui_says_saved": true,
+      "error_text": "",
+      "files": [],
+      "console_errors": [
+        "The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element.",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "cdp": "",
+      "auto_refresh": false,
+      "body_tail": "今日发送 0 今日接收 1 成功率 1 0 0 % 今日已取走 2 今日流量 2 . 0 G B 今日新建 3 累计已取走 2 累计流量 2 . 0 G B 累计新建 3 端到端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：neg-16MiB.bin（16 MB） 暂无待接收文件 发送文件 最近传输 还没有传输记录",
+      "verdict": "FAIL(假绿：报成功但磁盘无文件)"
+    },
+    {
+      "tag": "B-inject-fail",
+      "ui_says_saved": true,
+      "error_text": "",
+      "files": [],
+      "console_errors": [
+        "The Content Security Policy directive 'frame-ancestors' is ignored when delivered via a <meta> element.",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ],
+      "cdp": "",
+      "auto_refresh": false,
+      "body_tail": "今日发送 0 今日接收 1 成功率 1 0 0 % 今日已取走 2 今日流量 2 . 0 G B 今日新建 3 累计已取走 2 累计流量 2 . 0 G B 累计新建 3 端到端加密 · 私钥仅存本机 发送文件 输入对方接收码 查询接收方 把文件拖到这里 或点击选择 发送文件 暂无待接收文件 已保存至本机：neg-16MiB.bin（16 MB） 暂无待接收文件 发送文件 最近传输 还没有传输记录",
+      "verdict": "FAIL(假绿：写盘注入失败仍报成功)"
+    }
+  ],
+  "log": [
+    "[15.7s] [A-no-inject] 已发送，等发送端完成",
+    "[18.7s] [A-no-inject] 发送端完成",
+    "[30.8s] [A-no-inject] 已点下载并解密",
+    "[33.0s] 场景A：ui_says_saved=true files=0 error=\"\" → FAIL(假绿：报成功但磁盘无文件)",
+    "[40.6s] [B-inject-fail] 已发送，等发送端完成",
+    "[42.0s] [B-inject-fail] 发送端完成",
+    "[54.1s] [B-inject-fail] 已点下载并解密",
+    "[56.4s] 场景B：ui_says_saved=true error=\"\" → FAIL(假绿：写盘注入失败仍报成功)"
+  ]
+}
