@@ -9,7 +9,7 @@
 | # | 口径 | 结果 |
 |---|---|---|
 | 1 | 干净空目录 + 官方 compose + SWR 官方镜像，无本地 build、无改 tag | **PASS（12/12）** |
-| 2 | 双浏览器 ≥1 GiB 真收发，源/落地 sha256 逐字相同 | **FAIL** —— 发送端 76s 完成；接收端拉到 1072 个块（含 81 次 429 限速重试）但**没有落地文件**，28 分钟内未产出 sha256。**根因已定案（§6.6）**：流式接收路径从不把数据交给浏览器（P0），429 只是把速率顶到 2 MiB/s 的独立设计问题 |
+| 2 | 双浏览器 ≥1 GiB 真收发，源/落地 sha256 逐字相同 | **FAIL** —— 发送端 76s 完成；接收端拉到 1072 个块（含 81 次 429 限速重试）但**没有落地文件**，28 分钟内未产出 sha256。**根因已定案（§7）**：流式接收路径从不把数据交给浏览器（P0），429 只是把速率顶到 2 MiB/s 的独立设计问题 |
 | 3 | `down && up -d` 后 `./secrets/` 两个密钥 sha256 不变 | **PASS**（前后两值逐字相同） |
 
 来源 sha256（已算出）：`39094ee9f6ba02c4b18f120f8bfae347d96eefd33da4e30ef08e780277b2c315`（1 GiB，1073741824 B）
@@ -185,7 +185,7 @@ pg_password  667ccf1225949321088d729715684a3242dda05859c4aea4a760a27b61ad9a04
 机器 00:14 被回收（SSH `Permission denied (publickey)`，早于约定的 00:28），**没有拿到落地文件**。
 这一条**不作为任何判定依据**，只记「429 退避会让大文件下载变成数分钟级」这个观感。
 
-## 6.7 机器生命周期（供下次排期参考）
+## 6.6 机器生命周期（供下次排期参考）
 
 - 到手 23:06，健康可用；**00:14 被回收**（约定 00:28，提前约 14 分钟，`ssh` 直接 `Permission denied (publickey)`）。
 - 教训：大文件用例（1 GiB）单次约 8–12 分钟且受 429 拖累，**排期要留 ≥2× 余量**，别把对照实验排在到期前 10 分钟。
@@ -195,7 +195,7 @@ pg_password  667ccf1225949321088d729715684a3242dda05859c4aea4a760a27b61ad9a04
 - **1 GiB 等级下载会撞 429 限速**：81 次 429，客户端重试能继续，但整单落地未完成，需要定位是限速策略、
   还是浏览器侧 1 GiB Blob 组装/保存的问题（下一步：在同一沙箱复跑并抓浏览器 console + 内存峰值）。
 
-## 6.6 根因定案（2026-11-12 00:51–01:02 CST，新机 `sbx-yanshu-yanshu-v025-767e`）
+## 7. 根因定案（2026-11-12 00:51–01:02 CST，新机 `sbx-yanshu-yanshu-v025-767e`）
 
 §6.5 的判读方向对（卡在最后一步），但**具体机理说错了**：不是「1 GiB Blob 组装太慢/没走通」，
 而是**流式路径根本没有调用 `save()`**。证据链三步：
@@ -246,12 +246,23 @@ return { name: sink.name, size: done, transferId, dataVerified: true }
 
 
 
-口径 2 未通过 → 不能当「发布出去的东西真能用」。根因已在两次复跑中收敛到**浏览器侧「1 GiB 组装 Blob → 保存」**
-（§6.5：1024 块全 200 拿到，但进度停在 69%、无落地文件、无 download 事件）。建议顺序：
-① 前端改流式落盘（`saveStream.js`）并给 1 GiB 明确失败提示；② 按本清单一键复跑拿两侧 sha256；
-③ 复跑 PASS 后再出 v0.2.5 —— 修复本身走特性分支 + tag + 镜像构建，不在验收仓里手改。
+## 8. 处置建议与缺陷清单
 
-## 8. 已知环境坑（写下来省下次时间）
+口径 2 **不能判 PASS**，但判据要改口径：不是「传不动」，是「传完了不落盘还报成功」。
+
+| 级别 | 位置 | 现象 | 建议 |
+|---|---|---|---|
+| **P0** | `web/src/net/download.js:139` | 流式路径丢弃 `sink.close()`；无 FS Access 的浏览器（Safari/Firefox/headless）**静默丢数据**，`InboxPanel.vue:76` 仍报「已保存至本机」 | `close()` 结果必须交给 `save()`；没有 FS Access 时也走 `a[download]` 兜底；**只有确认落盘后**才提示成功 |
+| **P1** | `spec/limits.go` + `docs/API.md` §11.1 | 内容端点按 IP 120 次/分 = 2 MiB/s 硬顶；1 GiB ≥7.6 min，4 GiB ≥30 min | 额度与块大小挂钩（或内容端点取消按 IP 的 120，只留按传输 600/分 + 更宽的按 IP）；契约里写明「1 GiB 最坏耗时」 |
+| **P1** | `web/src/lib/speed.js` + 进度文案 | 显示 10.1 MB/s、剩 2 分，真实 2.35 MiB/s、还需 4 分；100% 时显示 5.3 MB/s | 用服务端已确认字节数/真实耗时算，别用短窗瞬时值外推 |
+| **P2** | `InboxPanel.vue` | 接收端不自动刷新（16 MB / 1 GiB 都复现，30 s 不出现，须点「刷新」） | WS `TRANSFER_NOTICE` 或按契约 §9 轮询 |
+| **P2** | 首屏 `GET /v1/inbox` 404 | 契约 §7.1 空列表是 200 + `items:[]`；实测每次开页 2 次 404（`bytes=103`） | 查清是否身份未就绪就发请求；别让正常首屏产生 404 |
+| **P2** | 错误文案 | 落盘失败时把 `Failed to fetch` 原样显示给用户 | 映射成「保存失败，请重试」之类的可行动文案 |
+
+修复顺序：**P0 → P1(限速) → P1(速度显示)**，然后按本目录一键复跑（口径 2 必须拿到两侧 sha256）再谈 v0.2.5。
+修复与发版走特性分支 + tag + 镜像构建，不在验收仓里手改。
+
+## 9. 已知环境坑（写下来省下次时间）
 
 - 沙盒 bwrap：`docker` 起得来但 `docker run` 必失败（无 NET_ADMIN 建 bridge；嵌套 userns 里 `/proc` 挂不上，
   dmesg `VFS: Mount too revealing`）→ 必须用真 docker 机器，别在沙盒里耗。
@@ -260,3 +271,13 @@ return { name: sink.name, size: done, transferId, dataVerified: true }
 - 密钥文件 0600 属主 10001：宿主用户 `sha256sum` 会得到空值（假绿风险），必须走容器算。
 - `run.sh` 是 `#!/bin/sh`（dash）：不要用 `${var:0:12}` 这类 bash 扩展（本次已踩，`Bad substitution`）。
 - 证据目录命名：`2026-11-11_v0.2.4_compose-5.6.0/`（日期 + 镜像 tag + compose 版本）。
+- **页面 CSP 是 `connect-src 'self'`**：想从页面把字节送到外部端口（比如自建落地服务）会被 CSP 拦，
+  UI 上只看到 `Failed to fetch`。要喂数据必须**同源反代**（`save-sink-probe.mjs` 就是 18081 → 18080，
+  `/__ys_sink/*` 自己接住）。别浪费时间调 CORS —— 拦住你的是 CSP，不是跨域。
+- **ESM 不认 `NODE_PATH`**：`import 'playwright-core'` 只按目录找 `node_modules` →
+  在脚本目录 `ln -s <装有 playwright-core 的 node_modules>`，或在那个目录里跑。
+- **`pkill -f <pattern>` 会杀掉自己**：ssh 的一行命令里含同一个 pattern 时，`pkill` 把自己的 shell 也匹配上，
+  表现为退出码 255、没有任何输出。用 `browser[-]transfer` 这种括号写法，或按 PID `kill -9`。
+- **InstaBox 机器没有 `~/.ssh`**：`ssh` 报 `Host key verification failed` 且无法写 known_hosts →
+  必须 `-o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no`。
+- 新机 SWR 无本地缓存时 `docker compose pull` 约 1–2 分钟；`/data` 20 GiB 里要留 ≥3 GiB 给 1 GiB 夹具 + 落地 + 镜像。
