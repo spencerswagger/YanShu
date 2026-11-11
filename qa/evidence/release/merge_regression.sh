@@ -57,10 +57,13 @@ PY
 }
 dropdb() { psql -X -q "$ADMIN_DSN" -c "DROP DATABASE IF EXISTS \"$1\" WITH (FORCE)" >/dev/null 2>&1 || true; }
 
-RC=0; DID=0
+# 结论分级用独立标志，不靠"谁最后调用谁覆盖"：
+#   有 FAIL → 1；没有 FAIL 但有 SKIP → 2；全跑全过 → 0。
+# （旧写法里 skip() 设 2、bad() 设 1，后面调用的那个会覆盖前面，导致"明明有 FAIL 却报成没跑"。）
+RC_FAIL=0; RC_SKIP=0; DID=0
 ok()   { echo "[PASS] $1"; DID=$((DID+1)); }
-bad()  { echo "[FAIL] $1"; RC=1; DID=$((DID+1)); }
-skip() { echo "[SKIP] $1（该项没跑，不算通过）"; RC=2; }
+bad()  { echo "[FAIL] $1"; RC_FAIL=1; DID=$((DID+1)); }
+skip() { echo "[SKIP] $1（该项没跑，不算通过）"; RC_SKIP=1; }
 
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
 
@@ -198,11 +201,10 @@ if want 61; then
 fi
 
 echo
-if [ "$RC" -eq 0 ]; then
-  echo "结论：本轮要求的 $DID 项全部真跑且 PASS"
-elif [ "$RC" -eq 2 ]; then
-  echo "结论：有项没跑（SKIP/环境），不能算通过（见上）"
+if [ "$RC_FAIL" -ne 0 ]; then
+  echo "结论：有 FAIL（另有 SKIP 项时以 FAIL 为准）"; exit 1
+elif [ "$RC_SKIP" -ne 0 ]; then
+  echo "结论：没有 FAIL，但有项没跑（SKIP/环境），不能算通过"; exit 2
 else
-  echo "结论：有 FAIL"
+  echo "结论：本轮要求的 $DID 项全部真跑且 PASS"; exit 0
 fi
-exit "$RC"

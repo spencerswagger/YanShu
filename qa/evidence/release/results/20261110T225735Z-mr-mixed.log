@@ -1,0 +1,22 @@
+== 合并期回归 @ 2026-11-10T22:57:52Z  ref=bf84457 (bf84457433e56d194ac04b9c482ac848e99b5556)  only=all
+   work=/tmp/yanshu-mr-1100-225752
+--- build ---
+[PASS] build+vet+gofmt
+   test db = yanshu_mr_20261110t225756_test?sslmode=disable
+--- #57 建索引锁写门禁 ---
+  测试名没命中（no tests to run）
+[FAIL] #57 store 门禁
+[PASS] #57 迁移跑两遍幂等（schema_migrations=9）
+--- #56 终结态 410 先于凭据 ---
+  测试名没命中（no tests to run）
+[FAIL] #56 httpapi 门禁
+--- #58 契约 §0.2 路由信封 ---
+[SKIP] #58 脚本不在该 ref 上（该项没跑，不算通过）
+--- #59 A/B 证据脚本 ---
+[SKIP] #59 脚本不在该 ref 上（该项没跑，不算通过）
+--- #60 crosscheck 裸跑 ---
+[PASS] #60 crosscheck（PASS 6 / FAIL 0 / SKIP 69）
+--- #61 wasm:sync 溯源门禁 ---
+[SKIP] #61 测试不在该 ref 上（该项没跑，不算通过）
+
+结论：有 FAIL（另有 SKIP 项时以 FAIL 为准）
