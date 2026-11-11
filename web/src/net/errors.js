@@ -42,6 +42,10 @@ const HTTP = {
   NETWORK_ERROR: { title: '网络不可达', hint: '检查网络后重试。', retry: true },
   FILE_TOO_LARGE: { title: '文件太大', hint: '端侧内核当前是整包接口，请等流式接口（已排期）或先拆分文件。' },
   RESUME_UNAVAILABLE: { title: '无法续传', hint: '本机没有保留密文包（超过 8 MiB 或已清理），请重新发送。' },
+  // 落盘（前端本地，不是服务端错误）：大文件必须流式写盘，不能整包进内存
+  SAVE_MEMORY_LIMIT: { title: '文件太大，浏览器不能整包保存', hint: '请用 Chrome/Edge 打开，或让对方拆分后再发。' },
+  SAVE_UNSUPPORTED_LARGE: { title: '这个浏览器不能流式落盘', hint: '请用 Chrome/Edge 打开；文件已留在服务端，可以稍后重试。' },
+  SAVE_PICKER_UNAVAILABLE: { title: '未使用「选择保存位置」', hint: '已改走浏览器内部暂存，收完会自动下载。' },
 }
 
 export function describeError(err) {

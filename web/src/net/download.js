@@ -13,11 +13,33 @@ import { takeChunkBytes } from './p2pChunks.js'
 import { info } from '../lib/log.js'
 import { config } from '../config.js'
 import { bytes } from '../lib/bytes.js'
+import { createChunkPacer } from './chunkPacer.js'
 
 /** 让出一帧：`unpack.finish()` 是同步的，不让出的话「解密中」这段永远画不出来 */
 function nextPaint() {
   if (typeof requestAnimationFrame !== 'function') return new Promise((r) => setTimeout(r, 0))
   return new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))
+}
+
+function sleepAbortable(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException('aborted', 'AbortError'))
+    const t = setTimeout(() => {
+      signal?.removeEventListener?.('abort', onAbort)
+      resolve()
+    }, ms)
+    function onAbort() {
+      clearTimeout(t)
+      reject(new DOMException('aborted', 'AbortError'))
+    }
+    signal?.addEventListener?.('abort', onAbort, { once: true })
+  })
+}
+
+/** 单块只做一次取数（直连优先，失败回中转）；429/5xx 由调用方按 pacer 处理，不在这里吞 */
+async function fetchChunkOnce({ directBuffer, index, relayGet }) {
+  if (!directBuffer) return { bytes: await relayGet(index), source: 'relay' }
+  return takeChunkBytes({ directBuffer, index, getChunk: relayGet })
 }
 
 const TERMINAL_CODES = {
@@ -78,6 +100,8 @@ async function receiveStreaming({
   onProgress,
   signal,
   sinkFactory,
+  save,
+  pacer: injectedPacer,
   ack = true,
   directBuffer,
 }) {
@@ -100,43 +124,94 @@ async function receiveStreaming({
   })
 
   const sink = await (sinkFactory ? sinkFactory(meta) : createMemorySink())
-  const relayGet = (i) => api.getChunk({ transferId, downloadId: prelude.downloadId, index: i })
+  const relayGet = (i) =>
+    api.getChunk({ transferId, downloadId: prelude.downloadId, index: i, retry: false })
   const unpackSlice = (index, slice) =>
     kernel.streamUnpackChunk(
       bytes(kernel.segmenter.buildRecordHeader(index, slice.length - 16, chunkCount), slice),
     )
 
+  // 客户端自己排队：契约把内容端点限到「按传输 600 次/分、按 IP 120 次/分」（最紧 2 次/秒），
+  // 猛拉必吃 429；而固定 5s 退避会把 1 GiB 拖成 85 分钟（v0.2.4 实测 69% 后每块 5.6 秒）。
+  const pacer = injectedPacer || createChunkPacer({ ratePerSec: config.chunkRatePerSec })
   let done = 0 // 已解密并写出的明文字节
   let fetched = 0 // 已取到的密文字节（含尚未解密的块）
-  for (let index = 0; index < chunkCount; index++) {
-    if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-    const picked = directBuffer
-      ? await takeChunkBytes({ directBuffer, index, getChunk: relayGet })
-      : { bytes: await relayGet(index), source: 'relay' }
-    // 先记「已取到」再解密：两个百分比因此会差一块左右，能看出解密落后于网络
-    fetched += picked.bytes.length
-    report({ phase: 'downloading', done: fetched, decrypted: done, total: totalSize, message: `下载块 ${index + 1}/${chunkCount}` })
-    let plain
-    try {
-      plain = unpackSlice(index, picked.bytes)
-    } catch (err) {
-      if (picked.source !== 'direct') throw err
-      // 直连块不可信 → 当块回落中转补齐（不交残缺文件）
-      plain = unpackSlice(index, await relayGet(index))
+  let throttleStreak = 0
+  try {
+    for (let index = 0; index < chunkCount; index++) {
+      if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+      await pacer.acquire()
+      let picked
+      try {
+        picked = await fetchChunkOnce({ directBuffer, index, relayGet })
+      } catch (err) {
+        // 429：按服务端 Retry-After 等（不套 5s 地板），并在进度里**明说**在限速，别让用户看死龟
+        if (err?.status === 429) {
+          throttleStreak += 1
+          const waitMs = pacer.onThrottled(err.retryAfter)
+          report({
+            phase: 'downloading',
+            done: fetched,
+            decrypted: done,
+            total: totalSize,
+            message: `服务端限速：${Math.ceil(waitMs / 1000)} 秒后继续第 ${index + 1}/${chunkCount} 块（${pacer.summary()}）`,
+            throttled: pacer.throttledCount,
+          })
+          if (throttleStreak > 8) {
+            throw new ApiError({
+              code: 'RATE_LIMITED',
+              status: 429,
+              retryAfter: err.retryAfter,
+              message: `连续 ${throttleStreak} 次被限速，已暂停（可稍后重试，不会交残缺文件）`,
+            })
+          }
+          await sleepAbortable(waitMs, signal)
+          index -= 1 // 重试同一块：顺序不能乱，也不能跳过
+          continue
+        }
+        throw err
+      }
+      throttleStreak = 0
+      pacer.onSuccess()
+      // 先记「已取到」再解密：两个百分比因此会差一块左右，能看出解密落后于网络
+      fetched += picked.bytes.length
+      report({
+        phase: 'downloading',
+        done: fetched,
+        decrypted: done,
+        total: totalSize,
+        message: `下载块 ${index + 1}/${chunkCount}`,
+      })
+      let plain
+      try {
+        plain = unpackSlice(index, picked.bytes)
+      } catch (err) {
+        if (picked.source !== 'direct') throw err
+        // 直连块不可信 → 当块回落中转补齐（不交残缺文件）
+        plain = unpackSlice(index, await relayGet(index))
+      }
+      await sink.write(plain)
+      done += plain.length
+      report({
+        phase: 'downloading',
+        done: fetched,
+        decrypted: done,
+        total: totalSize,
+        message: `解密块 ${index + 1}/${chunkCount}`,
+      })
     }
-    await sink.write(plain)
-    done += plain.length
-    report({
-      phase: 'downloading',
-      done: fetched,
-      decrypted: done,
-      total: totalSize,
-      message: `解密块 ${index + 1}/${chunkCount}`,
-    })
-  }
-  kernel.streamUnpackEnd()
+    kernel.streamUnpackEnd()
 
-  await sink.close()
+    report({ phase: 'saving', done, decrypted: done, total: totalSize, message: '校验通过，正在落盘…', verified: true })
+    const out = await sink.close()
+    // OPFS / 内存路径交出一个 Blob（OPFS 的 File 由磁盘承载，不复制进 JS 堆）；
+    // 「用户选路径」那条已经把块写进目标文件，不需要再点 <a download>。
+    if (save && (out?.blob || out?.file)) save(out.blob || out.file, out.name || safeFileName(meta.name, meta.ext))
+  } catch (err) {
+    await sink.abort?.()
+    throw err
+  }
+
   if (ack) {
     // ack 必须带租约 id（契约 §8.5）：不带会被判 409 DOWNLOAD_NOT_STARTED
     await api.ack({ transferId, downloadId: prelude.downloadId })

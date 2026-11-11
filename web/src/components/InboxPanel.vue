@@ -1,10 +1,11 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent } from '../lib/format.js'
 import { createSpeedMeter, stageLabel } from '../lib/speed.js'
 import { isExpired, remainingMs } from '../lib/serverClock.js'
 import { expiryNow, refreshExpiryClock } from '../lib/expiryTicker.js'
+import { createPoller } from '../lib/poller.js'
 import ReportSheet from './ReportSheet.vue'
 import SpeedLine from './SpeedLine.vue'
 import TtlPill from './TtlPill.vue'
@@ -29,20 +30,55 @@ const stageText = computed(() =>
   stageLabel(progress.value.phase, progress.value.done, progress.value.total, progress.value.decrypted),
 )
 
-async function refresh() {
+/**
+ * `quiet` = 后台自动刷新：不转圈、不清错误（避免每 8 秒闪一下把用户正在看的提示抹掉）。
+ * 手动点「刷新」才清错误并显示 loading。
+ */
+async function refresh({ quiet = false } = {}) {
   if (!props.api) return
-  loading.value = true
-  errorText.value = ''
+  if (quiet && activeId.value) return // 正在下载时不打扰（进度那条不能被列表刷新打断）
+  if (!quiet) {
+    loading.value = true
+    errorText.value = ''
+  }
   try {
     const res = await props.api.inbox({ state: 'ready', limit: 20 })
     items.value = res?.items || []
   } catch (err) {
-    const d = describeError(err)
-    errorText.value = `${d.title}${d.hint ? '：' + d.hint : ''}`
+    if (!quiet) {
+      const d = describeError(err)
+      errorText.value = `${d.title}${d.hint ? '：' + d.hint : ''}`
+    }
   } finally {
-    loading.value = false
+    if (!quiet) loading.value = false
   }
 }
+
+/**
+ * 自动刷新：v0.2.4 的缺陷是「必须手点刷新才看得到待收文件」（16 MiB / 1 GiB 都复现）。
+ * 可见时 8 秒一轮、后台 30 秒一轮，切回页面立刻补一次；`lastSyncText` 让用户知道列表是活的。
+ */
+const lastSync = ref(0)
+const lastSyncText = computed(() => {
+  if (!lastSync.value) return ''
+  const d = new Date(lastSync.value)
+  const p = (n) => String(n).padStart(2, '0')
+  const fresh = Date.now() - lastSync.value < 15000
+  return `${fresh ? '自动更新' : '上次更新'} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+})
+
+const poller = createPoller({
+  task: () => refresh({ quiet: true }),
+  intervalMs: 8000,
+  hiddenMs: 30000,
+  onRun: (t) => {
+    lastSync.value = t
+  },
+})
+const onVisible = () => {
+  if (!document.hidden) poller.kick()
+}
+const onFocus = () => poller.kick()
 
 async function take(item) {
   // 兜底：万一定时器被节流没翻，这里按 serverClock 再判一次，直接置成过期态、不发请求（别去吃 410）
@@ -107,19 +143,31 @@ watch(
   },
   { immediate: true },
 )
+
+onMounted(() => {
+  poller.start()
+  document.addEventListener('visibilitychange', onVisible)
+  window.addEventListener('focus', onFocus)
+})
+onUnmounted(() => {
+  poller.stop()
+  document.removeEventListener('visibilitychange', onVisible)
+  window.removeEventListener('focus', onFocus)
+})
 </script>
 
 <template>
   <section class="card">
     <div class="spread" style="margin-bottom: 10px">
       <div class="card-title">{{ items.length ? `${items.length} 个文件待接收` : '暂无待接收文件' }}</div>
-      <button type="button" class="icon-btn" :disabled="loading" aria-label="刷新" @click="refresh">
+      <button type="button" class="icon-btn" :disabled="loading" aria-label="刷新" @click="refresh()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
     </div>
 
+    <p v-if="lastSyncText && !errorText" class="meta sync">{{ lastSyncText }}（新文件会自动出现在这里）</p>
     <p v-if="notice" class="banner info">{{ notice }}</p>
     <p v-if="errorText" class="banner warn">{{ errorText }}</p>
 
