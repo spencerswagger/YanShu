@@ -118,6 +118,19 @@ cmd_preflight() {
     code=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "https://${REG%%/*}/v2/" 2>/dev/null || echo 000)
     case "$code" in 200|401|403) ok "SWR 可达（/v2/ HTTP $code）" ;; *) bad "SWR 不可达（HTTP $code）" ;; esac
 
+    # 端口必须空闲：上一个栈没 down 就再跑一次，会卡在 port already allocated 上，
+    # 表现为「up 失败但 healthz 还 ok」（其实是旧栈在应答）—— 这种假绿必须在这里挡掉
+    if command -v ss >/dev/null 2>&1; then
+        if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$PORT\$"; then
+            bad "端口 $PORT 已被占用（先 down 掉上一个栈；否则 up 会失败而 healthz 仍由旧栈应答）"
+        else ok "端口 $PORT 空闲"; fi
+    else
+        skip "没有 ss，跳过端口占用检查（请自行确认 $PORT 空闲）"
+    fi
+
+    # 浏览器连接方式：脚本打的是本机回环，浏览器必须与 docker 同机
+    echo "      浏览器入口约定：http://127.0.0.1:$PORT/ （chromium 必须与本机 docker 同机）"
+
     # 浏览器（只在 transfer 阶段必需）
     if command -v chromium >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1 \
        || command -v google-chrome >/dev/null 2>&1; then

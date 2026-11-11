@@ -69,6 +69,9 @@ try {
   // ---------- 接收端先起来：它要在服务器登记自己的码 ----------
   ctxA = await chromium.launchPersistentContext(join(profileRoot, 'recv'), launchOpts)
   const recv = ctxA.pages()[0] || (await ctxA.newPage())
+  recv.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') say(`RECV-CONSOLE(${m.type()}) ${m.text().slice(0, 180)}`) })
+  recv.on('pageerror', (e) => say(`RECV-PAGEERROR ${String(e && e.message || e).slice(0, 180)}`))
+  recv.on('requestfailed', (r) => say(`RECV-REQFAIL ${r.method()} ${r.url().slice(0, 90)} ${r.failure()?.errorText || ''}`))
   // 显式打开下载落地（persistent context 上 Playwright 的 downloadsPath 有时不生效，
   // headless 下下载会被**静默丢弃** —— 表现为页面说「已保存至本机」但磁盘上什么都没有）
   try {
@@ -134,11 +137,18 @@ try {
   // 落盘有两条路：① 触发 Playwright download 事件（saveAs 到指定路径）；
   // ② 浏览器自己写 downloadsPath（默认 $HOME/Downloads，目录不存在时**静默失败**）。
   // 两条都盯：先挂事件，同时轮询 dlDir 里新出现的、大小等于源文件的那个。
+  const tick = setInterval(async () => {
+    try {
+      const t = (await recv.innerText('body')).replace(/\s+/g, ' ')
+      say(`RECV-PROGRESS …${t.slice(-120)}`)
+    } catch {}
+  }, 5000)
   const before = new Set(readdirSync(dlDir).map(String))
   const dlPromise = recv.waitForEvent('download', { timeout: 5 * 60 * 1000 }).catch(() => null)
   await dlBtn.click()
 
   let download = await dlPromise
+  clearInterval(tick)
   if (download) {
     await download.saveAs(out)
     say(`download 事件 → saveAs ${out}`)
