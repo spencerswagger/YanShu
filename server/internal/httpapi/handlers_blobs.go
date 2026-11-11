@@ -15,6 +15,10 @@ import (
 	"github.com/spencerswagger/YanShu/server/internal/store"
 )
 
+// chunkCostMiB 是单块在读额度里的计费单位（MiB）。默认块大小 1 MiB（spec.DefaultChunkSize），
+// 末块可能更小，按整块计费误差 <1 块，可接受。
+const chunkCostMiB = float64(spec.DefaultChunkSize) / (1 << 20)
+
 // handlePutPrelude 是 PUT /v1/transfers/{id}/prelude（API.md §6.3）。
 //
 // 服务端**不解析** prelude，只校验长度与 SM3。
@@ -208,7 +212,11 @@ func (a *API) handleGetChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := a.clientIP(r)
-	if !a.allow(w, r, "read:ip:"+ip, "ip", spec.DefaultLimits.TransferReadPerIP) {
+	// 单 IP 额度**按字节**计，不按请求数计：1 GiB = 1024 次 chunk GET，按请求数给
+	// 120 次/分钟等于把单传输的读吞吐硬顶在 2 MiB/s（实测 1 GiB 下载 >7.5 分钟、
+	// 持续 429，客户端 5s 退避被打满 → 进度停在 69%）。
+	// 每块按 1 MiB 计（末块略小，误差 <1 块）。
+	if !a.allowN(w, r, "readbytes:ip:"+ip, "ip", spec.DefaultLimits.TransferReadBytesPerIP, chunkCostMiB) {
 		return
 	}
 	if !a.allow(w, r, "read:transfer:"+id, "transfer", spec.DefaultLimits.TransferReadPerTransfer) {

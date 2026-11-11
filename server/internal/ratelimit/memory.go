@@ -23,6 +23,8 @@ type Decision struct {
 type Limiter interface {
 	// Take 从 key 的令牌桶里取一个令牌。
 	Take(key string, l spec.Limit) Decision
+	// TakeN 从 key 的令牌桶里取 cost 个令牌（按字节计费的额度用）。
+	TakeN(key string, l spec.Limit, cost float64) Decision
 	// Locked 查询 key 是否处于失败锁定中。
 	Locked(key string) (bool, time.Duration)
 	// Fail 记一次失败；达到阈值即锁定。
@@ -62,10 +64,17 @@ func NewMemory() *Memory {
 	}
 }
 
-// Take 实现令牌桶。
-func (m *Memory) Take(key string, l spec.Limit) Decision {
+// Take 实现令牌桶（取 1 个令牌）。
+func (m *Memory) Take(key string, l spec.Limit) Decision { return m.TakeN(key, l, 1) }
+
+// TakeN 按 cost 个令牌计费，用于**按字节**而非按请求数的额度（ADR：chunk GET 的
+// 单 IP 额度按 MiB 计，不按请求数计——否则 1 GiB = 1024 次请求会自己撞自己的额度）。
+func (m *Memory) TakeN(key string, l spec.Limit, cost float64) Decision {
 	if l.Max <= 0 || l.WindowSeconds <= 0 {
 		return Decision{Allowed: true}
+	}
+	if cost <= 0 {
+		cost = 1
 	}
 	capacity := l.Burst
 	if capacity <= 0 {
@@ -98,14 +107,14 @@ func (m *Memory) Take(key string, l spec.Limit) Decision {
 		}
 	}
 	m.maybeGC(now)
-	if b.tokens < 1 {
-		retry := time.Duration((1 - b.tokens) / b.rate * float64(time.Second))
+	if b.tokens < cost {
+		retry := time.Duration((cost - b.tokens) / b.rate * float64(time.Second))
 		if retry < time.Second {
 			retry = time.Second
 		}
 		return Decision{Allowed: false, Limit: l.Max, Remaining: 0, RetryAfter: retry}
 	}
-	b.tokens--
+	b.tokens -= cost
 	return Decision{Allowed: true, Limit: l.Max, Remaining: int(b.tokens)}
 }
 

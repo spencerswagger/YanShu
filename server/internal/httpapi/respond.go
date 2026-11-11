@@ -142,7 +142,12 @@ func (a *API) validateQuery(w http.ResponseWriter, r *http.Request, allowed ...s
 
 // allow 是一次限速检查；超限写 429（带 scope 与 Retry-After）。
 func (a *API) allow(w http.ResponseWriter, r *http.Request, key, scope string, l spec.Limit) bool {
-	d := a.limiter.Take(key, l)
+	return a.allowN(w, r, key, scope, l, 1)
+}
+
+// allowN 是按 cost 计费的限速检查（内容端点按 MiB 计费用）。
+func (a *API) allowN(w http.ResponseWriter, r *http.Request, key, scope string, l spec.Limit, cost float64) bool {
+	d := a.limiter.TakeN(key, l, cost)
 	if d.Allowed {
 		w.Header().Set(spec.HeaderRateLimitLimit, strconv.Itoa(d.Limit))
 		w.Header().Set(spec.HeaderRateLimitRemaining, strconv.Itoa(d.Remaining))
