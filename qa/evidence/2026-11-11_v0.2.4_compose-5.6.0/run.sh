@@ -348,10 +348,13 @@ cmd_negative_save() {
     printf '%s  %s\n' "$(sha_of "$src")" "$src" > "$EV/negative-save-src-$TAG.sha256"
     echo "$sz_bytes" > "$EV/negative-save-size-$TAG.txt"
 
+    # 场景 C 用：不可写下载目录（模拟浏览器「接受 click 但写不进去」）
+    RODIR="$FIXDIR/neg-ro-$TAG"; rm -rf "$RODIR"; mkdir -p "$RODIR"; chmod 555 "$RODIR"
+
     ack_before=$( ( cd "$WORK" && docker compose logs yanshu-server 2>/dev/null ) | grep -c 'ack' || true)
     step "40-negative-save-$TAG" node "$ROOT/negative-save.mjs" \
         --url "http://127.0.0.1:$PORT/" --src "$src" --evidence "$EV" \
-        --dl-dir "$FIXDIR/neg-downloads-$TAG" --wait-s 180
+        --dl-dir "$FIXDIR/neg-downloads-$TAG" --ro-dir "$RODIR" --wait-s 180
     rc=$?
     ack_after=$( ( cd "$WORK" && docker compose logs yanshu-server 2>/dev/null ) | grep -c 'ack' || true)
     ack_delta=$((ack_after - ack_before))
@@ -368,6 +371,7 @@ cmd_negative_save() {
         printf 'ack 原始行      : %s\n' "$( ( cd "$WORK" && docker compose logs --tail=200 yanshu-server 2>/dev/null ) | grep -i 'ack' | tail -2 | tr '\n' '|')"
         printf '页面可见报错    : %s\n' "$(python3 -c "import json;d=json.load(open('$EV/negative-save.json'));print(';'.join(v['error_text'] or '-' for v in d['verdicts']))" 2>/dev/null)"
         printf '场景判定        : %s\n' "$(python3 -c "import json;d=json.load(open('$EV/negative-save.json'));print('; '.join(v['tag']+'='+v['verdict'] for v in d['verdicts']))" 2>/dev/null)"
+        printf '场景C OPFS 前后 : %s → %s\n' "$(python3 -c "import json;d=json.load(open('$EV/negative-save.json'));v=[x for x in d['verdicts'] if x['tag'].startswith('C-')];print(json.dumps(v[0].get('opfs_before')) if v else '-')" 2>/dev/null)" "$(python3 -c "import json;d=json.load(open('$EV/negative-save.json'));v=[x for x in d['verdicts'] if x['tag'].startswith('C-')];print(json.dumps(v[0].get('opfs_after')) if v else '-')" 2>/dev/null)"
     } | tee "$sum"
     cat "$sum" >> "$EV/summary.txt"
 
