@@ -44,7 +44,7 @@ const newFileIn = (dir, before) => readdirSync(dir).filter((f) => !before.has(f)
   .map((f) => join(dir, f)).filter((p) => { try { return statSync(p).isFile() } catch { return false } })
 
 /** 跑一轮：发送端发 src，接收端点下载，观察 UI + 磁盘 */
-async function runOnce({ tag, failSink }) {
+async function runOnce({ tag, failSink, roDir }) {
   const res = { tag, ui_says_saved: false, error_text: '', files: [], console_errors: [], cdp: '' }
   const profileRoot = join(tmpdir(), `ys-neg-${tag}-${Date.now()}`)
   mkdirSync(profileRoot, { recursive: true })
@@ -57,8 +57,10 @@ async function runOnce({ tag, failSink }) {
     ctxR = await chromium.launchPersistentContext(join(profileRoot, 'recv'), launchOpts)
     const recv = ctxR.pages()[0] || (await ctxR.newPage())
     const cdp = await ctxR.newCDPSession(recv)
+    // 场景 C：把下载目标指到**不可写目录**，模拟「浏览器接受了 click 但写不进去」
+    const targetDir = roDir || dlDir
     await cdp.send('Browser.setDownloadBehavior',
-      { behavior: 'allow', downloadPath: dlDir, eventsEnabled: true })
+      { behavior: 'allow', downloadPath: targetDir, eventsEnabled: true })
     if (failSink) {
       // 注入：本次浏览器里所有写盘入口都坏掉（模拟配额打满 / 只读环境）
       await recv.addInitScript(() => {
@@ -74,6 +76,10 @@ async function runOnce({ tag, failSink }) {
       })
     }
     const ids = new Map()
+    let ackSent = 0
+    recv.on('request', (rq) => {
+      if (rq.method() === 'POST' && /\/ack(?:\?|$)/.test(rq.url())) ackSent += 1
+    })
     recv.on('request', (rq) => {
       const m = rq.url().match(/\/v1\/transfers\/([0-9A-Za-z_-]{6,})(?:\/|$)/)
       if (m) ids.set(m[1], (ids.get(m[1]) || 0) + 1)
@@ -109,7 +115,21 @@ async function runOnce({ tag, failSink }) {
       catch { await recv.reload({ waitUntil: 'domcontentloaded' }) }
       await dlBtn.waitFor({ state: 'visible', timeout: 60000 })
     }
-    const before = new Set(readdirSync(dlDir))
+    const opfsList = async () => {
+      try {
+        return await recv.evaluate(async () => {
+          const out = []
+          try {
+            const root = await navigator.storage.getDirectory()
+            for await (const [name] of root.entries()) out.push(name)
+          } catch (e) { return { err: String(e).slice(0, 120) } }
+          return out
+        })
+      } catch (e) { return { err: String(e).slice(0, 120) } }
+    }
+    res.opfs_before = await opfsList()
+    res.ack_sent = 0
+    const before = new Set(readdirSync(targetDir))
     await dlBtn.click()
     say(`[${tag}] 已点下载并解密`)
 
@@ -126,7 +146,9 @@ async function runOnce({ tag, failSink }) {
     if (!res.ui_says_saved) { try { body = await recv.innerText('body') } catch {} }
     const m = body.match(/(本机存储不足[^\n]{0,40}|保存失败[^\n]{0,40}|落盘失败[^\n]{0,40}|存储不足[^\n]{0,40}|请求失败[^\n]{0,40})/)
     if (m) res.error_text = m[1]
-    res.files = newFileIn(dlDir, before)
+    res.files = newFileIn(targetDir, before)
+    res.opfs_after = await opfsList()
+    res.ack_sent = ackSent
     res.body_tail = body.replace(/\s+/g, ' ').slice(-200)
 
     // 终态：ack 之后服务端应把传输置为终态（DELETED）；这条是「密文已删」的直接证据
@@ -154,17 +176,34 @@ const verdicts = []
 const a = await runOnce({ tag: 'A-no-inject', failSink: false })
 a.verdict = a.ui_says_saved && a.files.length > 0 ? 'PASS(真保存)'
   : a.ui_says_saved && a.files.length === 0 ? 'FAIL(假绿：报成功但磁盘无文件)'
-  : a.error_text ? 'PASS(失败可见)' : 'FAIL(无结论：既没成功也没报错)'
+  : a.error_text ? (a.ack_sent > 0 ? 'FAIL(报错了却仍 ack，密文已删)' : 'PASS(失败可见且未 ack)')
+  : 'FAIL(无结论：既没成功也没报错)'
 verdicts.push(a)
 say(`场景A：ui_says_saved=${a.ui_says_saved} files=${a.files.length} error=${JSON.stringify(a.error_text)} → ${a.verdict}`)
 
 // ---------- 场景 B：写盘必失败，必须报错、不许报成功 ----------
 const b = await runOnce({ tag: 'B-inject-fail', failSink: true })
-b.verdict = (!b.ui_says_saved && b.error_text) ? 'PASS(失败可见)'
+b.verdict = (!b.ui_says_saved && b.error_text && b.ack_sent === 0) ? 'PASS(失败可见且未 ack)'
   : b.ui_says_saved ? 'FAIL(假绿：写盘注入失败仍报成功)'
+  : b.ack_sent > 0 ? `FAIL(报错前已 ack ${b.ack_sent} 次，密文已删)`
   : 'FAIL(静默失败：没有可见错误)'
 verdicts.push(b)
 say(`场景B：ui_says_saved=${b.ui_says_saved} error=${JSON.stringify(b.error_text)} → ${b.verdict}`)
+
+// ---------- 场景 C：下载目录不可写（click 被接受但写不进去）→ 必须保留 OPFS 副本 + 不报成功 ----------
+const roDir = arg('--ro-dir', '')
+let c = null
+if (roDir) {
+  c = await runOnce({ tag: 'C-blocked-download', failSink: false, roDir })
+  const opfsKept = Array.isArray(c.opfs_after) && c.opfs_after.length > 0
+  c.opfs_kept = opfsKept
+  c.verdict = c.ui_says_saved ? 'FAIL(假绿：下载被拦仍报成功)'
+    : c.ack_sent > 0 ? `FAIL(下载被拦却已 ack ${c.ack_sent} 次，密文已删)`
+    : opfsKept ? 'PASS(未报成功、未 ack、OPFS 副本保留可重下)'
+    : 'FAIL(未报成功但副本被删，无法重下)'
+  verdicts.push(c)
+  say(`场景C：ui_says_saved=${c.ui_says_saved} ack_sent=${c.ack_sent} files=${c.files.length} opfs_after=${JSON.stringify(c.opfs_after).slice(0, 120)} → ${c.verdict}`)
+}
 
 const ok = verdicts.every((v) => v.verdict.startsWith('PASS'))
 writeFileSync(join(ev, 'negative-save.json'),

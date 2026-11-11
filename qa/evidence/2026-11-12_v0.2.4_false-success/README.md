@@ -38,6 +38,21 @@
   （headless 下 `downloadsPath` 不生效，会把下载**静默丢掉**，不显式设会导致误判）。
 - 两个场景都盯 `downloads/` 与 `$HOME/Downloads` 两处，避免「落到默认目录」漏判。
 
+## 场景 C：下载被浏览器拦住（**这是唯一能兜住「click 成功但没写盘」的判据**）
+
+`negative-save.mjs` 的第三个场景（`--ro-dir` 触发）：
+
+1. CDP `Browser.setDownloadBehavior{behavior:'allow', downloadPath:<chmod 555 的目录>}` —— 让浏览器**接受下载但写不进去**；
+2. 跑一次正常收发（16 MiB）并点「下载并解密」；
+3. 三条断言：**① 该场景 `POST …/ack` 次数必须为 0**；**② OPFS 里那份副本必须还在**（页面 `navigator.storage.getDirectory()` 列表非空，能重下）；
+   **③ 界面必须给出可见提示，不得出现「已保存至本机」**。
+
+> 为什么要有它：write/picker/click **抛错**都可以拦（做到不 ack 就行），但「click 成功、浏览器却没真落盘」客户端**没有任何回调可观测**。
+> 这一半只能靠**保留 OPFS 副本**兜底 —— 所以场景 C 判的是「副本还在不在」，不是「文件有没有落地」。
+
+预期：**v0.1.4–v0.2.4 红**（会 ack、副本会被 `cleanup` 删）；v0.2.5（`daa089e` 起 `cleanup` 挪到 ack 之后）应转绿。
+ack 计数是**从页面侧网络事件**数的（`POST …/ack` 请求数），不依赖服务端日志，每个场景互不干扰。
+
 ## v0.2.5 复验口径（同一条命令）
 
 ```sh
