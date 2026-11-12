@@ -246,6 +246,8 @@ export async function sweepStaleOpfsEntries(root, { maxAgeMs = OPFS_STALE_MS, no
       } catch {
         continue // 刚好被删掉/读不到：下一轮再说
       }
+      // 读不到 lastModified（0）时必须跳过：`now() - 0` 会远大于阈值 → 等于「立即删」，可能删掉正在写的条目
+      if (!lastModified) continue
       if (now() - lastModified < maxAgeMs) continue
       try {
         await root.removeEntry(name)
@@ -301,7 +303,8 @@ export async function defaultSinkFactory(meta = {}, options = {}) {
   if (root) {
     // 顺手清扫孤儿临时条目（页面上次被关在 60s 窗口内 / ack 失败 / 下载中途关页面都会留下）。
     // 不 await：清扫是"维护动作"，不该让用户等；它只删 > 24h 的 `*.part`，动不到本次新条目。
-    void sweepStaleOpfsEntries(root) // 内部已全量 catch，不会抛
+    // await：配额真被孤儿占满时，先清扫再 open，用户不用点第二次（只读几条目录项，毫秒级）
+    await sweepStaleOpfsEntries(root) // 内部已全量 catch，不会抛
     const sink = createOpfsSink(name, { root })
     await sink.open()
     return sink

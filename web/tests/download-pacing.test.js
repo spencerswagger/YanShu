@@ -383,3 +383,43 @@ test('pacer：Retry-After 极大（前置代理回 3600）必须夹到 60 秒，
   assert.equal(pacer.onThrottled(0.01), 1000, '比最小退避还小就按 1 秒（别打空转）')
   assert.equal(pacer.onThrottled(undefined), 1000, '缺头按 1 秒')
 })
+
+test('只给 sink 不给 sinkFactory（`params.sink` 路径）：不许再炸 createMemorySink 的 ReferenceError', async () => {
+  const kernel = fakeKernel()
+  const parts = []
+  const sink = {
+    kind: 'memory',
+    name: 'big.bin',
+    async write(bytes) {
+      parts.push(bytes.length)
+    },
+    async close() {
+      return { name: 'big.bin', blob: { size: COUNT * CHUNK } }
+    },
+    async abort() {},
+  }
+  const api = {
+    async getPrelude() {
+      return { bytes: new Uint8Array([1]), downloadId: 'dl-1' }
+    },
+    async getChunk({ index }) {
+      const rec = new Uint8Array(HEADER + CHUNK)
+      new DataView(rec.buffer).setUint32(0, index, false)
+      new DataView(rec.buffer).setUint32(4, CHUNK, false)
+      rec.set(new Uint8Array(CHUNK).fill(index & 0xff), HEADER)
+      return rec
+    },
+    async ack() {},
+  }
+  const r = await receiveTransfer({
+    pacer: createChunkPacer({ ratePerSec: 1000, burst: 1000, maxRatePerSec: 1000, sleep: async () => {} }),
+    api,
+    kernel,
+    session: { privateKey: new Uint8Array(32) },
+    transferId: 't-sink-only',
+    sink, // 走 canStream 的 sink 分支 → receiveStreaming 内部 createMemorySink()
+    onProgress: () => {},
+    save: null,
+  })
+  assert.equal(r.size, COUNT * CHUNK)
+})

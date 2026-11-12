@@ -219,6 +219,22 @@ test('OPFS 孤儿临时条目：>24h 的 *.part 被清掉，正在写的（新�
   assert.ok(root.files.has('keep.txt'))
 })
 
+test('条目读不到 lastModified（0）→ 必须跳过，不能当成「超老」立即删（会删掉正在写的）', async () => {
+  const now = 1_700_000_000_000
+  const root = {
+    removed: [],
+    async *entries() {
+      yield ['ys-unknown.part', { kind: 'file', async getFile() { return { name: 'ys-unknown.part' } } }]
+    },
+    async removeEntry(name) {
+      this.removed.push(name)
+    },
+  }
+  const r = await sweepStaleOpfsEntries(root, { now: () => now })
+  assert.deepEqual(r.removed, [], 'lastModified 缺失 ≠ 过期：删了就是删正在写的')
+  assert.equal(r.scanned, 1)
+})
+
 test('拿不到目录迭代能力（老浏览器/单测环境）→ 清扫静默跳过，不影响下载', async () => {
   const r = await sweepStaleOpfsEntries({ async removeEntry() {} })
   assert.deepEqual(r, { scanned: 0, removed: [] })
