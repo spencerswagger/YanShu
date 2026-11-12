@@ -1,10 +1,11 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent } from '../lib/format.js'
 import { createSpeedMeter, stageLabel } from '../lib/speed.js'
 import { isExpired, remainingMs } from '../lib/serverClock.js'
 import { expiryNow, refreshExpiryClock } from '../lib/expiryTicker.js'
+import { createPoller } from '../lib/poller.js'
 import ReportSheet from './ReportSheet.vue'
 import SpeedLine from './SpeedLine.vue'
 import TtlPill from './TtlPill.vue'
@@ -29,18 +30,31 @@ const stageText = computed(() =>
   stageLabel(progress.value.phase, progress.value.done, progress.value.total, progress.value.decrypted),
 )
 
-async function refresh() {
-  if (!props.api) return
-  loading.value = true
-  errorText.value = ''
+/**
+ * `quiet` = 后台自动刷新：不转圈、不清错误（避免每 8 秒闪一下把用户正在看的提示抹掉）。
+ * 返回值是**可证事实**：真拉到列表 → `true`；没 api / 正在下载 / 请求失败 → `false`。
+ * 轮询器只认 `false` 不推进「自动更新 hh:mm:ss」——否则界面会写"自动更新 12:00:00"，
+ * 其实一次都没拉到（#84 的假成功同源：界面报成功、事实没发生）。
+ */
+async function refresh({ quiet = false } = {}) {
+  if (!props.api) return false
+  if (quiet && activeId.value) return false // 正在下载时不打扰（进度那条不能被列表刷新打断）
+  if (!quiet) {
+    loading.value = true
+    errorText.value = ''
+  }
   try {
     const res = await props.api.inbox({ state: 'ready', limit: 20 })
     items.value = res?.items || []
+    return true
   } catch (err) {
-    const d = describeError(err)
-    errorText.value = `${d.title}${d.hint ? '：' + d.hint : ''}`
+    if (!quiet) {
+      const d = describeError(err)
+      errorText.value = `${d.title}${d.hint ? '：' + d.hint : ''}`
+    }
+    return false
   } finally {
-    loading.value = false
+    if (!quiet) loading.value = false
   }
 }
 
@@ -107,19 +121,60 @@ watch(
   },
   { immediate: true },
 )
+
+/**
+ * 自动刷新（#84 真缺陷：v0.2.4 的待收列表**不点刷新就一直不出现新文件**）。
+ *
+ * 上面那个 `watch(props.api)` 只在 api 到场时拉一次；发送方在另一台设备，接收侧没有任何东西会推它，
+ * 所以必须有轮询：可见 8 秒一轮、后台 30 秒一轮、切回页面/聚焦立刻补一次。
+ * `lastSyncText` 只在**真发了请求且拿到列表**时更新（`refresh` 返回 false 时不更新），
+ * 让「有自动更新」这件事在界面上也是可证的，而不是一句静态文案。
+ */
+const lastSync = ref(0)
+const lastSyncText = computed(() => {
+  if (!lastSync.value) return ''
+  const d = new Date(lastSync.value)
+  const p = (n) => String(n).padStart(2, '0')
+  return `自动更新 ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+})
+
+const poller = createPoller({
+  task: () => refresh({ quiet: true }),
+  intervalMs: 8000,
+  hiddenMs: 30000,
+  onRun: (t) => {
+    lastSync.value = t
+  },
+})
+const onVisible = () => {
+  if (!document.hidden) poller.kick()
+}
+const onFocus = () => poller.kick()
+
+onMounted(() => {
+  poller.start()
+  document.addEventListener('visibilitychange', onVisible)
+  window.addEventListener('focus', onFocus)
+})
+onUnmounted(() => {
+  poller.stop()
+  document.removeEventListener('visibilitychange', onVisible)
+  window.removeEventListener('focus', onFocus)
+})
 </script>
 
 <template>
   <section class="card">
     <div class="spread" style="margin-bottom: 10px">
       <div class="card-title">{{ items.length ? `${items.length} 个文件待接收` : '暂无待接收文件' }}</div>
-      <button type="button" class="icon-btn" :disabled="loading" aria-label="刷新" @click="refresh">
+      <button type="button" class="icon-btn" :disabled="loading" aria-label="刷新" @click="refresh()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
     </div>
 
+    <p v-if="lastSyncText && !errorText" class="meta">{{ lastSyncText }}（新文件会自动出现在这里）</p>
     <p v-if="notice" class="banner info">{{ notice }}</p>
     <p v-if="errorText" class="banner warn">{{ errorText }}</p>
 
