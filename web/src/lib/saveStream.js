@@ -122,7 +122,9 @@ export function createFileSink() {
   }
 }
 
-/** 浏览器内部暂存（OPFS）：无需手势、常量内存；收完 getFile() 换一个磁盘承载的 Blob 去下载。 */
+/**
+ * 浏览器内部暂存（OPFS）：无需手势、常量内存；收完 getFile() 换一个磁盘承载的 Blob 去下载。
+ */
 export function createOpfsSink(name, { root = null, entryName = null } = {}) {
   let dir = root
   let handle = null
@@ -130,9 +132,11 @@ export function createOpfsSink(name, { root = null, entryName = null } = {}) {
   /**
    * **条目名必须唯一**：cleanup 是按条目名删的，若直接用交付名，
    * 用户 60s 内重下同一个文件时，上一次的定时器会把这一次正在写的文件删掉（表现为"重试也失败"）。
-   * 交付给浏览器的名字仍是 `name`；临时条目叫 `<name>.<唯一串>.part`。
+   * 交付给浏览器的名字仍是 `name`；临时条目叫 `ys-<uuid>.part`（不拼交付名：180 字符/emoji 名字
+   * 会撞文件系统名上限，`getFileHandle` 直接抛错，换名重试也一样）。
+   * 唯一名的代价是「同名残留被下次 open() 清掉」这条兜底失效 → 由 `sweepStaleOpfsEntries()` 兜（见下）。
    */
-  const entry = entryName || `${name}.${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}.part`
+  const entry = entryName || makeOpfsEntryName()
   return {
     kind: 'opfs',
     name,
@@ -203,6 +207,59 @@ export async function opfsRoot() {
   }
 }
 
+/** OPFS 临时条目名：`ys-<uuid>.part`。只用于内部暂存，交付名另存（见 `createOpfsSink` 注释）。 */
+export function makeOpfsEntryName(uuid) {
+  const id =
+    typeof uuid === 'string' && uuid
+      ? uuid
+      : typeof globalThis.crypto?.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  return `ys-${id}.part`
+}
+
+/** 政策：临时条目超过这个年龄就清（正常路径 60s 后自己删，留下的都是异常退出/中途关闭页面的） */
+export const OPFS_STALE_MS = 24 * 60 * 60 * 1000
+
+/**
+ * 清扫 OPFS 里的**孤儿临时条目**。
+ *
+ * 为什么必须有：`cleanup()` 是 `setTimeout(…, 60s)` 调的，三条异常路径都收不到——
+ * ① 下载完成后 60 秒内关页面/刷新；② `ack` 抛错（整单重试，旧条目没人删）；
+ * ③ 下载中途关页面（半成品没人 `abort()`）。条目名唯一化之后也没有「同名残留被下次 open 清掉」这条兜底，
+ * 于是一个 1 GiB 文件就能永久占住 1 GiB 配额，几周后 `SAVE_QUOTA_EXCEEDED` 会成为常态。
+ *
+ * 只删「年龄 > `maxAgeMs` 的 `*.part`」：正在写的新条目 age≈0，不会被误删。
+ * 拿不到目录迭代能力（老浏览器/单测环境）时静默返回，绝不影响本次下载。
+ */
+export async function sweepStaleOpfsEntries(root, { maxAgeMs = OPFS_STALE_MS, now = () => Date.now(), prefix = 'ys-', suffix = '.part' } = {}) {
+  const result = { scanned: 0, removed: [] }
+  if (!root || typeof root.entries !== 'function') return result
+  try {
+    for await (const [name, handle] of root.entries()) {
+      if (typeof name !== 'string' || !name.startsWith(prefix) || !name.endsWith(suffix)) continue
+      if (handle?.kind && handle.kind !== 'file') continue
+      result.scanned += 1
+      let lastModified = 0
+      try {
+        lastModified = Number((await handle.getFile())?.lastModified) || 0
+      } catch {
+        continue // 刚好被删掉/读不到：下一轮再说
+      }
+      if (now() - lastModified < maxAgeMs) continue
+      try {
+        await root.removeEntry(name)
+        result.removed.push(name)
+      } catch {
+        /* 并发删过了/被占用：忽略，清扫不能影响本次下载 */
+      }
+    }
+  } catch {
+    /* 目录迭代失败（实现差异/权限）：放弃清扫，不影响下载 */
+  }
+  return result
+}
+
 /** 当前是否有「瞬时用户激活」——`showSaveFilePicker` 的硬要求 */
 export function hasUserGesture() {
   return globalThis.navigator?.userActivation?.isActive === true
@@ -242,6 +299,9 @@ export async function defaultSinkFactory(meta = {}, options = {}) {
 
   const root = options.root ?? (await opfsRoot())
   if (root) {
+    // 顺手清扫孤儿临时条目（页面上次被关在 60s 窗口内 / ack 失败 / 下载中途关页面都会留下）。
+    // 不 await：清扫是"维护动作"，不该让用户等；它只删 > 24h 的 `*.part`，动不到本次新条目。
+    void sweepStaleOpfsEntries(root) // 内部已全量 catch，不会抛
     const sink = createOpfsSink(name, { root })
     await sink.open()
     return sink

@@ -11,6 +11,8 @@ import {
   createMemorySink,
   createOpfsSink,
   defaultSinkFactory,
+  makeOpfsEntryName,
+  sweepStaleOpfsEntries,
 } from '../src/lib/saveStream.js'
 
 function fakeOpfs() {
@@ -71,7 +73,7 @@ test('大文件 + 没有手势（无头浏览器）→ 走 OPFS 流式写盘，c
   for (let i = 0; i < 4; i++) await sink.write(new Uint8Array(1024).fill(i))
   const out = await sink.close()
   assert.equal(out.file.size, 4096, '必须真的写到浏览器内部存储')
-  assert.equal(root.files.get(sink.entryName).chunks.length, 4, '临时条目名唯一（<名>.<串>.part）')
+  assert.equal(root.files.get(sink.entryName).chunks.length, 4, '临时条目名唯一（ys-<uuid>.part）')
   assert.equal(notices.length, 0)
 })
 
@@ -172,4 +174,74 @@ test('同一文件名连续两次下载：旧的 cleanup 不得删掉新那句�
   assert.equal(root.files.has(second.entryName), true, '第二次的条目要留着，等它自己 cleanup')
   await second.cleanup()
   assert.equal(root.files.has(second.entryName), false)
+})
+
+const DAY = 24 * 60 * 60 * 1000
+
+/** 假 OPFS 目录：带 `entries()` 异步迭代（Chrome 的 FileSystemDirectoryHandle 形态） */
+function fakeOpfsDir(seed) {
+  const files = new Map(seed)
+  return {
+    files,
+    removed: [],
+    async *entries() {
+      for (const [name, meta] of [...files.entries()]) {
+        yield [
+          name,
+          {
+            kind: 'file',
+            async getFile() {
+              return { name, lastModified: meta.lastModified }
+            },
+          },
+        ]
+      }
+    },
+    async removeEntry(name) {
+      this.removed.push(name)
+      files.delete(name)
+    },
+  }
+}
+
+test('OPFS 孤儿临时条目：>24h 的 *.part 被清掉，正在写的（新）动不动，非临时条目不动', async () => {
+  const now = 1_700_000_000_000
+  const root = fakeOpfsDir([
+    ['ys-old.part', { lastModified: now - 2 * DAY }], // 关页面/ack 失败留下的孤儿
+    ['ys-fresh.part', { lastModified: now - 60_000 }], // 正在写/刚写完，不能被误删
+    ['ys-old.part.bak', { lastModified: now - 2 * DAY }], // 后缀不符：不碰
+    ['keep.txt', { lastModified: now - 30 * DAY }], // 不是临时条目：不碰
+  ])
+  const r = await sweepStaleOpfsEntries(root, { now: () => now })
+  assert.deepEqual(r.removed, ['ys-old.part'], `只清孤儿临时条目（实际 ${r.removed}）`)
+  assert.equal(r.scanned, 2, '只统计 ys-*.part')
+  assert.ok(root.files.has('ys-fresh.part'), '新条目必须留着（正在写）')
+  assert.ok(root.files.has('keep.txt'))
+})
+
+test('拿不到目录迭代能力（老浏览器/单测环境）→ 清扫静默跳过，不影响下载', async () => {
+  const r = await sweepStaleOpfsEntries({ async removeEntry() {} })
+  assert.deepEqual(r, { scanned: 0, removed: [] })
+  assert.deepEqual(await sweepStaleOpfsEntries(null), { scanned: 0, removed: [] })
+})
+
+test('清扫遇到异常（getFile 抛 / 迭代抛）不冒泡', async () => {
+  const root = {
+    async *entries() {
+      yield ['ys-x.part', { kind: 'file', async getFile() { throw new Error('gone') } }]
+    },
+    async removeEntry() {},
+  }
+  assert.deepEqual(await sweepStaleOpfsEntries(root), { scanned: 1, removed: [] }, '读不到 lastModified 就跳过（不误删、不冒泡）')
+})
+
+test('临时条目名不拼交付名：180 字符/emoji 长名不撞文件名上限，且两次唯一（60s 内重下不互删）', () => {
+  const long = 'x'.repeat(180) + '📦.bin'
+  const a = createOpfsSink(long, { root: {} })
+  const b = createOpfsSink(long, { root: {} })
+  assert.notEqual(a.entryName, b.entryName, '两次必须唯一，否则上一次的 cleanup 定时器会删掉这一次正在写的文件')
+  assert.match(a.entryName, /^ys-[\w-]+\.part$/, `条目名形态应固定（实际 ${a.entryName}）`)
+  assert.ok(a.entryName.length <= 64, `条目名不受交付名长度影响（实际 ${a.entryName.length}）`)
+  assert.equal(a.name, long, '交付名保持不变（用户看到的名字）')
+  assert.match(makeOpfsEntryName('abc'), /^ys-abc\.part$/)
 })
