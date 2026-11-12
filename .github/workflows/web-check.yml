@@ -1,0 +1,60 @@
+name: web-check
+
+# 前端门禁：`node --test tests/*.test.js` + `vite build`（= web/package.json 的 `npm run check`）。
+#
+# 为什么要有它：仓库原本只有 `build-images`（只在 push tag / 手动 dispatch 时跑，且会把镜像推到 SWR），
+# PR 上**没有任何检查**——#84 的「CI 未跑」就是这么来的。本 workflow 只读、不推任何东西、不碰 secrets，
+# 任何改 `web/**` 的 PR 都会自动拿到真实的 pass/fail 结论。
+#
+# 与 `web/Dockerfile` 同口径：只用国内镜像源；内核产物不入库（`*.wasm` 被根 .gitignore 忽略），
+# 所以先按**冻结摘要强绑定**把 `server/kernel/yanshu_sm.wasm` 落位并写溯源
+# （`pretest`/`prebuild` 的 ensure-wasm 缺溯源会硬失败），再跑门禁。
+
+on:
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'server/kernel/**'
+      - '.github/workflows/web-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # 冻结内核：sha256 与 commit 必须成对更新（改这里 = 换端侧加密实现，走内核 PR）
+  YS_KERNEL_SHA: daa949261c3d84c5fb02612e284a240e5d539b11dcb3ff82db13266a365431de
+  YS_KERNEL_COMMIT: 42b84575f5a6d95d469ab02eb809f3b55c2089c3
+
+jobs:
+  check:
+    name: web gate (test + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # sync-wasm --commit 要校验内核 commit 在本仓存在；浅克隆里取不到
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 安装依赖（国内镜像，与 web/Dockerfile 同源）
+        run: |
+          set -eu
+          npm config set registry https://repo.huaweicloud.com/repository/npm/
+          npm config set fetch-retries 5
+          npm ci --no-audit --no-fund
+
+      - name: 端侧内核落位（按冻结摘要强绑定 + 写溯源）
+        run: node scripts/sync-wasm.mjs --expect-sha "$YS_KERNEL_SHA" --commit "$YS_KERNEL_COMMIT"
+
+      - name: 门禁（node --test + vite build）
+        run: npm run check
