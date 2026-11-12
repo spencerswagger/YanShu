@@ -254,3 +254,127 @@ test('sink 声明 delivered:true（用户选路径已直接写盘）→ 不再�
   assert.equal(saved, 0, 'delivered 的 sink 已经写进用户目标位置，不能再用 <a download> 弹一次')
   assert.deepEqual(order, ['close', 'ack'])
 })
+
+/**
+ * Gate 的 P0 现场复刻（主线 `e01e67d`）：
+ *   `download.js:139` 把 `await sink.close()` 的返回值丢掉 → 「没有 showSaveFilePicker 的环境里数据落到内存 sink，
+ *   组装完直接丢弃，没有报错」→ `InboxPanel` 无条件写「已保存至本机」→ `ack()` 让服务端删密文 → 不可恢复。
+ * 这三条必须各有用例：① 返回值必须被交付；② 交付失败不许 ack；③ 顺序 ack 在最后。
+ */
+test('Gate 现场①（无 showSaveFilePicker / 小文件走内存 sink）：close() 的字节必须真交给浏览器，ack 在最后', async () => {
+  const hadPicker = Object.prototype.hasOwnProperty.call(globalThis, 'showSaveFilePicker')
+  const picker = globalThis.showSaveFilePicker
+  delete globalThis.showSaveFilePicker
+  try {
+    const order = []
+    const api = fakeApi()
+    const origAck = api.ack
+    api.ack = async (arg) => {
+      order.push('ack')
+      return origAck(arg)
+    }
+    // 生产选路：App 传的就是 defaultSinkFactory（无 picker → 小文件内存 sink；大文件 OPFS/明确报错）
+    const { defaultSinkFactory } = await import('../src/lib/saveStream.js')
+    const r = await receiveTransfer({
+      api,
+      kernel: fakeKernel(),
+      session: { privateKey: new Uint8Array(32) },
+      transferId: 't-gate-1',
+      sinkFactory: (m) => defaultSinkFactory(m, { root: null, canPick: false }),
+      save: async (payload) => {
+        order.push('save')
+        assert.ok(payload, 'close() 的返回值必须被用上（v0.2.4 就是这里丢掉 → 静默丢数据）')
+        assert.equal(payload.size, COUNT * CHUNK, '交给浏览器的必须是完整明文')
+      },
+      pacer: fastPacer(),
+      onProgress: () => {},
+      cleanupDelayMs: 0,
+    })
+    assert.deepEqual(order, ['save', 'ack'], 'ack（服务端删密文）必须在交付之后')
+    assert.equal(r.size, COUNT * CHUNK)
+  } finally {
+    if (hadPicker) globalThis.showSaveFilePicker = picker
+  }
+})
+
+test('Gate 现场②（大文件 / 无 picker）：不许落到整包内存 sink，必须走 OPFS 并把 File 交出去', async () => {
+  const written = []
+  const files = new Map()
+  const root = {
+    async getFileHandle(name, { create } = {}) {
+      if (!files.has(name) && create) files.set(name, { chunks: [] })
+      const entry = files.get(name)
+      return {
+        async createWritable() {
+          return {
+            async write(bytes) {
+              entry.chunks.push(bytes.slice())
+              written.push(bytes.length)
+            },
+            async close() {},
+            async abort() {},
+          }
+        },
+        async getFile() {
+          const size = entry.chunks.reduce((n, c) => n + c.length, 0)
+          return { name, size, kind: 'file', lastModified: Date.now() }
+        },
+      }
+    },
+    async removeEntry(name) {
+      files.delete(name)
+    },
+  }
+  // 假内核谎报 2 GiB（只验证「按大小选路」，不验证真的写 2 GiB）
+  const bigKernel = { ...fakeKernel(), streamUnpackBegin: () => ({ chunk_count: COUNT, size: 2 * 1024 * 1024 * 1024, name: 'big.bin', sender_code: 'AAAA' }) }
+  let kind = ''
+  let delivered = null
+  const api = fakeApi()
+  const order = []
+  const origAck = api.ack
+  api.ack = async (arg) => {
+    order.push('ack')
+    return origAck(arg)
+  }
+  const { defaultSinkFactory } = await import('../src/lib/saveStream.js')
+  await receiveTransfer({
+    api,
+    kernel: bigKernel,
+    session: { privateKey: new Uint8Array(32) },
+    transferId: 't-gate-2',
+    sinkFactory: async (m) => {
+      const sink = await defaultSinkFactory(m, { root, canPick: false })
+      kind = sink.kind
+      return sink
+    },
+    save: async (payload) => {
+      order.push('save')
+      delivered = payload
+    },
+    pacer: fastPacer(),
+    onProgress: () => {},
+    cleanupDelayMs: 0,
+  })
+  assert.equal(kind, 'opfs', '2 GiB 且无 picker 必须走 OPFS（v0.2.4 是整包内存累积）')
+  assert.ok(written.length > 0, '必须真的边收边写盘')
+  assert.ok(delivered && typeof delivered.size === 'number', '必须交出 OPFS 的 File（不是丢弃）')
+  assert.deepEqual(order, ['save', 'ack'])
+})
+
+test('Gate 现场③（close() 返回空）：抛 SAVE_DELIVERY_FAILED、ack 为 0、UI 有可读文案', async () => {
+  const api = fakeApi()
+  let saved = 0
+  await assert.rejects(
+    () =>
+      run({
+        sink: { kind: 'broken', name: 'big.bin', async write() {}, async close() { return null }, async abort() {} },
+        save: () => void saved++,
+        api,
+      }),
+    (err) => err.code === 'SAVE_DELIVERY_FAILED',
+  )
+  assert.equal(saved, 0, '没有可交付的东西，不许调用交付')
+  assert.equal(api.acked.length, 0, '交付没成就不许 ack（ack = 服务端删密文，数据不可恢复）')
+  const copy = describeError({ code: 'SAVE_DELIVERY_FAILED' })
+  assert.ok(copy.title && copy.hint, 'UI 必须有可读文案（InboxPanel 走 describeError 显示 errorText）')
+})
