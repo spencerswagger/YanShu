@@ -7,7 +7,8 @@
  * （81 条 429，中位间隔 5.6 秒）——长文件因此在测试窗口内没跑完。
  *
  * 所以客户端必须自己排队：
- * - 常态按 `ratePerSec` 发令牌（默认 2.5/s，略高于最紧的 2/s 用于探测，超了会自己降）；
+ * - 常态按 `ratePerSec` 发令牌（默认 `config.chunkRatePerSec` = 1.8/s，留一点余量给"多标签页"）；
+ *   注意起始速率也会被 `maxRatePerSec`（默认 2/s）夹住，所以「配置写得比 2 大」不会真的更快；
  * - 吃到 429：立刻把速率减半（不低于 `minRatePerSec`），并按 `Retry-After` 等（**不再套 5s 地板**）；
  * - 连续成功 `rampAfter` 次：速率**加性**加回一档（+0.1/秒，且不超过 `maxRatePerSec` = 2 次/秒，
  *   也就是服务端 per-IP 的天花板——乘性增长会稳定越界，这里刻意不用）。
@@ -16,7 +17,7 @@
  */
 
 export const DEFAULT_PACING = {
-  ratePerSec: 2.5,
+  ratePerSec: 1.8,
   minRatePerSec: 0.5,
   /** 契约最紧一档是「按 IP 120 次/分」= 2 次/秒：稳态**不许越过它**，否则「按额度排队」就是空话 */
   maxRatePerSec: 2,
@@ -28,6 +29,11 @@ export const DEFAULT_PACING = {
   stepPerSec: 0.1,
   /** 429 时的最小等待（秒）；`Retry-After` 缺失时用它 */
   minBackoffSec: 1,
+  /**
+   * 429 时的最大等待（秒）：本服务的桶是 2/s，`Retry-After` 实际 ≤1s；
+   * 但前置代理/CDN 可能回 `3600`，原地睡一小时等于把下载挂死——夹到 60s，之后继续按额度重试。
+   */
+  maxBackoffSec: 60,
 }
 
 export function createChunkPacer(options = {}) {
@@ -71,7 +77,8 @@ export function createChunkPacer(options = {}) {
 
   /**
    * 吃到 429：降速 + 返回该等多久（毫秒）。
-   * `retryAfterSec` 来自响应头 / body，服务端说了算；没有才用兜底。
+   * `retryAfterSec` 来自响应头 / body，服务端说了算；没有才用兜底；**超过 `maxBackoffSec` 就夹住**
+   * （前置代理可能回 3600，原地睡一小时等于挂死；夹住后继续按额度重试，进度条会说话）。
    */
   function onThrottled(retryAfterSec) {
     rate = clamp(rate / 2, cfg.minRatePerSec, cfg.maxRatePerSec)
@@ -79,7 +86,8 @@ export function createChunkPacer(options = {}) {
     lastRefill = now()
     okStreak = 0
     throttled += 1
-    const sec = Number(retryAfterSec) > 0 ? Number(retryAfterSec) : cfg.minBackoffSec
+    const asked = Number(retryAfterSec) > 0 ? Number(retryAfterSec) : cfg.minBackoffSec
+    const sec = clamp(asked, cfg.minBackoffSec, cfg.maxBackoffSec)
     const waitMs = Math.ceil(sec * 1000)
     waitedMs += waitMs
     return waitMs

@@ -41,6 +41,7 @@ function fakeKernel() {
       const index = new DataView(record.buffer, record.byteOffset, record.byteLength).getUint32(0, false)
       const len = new DataView(record.buffer, record.byteOffset, record.byteLength).getUint32(4, false)
       assert.equal(index, expected, `块必须按序喂给内核（拿到 ${index}，期望 ${expected}）`)
+      assert.equal(len, CHUNK, `块长度必须与清单一致（拿到 ${len}，期望 ${CHUNK}）`)
       expected += 1
       order.push(index)
       return record.slice(HEADER, HEADER + len)
@@ -261,4 +262,124 @@ test('单块一次瞬时 5xx：必须原地重试，不许打死整条下载（�
     assert.deepEqual(kernel.order, [...Array(COUNT).keys()], `${status}：块顺序不能乱`)
     assert.ok(events.some((e) => String(e.message || '').includes(String(status))), `${status}：必须给可见提示`)
   }
+})
+
+test('直连（P2P）命中的块不抢中转令牌：直连不该被压到 1.8 块/秒', async () => {
+  const kernel = fakeKernel()
+  const sink = makeSink()
+  let acquires = 0
+  let relayCalls = 0
+  const pacer = {
+    async acquire() {
+      acquires += 1
+      throw new Error('直连命中时不许向 pacer 抢令牌（直连不消耗服务端额度）')
+    },
+    onSuccess() {},
+    onThrottled() {
+      return 0
+    },
+    summary: () => '',
+    throttledCount: 0,
+  }
+  /** 直连缓存的帧：与中转返回的块同形（HEADER + CHUNK） */
+  const frame = (index) => {
+    const rec = new Uint8Array(HEADER + CHUNK)
+    new DataView(rec.buffer).setUint32(0, index, false)
+    new DataView(rec.buffer).setUint32(4, CHUNK, false)
+    rec.set(new Uint8Array(CHUNK).fill(index & 0xff), HEADER)
+    return rec
+  }
+  const directBuffer = {
+    take(index) {
+      return frame(index) // 全部命中
+    },
+  }
+  const api = {
+    async getPrelude() {
+      return { bytes: new Uint8Array([1]), downloadId: 'dl-1' }
+    },
+    async getChunk() {
+      relayCalls += 1
+      throw new Error('全部直连命中时不许回中转')
+    },
+    async ack() {},
+  }
+
+  const result = await receiveTransfer({
+    pacer,
+    api,
+    kernel,
+    session: { privateKey: new Uint8Array(32) },
+    transferId: 't-direct',
+    sinkFactory: () => sink,
+    onProgress: () => {},
+    save: null,
+    directBuffer,
+  })
+
+  assert.equal(acquires, 0, '直连块不该消耗客户端令牌（否则 1 GiB 直连也要 9.5 分钟）')
+  assert.equal(relayCalls, 0, '全部命中不许回中转')
+  assert.deepEqual(kernel.order, [...Array(COUNT).keys()], '直连也要按序喂内核')
+  assert.equal(result.size, COUNT * CHUNK)
+})
+
+test('直连块喂不进内核时当块回落中转（回落这一块才需要令牌）', async () => {
+  const kernel = fakeKernel()
+  const sink = makeSink()
+  let acquires = 0
+  const pacer = {
+    async acquire() {
+      acquires += 1
+    },
+    onSuccess() {},
+    onThrottled() {
+      return 0
+    },
+    summary: () => '',
+    throttledCount: 0,
+  }
+  const rec = (index) => {
+    const r = new Uint8Array(HEADER + CHUNK)
+    new DataView(r.buffer).setUint32(0, index, false)
+    new DataView(r.buffer).setUint32(4, CHUNK, false)
+    r.set(new Uint8Array(CHUNK).fill(index & 0xff), HEADER)
+    return r
+  }
+  const api = {
+    async getPrelude() {
+      return { bytes: new Uint8Array([1]), downloadId: 'dl-1' }
+    },
+    async getChunk({ index }) {
+      return rec(index)
+    },
+    async ack() {},
+  }
+  const directBuffer = {
+    take(index) {
+      // 第 2 块给一个长度不对的坏块 → 内核拒绝这块 → 必须回落中转补齐
+      if (index === 2) return new Uint8Array(HEADER + CHUNK + 1).fill(7)
+      return rec(index)
+    },
+  }
+  const result = await receiveTransfer({
+    pacer,
+    api,
+    kernel,
+    session: { privateKey: new Uint8Array(32) },
+    transferId: 't-direct-bad',
+    sinkFactory: () => sink,
+    onProgress: () => {},
+    save: null,
+    directBuffer,
+  })
+  assert.equal(acquires, 1, '只有坏块那一块回中转，才抢一次令牌')
+  assert.deepEqual(kernel.order, [...Array(COUNT).keys()])
+  assert.equal(result.size, COUNT * CHUNK)
+})
+
+test('pacer：Retry-After 极大（前置代理回 3600）必须夹到 60 秒，不许原地睡一小时', async () => {
+  const pacer = createChunkPacer({ sleep: async () => {} })
+  assert.equal(pacer.onThrottled(3600), 60_000, '3600 秒必须夹到 60 秒')
+  assert.equal(pacer.onThrottled(0.01), 1000, '比最小退避还小就按 1 秒（别打空转）')
+  assert.equal(pacer.onThrottled(undefined), 1000, '缺头按 1 秒')
 })

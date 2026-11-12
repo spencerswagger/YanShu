@@ -209,3 +209,48 @@ test('成功路径顺序：close → save → ack（save 抛错则整单失败�
   await tick()
   assert.deepEqual(order, ['close', 'save', 'ack', 'cleanup'], `副本要在 ack 之后才清（实际 ${order}）`)
 })
+
+test('sink.close() 既没 blob/file 也没 delivered：在 ack 之前就报错（别静默跳过交付）', async () => {
+  const api = fakeApi()
+  let saved = 0
+  const sink = {
+    kind: 'weird',
+    name: 'big.bin',
+    async write() {},
+    async close() {
+      // 违反 sink 契约：既没交出 blob/file，也没声明 delivered
+      return { name: 'big.bin' }
+    },
+    async abort() {},
+  }
+  await assert.rejects(
+    () => run({ sink, save: () => void saved++, api }),
+    (err) => err.code === 'SAVE_DELIVERY_FAILED',
+  )
+  assert.equal(api.acked.length, 0, '交付形态不合格就不许 ack（ack = 服务端删密文，v0.2.4 原地复现）')
+  assert.equal(saved, 0, '没有可交出的东西，不许假装交付')
+})
+
+test('sink 声明 delivered:true（用户选路径已直接写盘）→ 不再弹一次下载，照常 ack', async () => {
+  const order = []
+  const api = fakeApi()
+  const origAck = api.ack
+  api.ack = async (arg) => {
+    order.push('ack')
+    return origAck(arg)
+  }
+  let saved = 0
+  const sink = {
+    kind: 'file',
+    name: 'big.bin',
+    async write() {},
+    async close() {
+      order.push('close')
+      return { name: 'big.bin', delivered: true }
+    },
+    async abort() {},
+  }
+  await run({ sink, save: () => void saved++, api })
+  assert.equal(saved, 0, 'delivered 的 sink 已经写进用户目标位置，不能再用 <a download> 弹一次')
+  assert.deepEqual(order, ['close', 'ack'])
+})

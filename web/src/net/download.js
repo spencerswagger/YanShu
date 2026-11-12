@@ -14,6 +14,7 @@ import { info } from '../lib/log.js'
 import { config } from '../config.js'
 import { bytes } from '../lib/bytes.js'
 import { createChunkPacer } from './chunkPacer.js'
+import { createMemorySink, SaveError } from '../lib/saveStream.js'
 
 /** 让出一帧：`unpack.finish()` 是同步的，不让出的话「解密中」这段永远画不出来 */
 function nextPaint() {
@@ -147,6 +148,12 @@ async function receiveStreaming({
     let transient = 0
     for (;;) {
       if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+      // 直连（P2P）的块**不消耗服务端额度**：先看本地缓冲，命中就直接用，不要为了拿中转令牌白等。
+      // （否则 1 GiB 直连也会被压到 1.8 块/秒 ≈ 9.5 分钟——纯性能回退，直连本来比中转快得多。）
+      if (!relayOnly) {
+        const direct = directBuffer?.take?.(index) || null
+        if (direct) return { bytes: direct, source: 'direct' }
+      }
       await pacer.acquire()
       try {
         const picked = relayOnly
@@ -243,10 +250,18 @@ async function receiveStreaming({
     // 之后才把它交给浏览器下载，再 ack。**注意口径**：浏览器是否真把文件写进 downloads/ 不可观测，
     // 所以 ack 的判据是「写进 OPFS/目标文件成功」+「浏览器接受了下载请求（a.click 没抛）」，
     // 不是「downloads/ 里出现文件」——后者只能靠 Gate 在镜像上验。
-    // 「用户选路径」那条在 close() 时已经写到目标位置，不需要再点 <a download>。
-    if (save && (out?.blob || out?.file)) {
-      report({ phase: 'saving', done: totalSize, total: totalSize, message: '交给浏览器保存…', verified: true })
-      await save(out.blob || out.file, out.name || safeFileName(meta.name, meta.ext))
+    // 「用户选路径」那条在 close() 时已经写到目标位置（`delivered: true`），不需要再点 <a download>。
+    if (out?.delivered !== true) {
+      const payload = out?.blob || out?.file
+      if (!payload) {
+        // 兜底断言：sink 的 close() 既没给 blob/file、也没声明 delivered → 现在若静默跳过交付再 ack，
+        // 就是 v0.2.4「界面说已保存、密文已删、磁盘没文件」原地复现。宁可在 ack 之前报错。
+        throw new SaveError('SAVE_DELIVERY_FAILED', '落盘结果既不是文件也不是 Blob（sink 不符合契约），未确认删除服务端密文')
+      }
+      if (save) {
+        report({ phase: 'saving', done: totalSize, total: totalSize, message: '交给浏览器保存…', verified: true })
+        await save(payload, out.name || safeFileName(meta.name, meta.ext))
+      }
     }
   } catch (err) {
     await sink.abort?.()
