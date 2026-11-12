@@ -1,11 +1,10 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent } from '../lib/format.js'
 import { createSpeedMeter, stageLabel } from '../lib/speed.js'
 import { isExpired, remainingMs } from '../lib/serverClock.js'
 import { expiryNow, refreshExpiryClock } from '../lib/expiryTicker.js'
-import { createPoller } from '../lib/poller.js'
 import ReportSheet from './ReportSheet.vue'
 import SpeedLine from './SpeedLine.vue'
 import TtlPill from './TtlPill.vue'
@@ -31,61 +30,27 @@ const stageText = computed(() =>
 )
 
 /**
- * `quiet` = 后台自动刷新：不转圈、不清错误（避免每 8 秒闪一下把用户正在看的提示抹掉）。
- * 手动点「刷新」才清错误并显示 loading。
+ * 手动刷新（看板按钮）。自动刷新在 PR #86（`lib/poller.js`）里单独做——
+ * 这条修复（流式落盘/额度排队）不掺列表轮询，两个 PR 各自可独立合入与回滚。
  */
-async function refresh({ quiet = false } = {}) {
-  if (!props.api) return false
-  if (quiet && activeId.value) return false // 正在下载时不打扰（进度那条不能被列表刷新打断）
-  if (!quiet) {
-    loading.value = true
-    errorText.value = ''
-  }
+async function refresh() {
+  if (!props.api) return
+  loading.value = true
+  errorText.value = ''
   try {
     const res = await props.api.inbox({ state: 'ready', limit: 20 })
     items.value = res?.items || []
   } catch (err) {
-    if (!quiet) {
-      const d = describeError(err)
-      errorText.value = `${d.title}${d.hint ? '：' + d.hint : ''}`
-    }
+    const d = describeError(err)
+    errorText.value = `${d.title}${d.hint ? '：' + d.hint : ''}`
   } finally {
-    if (!quiet) loading.value = false
+    loading.value = false
   }
-  return true
 }
 
-/**
- * 自动刷新：v0.2.4 的缺陷是「必须手点刷新才看得到待收文件」（16 MiB / 1 GiB 都复现）。
- * 可见时 8 秒一轮、后台 30 秒一轮，切回页面立刻补一次；`lastSyncText` 让用户知道列表是活的。
- */
-const lastSync = ref(0)
 /** 「多久没有新进展」——v0.2.4 的教训：页面纯静默转圈 10 分钟，用户/测试都以为在下载 */
 const lastProgressAt = ref(0)
 const stallSec = ref(0)
-/** 「自动更新 hh:mm:ss」里的"刚刚"要自己会老化，否则一次渲染后 15 秒还写"刚刚" */
-const nowTick = ref(Date.now())
-const lastSyncText = computed(() => {
-  if (!lastSync.value) return ''
-  const d = new Date(lastSync.value)
-  const p = (n) => String(n).padStart(2, '0')
-  void nowTick.value
-  const fresh = Date.now() - lastSync.value < 15000
-  return `${fresh ? '自动更新' : '上次更新'} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-})
-
-const poller = createPoller({
-  task: () => refresh({ quiet: true }),
-  intervalMs: 8000,
-  hiddenMs: 30000,
-  onRun: (t) => {
-    lastSync.value = t
-  },
-})
-const onVisible = () => {
-  if (!document.hidden) poller.kick()
-}
-const onFocus = () => poller.kick()
 
 async function take(item) {
   // 兜底：万一定时器被节流没翻，这里按 serverClock 再判一次，直接置成过期态、不发请求（别去吃 410）
@@ -155,20 +120,11 @@ watch(
 )
 
 const stallTimer = setInterval(() => {
-  nowTick.value = Date.now()
   stallSec.value = lastProgressAt.value ? Math.max(0, Math.floor((Date.now() - lastProgressAt.value) / 1000)) : 0
 }, 5000)
 
-onMounted(() => {
-  poller.start()
-  document.addEventListener('visibilitychange', onVisible)
-  window.addEventListener('focus', onFocus)
-})
 onUnmounted(() => {
   clearInterval(stallTimer)
-  poller.stop()
-  document.removeEventListener('visibilitychange', onVisible)
-  window.removeEventListener('focus', onFocus)
 })
 </script>
 
@@ -183,7 +139,6 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <p v-if="lastSyncText && !errorText" class="meta sync">{{ lastSyncText }}（新文件会自动出现在这里）</p>
     <p v-if="activeId && stallSec >= 30" class="banner warn">
       已 {{ stallSec }} 秒没有新进展 —— 不是卡在「已保存」，本次仍在进行；若持续不动可刷新后重试（服务端不会删未确认的密文）。
     </p>
