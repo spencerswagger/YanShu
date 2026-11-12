@@ -76,6 +76,7 @@ test('待收列表必须自己轮询：挂载即启动，静默刷新走 poller�
     '轮询任务必须是「静默刷新」：后台每 8 秒拉一次不能转圈、不能抹掉用户正在看的错误',
   )
   assert.match(pollerCall, /intervalMs:\s*\d+/, '可见时必须有明确间隔（默认 8s）')
+  assert.match(pollerCall, /onRun:\s*\(/, '必须挂 onRun：没有它「自动更新 hh:mm:ss」永不更新（界面看着像没在刷新）')
   assert.match(pollerCall, /hiddenMs:\s*\d+/, '页面在后台必须降频（默认 30s），别空烧电')
 
   const mounted = sliceBraces(src, 'onMounted(')
