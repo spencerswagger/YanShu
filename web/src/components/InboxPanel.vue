@@ -6,6 +6,7 @@ import { createSpeedMeter, stageLabel } from '../lib/speed.js'
 import { isExpired, remainingMs } from '../lib/serverClock.js'
 import { expiryNow, refreshExpiryClock } from '../lib/expiryTicker.js'
 import { createPoller } from '../lib/poller.js'
+import { bindWakeEvents } from '../lib/wakeEvents.js'
 import ReportSheet from './ReportSheet.vue'
 import SpeedLine from './SpeedLine.vue'
 import TtlPill from './TtlPill.vue'
@@ -146,20 +147,16 @@ const poller = createPoller({
     lastSync.value = t
   },
 })
-const onVisible = () => {
-  if (!document.hidden) poller.kick()
-}
-const onFocus = () => poller.kick()
+/** 切回页面/聚焦 → 立刻补一次；逻辑在 `lib/wakeEvents.js`（那边能用真事件做单测，不靠读源码） */
+const wake = bindWakeEvents({ poller })
 
 onMounted(() => {
   poller.start()
-  document.addEventListener('visibilitychange', onVisible)
-  window.addEventListener('focus', onFocus)
+  wake.bind()
 })
 onUnmounted(() => {
   poller.stop()
-  document.removeEventListener('visibilitychange', onVisible)
-  window.removeEventListener('focus', onFocus)
+  wake.unbind()
 })
 </script>
 

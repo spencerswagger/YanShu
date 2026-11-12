@@ -16,6 +16,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { createPoller } from '../src/lib/poller.js'
+import { bindWakeEvents } from '../src/lib/wakeEvents.js'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -86,12 +88,77 @@ test('待收列表必须自己轮询：挂载即启动，静默刷新走 poller�
   assert.match(unmounted, /poller\.stop\(\)/, '卸载必须停掉轮询，否则切页面后定时器泄漏、还在打服务端')
 })
 
-test('切回页面/窗口聚焦立刻补一次，且两类监听成对注册与移除', () => {
-  assert.match(src, /addEventListener\('visibilitychange'/, '切回页面必须立刻补一次（后台期间是 30s 一轮）')
-  assert.match(src, /addEventListener\('focus'/, '窗口聚焦也要补（手机端切 App 回来不一定触发 visibilitychange）')
-  assert.match(src, /poller\.kick\(\)/, '补一次要真的触发轮询（kick），不能只是记个时间')
-  assert.match(src, /removeEventListener\('visibilitychange'/, 'visibilitychange 监听必须成对移除')
-  assert.match(src, /removeEventListener\('focus'/, 'focus 监听必须成对移除')
+test('切回页面/聚焦真的唤醒轮询（真事件驱动：EventTarget 派发 → poller.kick → 任务真的跑一次）', async () => {
+  // 用 Node 自带的 EventTarget/Event 造真事件源：doc 收 visibilitychange，win 收 focus
+  const doc = new EventTarget()
+  doc.hidden = false
+  const win = new EventTarget()
+
+  let runs = 0
+  const listed = [] // 模拟待收列表：任务每跑一次就"拉到"一条
+  const timers = []
+  const poller = createPoller({
+    task: async () => {
+      runs += 1
+      listed.push(`第 ${runs} 次刷新`)
+      return true
+    },
+    intervalMs: 8000,
+    hiddenMs: 30000,
+    isHidden: () => doc.hidden,
+    setTimer: (fn, ms) => {
+      timers.push({ fn, ms })
+      return timers.length
+    },
+    clearTimer: () => {},
+  })
+  const wake = bindWakeEvents({ poller, doc, win })
+
+  poller.start()
+  await new Promise((r) => setImmediate(r))
+  assert.equal(runs, 1, '挂载即拉一次')
+  assert.equal(listed.length, 1, '列表真的被刷新过')
+
+  wake.bind()
+  doc.dispatchEvent(new Event('visibilitychange'))
+  await new Promise((r) => setImmediate(r))
+  assert.equal(runs, 2, '页面重新可见必须**真的**把轮询唤醒（不是源码里出现过 kick）')
+  assert.equal(listed.length, 2, '唤醒后列表要真的刷新')
+
+  win.dispatchEvent(new Event('focus'))
+  await new Promise((r) => setImmediate(r))
+  assert.equal(runs, 3, '窗口聚焦也要补一次（手机端切回 App 不一定有 visibilitychange）')
+
+  // 后台（hidden）的 visibilitychange 不许补：否则「后台 30s 降频」形同虚设，还在白打服务端
+  doc.hidden = true
+  doc.dispatchEvent(new Event('visibilitychange'))
+  await new Promise((r) => setImmediate(r))
+  assert.equal(runs, 3, '隐藏状态下的 visibilitychange 不许触发补拉')
+
+  // 卸载后（unbind）事件必须彻底失效：监听没解绑 = 切页面后还在打服务端
+  wake.unbind()
+  doc.hidden = false
+  doc.dispatchEvent(new Event('visibilitychange'))
+  win.dispatchEvent(new Event('focus'))
+  await new Promise((r) => setImmediate(r))
+  assert.equal(runs, 3, 'unbind 之后事件不许再唤醒轮询')
+
+  // 幂等：重复 bind 不许叠出两份监听
+  wake.bind().bind()
+  doc.dispatchEvent(new Event('visibilitychange'))
+  await new Promise((r) => setImmediate(r))
+  assert.equal(runs, 4, '重复 bind 只允许一份监听（否则一次事件唤醒两次）')
+  wake.unbind()
+  poller.stop()
+})
+
+test('InboxPanel 必须真的接上「唤醒」与「轮询」这两条线（接线守卫，防止逻辑写好但没人调）', () => {
+  assert.match(src, /import\s*\{\s*bindWakeEvents\s*\}\s*from\s*'\.\.\/lib\/wakeEvents\.js'/)
+  assert.match(src, /bindWakeEvents\(\{\s*poller\s*\}\)/, '必须把轮询器交给唤醒模块')
+  const mounted = sliceBraces(src, 'onMounted(')
+  assert.match(mounted, /wake\.bind\(\)/, '挂载必须注册唤醒监听')
+  const unmounted = sliceBraces(src, 'onUnmounted(')
+  assert.match(unmounted, /wake\.unbind\(\)/, '卸载必须解绑（否则切页面后还在打服务端）')
 })
 
 test('后台刷新失败不得冒充"刚更新过"（假活比不刷新更坏）', () => {
