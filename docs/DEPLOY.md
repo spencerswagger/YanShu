@@ -85,6 +85,16 @@ docker compose exec postgres psql -U yanshu -d yanshu \
 界面由 `yanshu-web` 镜像提供（nginx 静态站 + `/v1`、`/healthz` 反代到服务端）；compose 对外只发布 web 的 `${YANSHU_PORT:-18080}:80`，服务端仅在内部网络监听。
 当前推荐版本：`v0.2.5`（见 Release）；`v0.2.4`、`v0.2.3`、`v0.2.2` 保留可回滚（改 `YANSHU_IMAGE_TAG=v0.2.4` 即可）；`v0.1.2` 已作废，勿用。
 
+**v0.2.5 镜像 digest（核验用，来源：tag 触发的 `build-images` run `43345074592`，两条 leg 均 success）**
+
+| 镜像 | digest |
+|---|---|
+| `yanshu-server:v0.2.5` | `sha256:a33a7ed8f3e2bca82e9646983823a2bd1436b2c4fb5f022bf1dadb833e63d7d1` |
+| `yanshu-web:v0.2.5` | `sha256:9e952353cb8d6523b74b40252c199d86fc24fcb85ac6b0c449e3a44c85d9a146` |
+
+核验：`docker buildx imagetools inspect swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:v0.2.5`（需先 `docker login` SWR，仓库是私有的，匿名拉取 401）。
+`:latest` 与 `v0.2.5` 同一 digest。
+
 **v0.2.4 镜像 digest（核验用，来源：tag 触发的 `build-images` run `42918970782`，两条 leg 均 success）**
 
 | 镜像 | digest |
