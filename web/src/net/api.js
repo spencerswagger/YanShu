@@ -160,11 +160,17 @@ export function createApi({ client, kernel, session }) {
       }
     },
 
-    getChunk: async ({ transferId, downloadId, index }) => {
+    /**
+     * 取一块密文。
+     * `retry: false` 时把 429/5xx 原样抛给调用方 —— 接收主循环要用**自己的限速器**处理
+     * （客户端排队 + 按 Retry-After 等），不能被这里固定 5s 的退避吃掉。
+     */
+    getChunk: async ({ transferId, downloadId, index, retry = true, onRetry }) => {
       const res = await client.get(`/transfers/${transferId}/chunks/${index}`, {
         raw: true,
         headers: { 'X-YS-Download-Id': downloadId },
-        retry: true,
+        retry,
+        onRetry,
       })
       return res.bytes
     },

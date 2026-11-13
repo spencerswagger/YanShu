@@ -1,24 +1,77 @@
 /**
  * 接收侧的"边解边写"落盘。
  *
- * 选型理由：**优先 File System Access API**（Chrome/Edge 的 `showSaveFilePicker`）——
- * 它给的是可写流，块解出来就写进文件，进程里只留一块明文（1 MiB），内存与文件大小无关。
- * 没有该 API（Safari/Firefox 目前都不支持）时退回"分块 Blob 累积"：功能可用，但明文会
- * 在内存里攒到文件大小（≥64 MiB 会明显吃内存），所以整包上限仍是 `config.maxPackSize`。
+ * 三条 sink，按「不留整包在内存」优先选路：
+ *  ① `createFileSink`   —— File System Access（Chrome/Edge）：用户选路径，块到即写，内存恒定。
+ *     **必须在用户手势内调用** `showSaveFilePicker`，所以由调用方用 `canPick` 明确开关；
+ *  ② `createOpfsSink`   —— Origin Private File System：**不需要手势**（无头浏览器/自动化也能用），
+ *     块到即写；收完再 `getFile()` 交给浏览器下载。`File` 由浏览器按磁盘承载，不占 JS 堆。
+ *  ③ `createMemorySink` —— 只在**小文件**（≤ `maxMemoryBytes`）用；超了直接报错，绝不静默攒。
  *
- * 注意：本模块不碰任何密钥；它只拿到内核吐出的明文块。
+ * v0.2.4 的坑：`defaultSinkFactory` 用裸 `catch {}` 吞掉了 `showSaveFilePicker` 的失败
+ * （无手势 → SecurityError；无头浏览器根本没有可点的对话框），静默退回整包内存累积——
+ * 1 GiB 明文全程驻留 JS 堆，`close()` 时 `new Blob(parts)` 还要再复制一份。这条路必须堵死。
+ *
+ * 本模块不碰任何密钥；它只拿到内核吐出的明文块。
  */
 
-/** 分块 Blob 累积（兼容路径）：没有 FS Access 时用，内存随文件线性增长 */
-export function createMemorySink() {
+export class SaveError extends Error {
+  constructor(code, message) {
+    super(message)
+    this.name = 'SaveError'
+    this.code = code
+  }
+}
+
+/** 小文件内存累积的上限（超过就换 OPFS / 用户选路径，或明确报错） */
+export const MAX_MEMORY_SAVE_BYTES = 64 * 1024 * 1024
+
+/** 写盘失败的统一收口：配额单独给一个码，别让用户看到 `QuotaExceededError` 这种生词 */
+function asSaveError(err, fallbackCode, what) {
+  const quota =
+    err?.name === 'QuotaExceededError' ||
+    err?.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    /quota/i.test(String(err?.message || ''))
+  if (quota) {
+    return new SaveError('SAVE_QUOTA_EXCEEDED', `本机存储不足，${what}失败（清理浏览器存储后重试）`)
+  }
+  return new SaveError(fallbackCode, `${what}失败：${err?.message || err}`)
+}
+
+function cleanName(name) {
+  const base = String(name || '').split(/[\\/]/).pop()
+  // eslint-disable-next-line no-control-regex
+  const s = base.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 180)
+  return s || 'download.bin'
+}
+
+/** 分块 Blob 累积（小文件专用）：有硬上限，超了抛可读错误，不静默吃内存 */
+export function createMemorySink({ maxBytes = MAX_MEMORY_SAVE_BYTES } = {}) {
   const parts = []
+  let total = 0
   return {
+    kind: 'memory',
     name: 'download.bin',
     async write(bytes) {
+      total += bytes.length
+      if (maxBytes && total > maxBytes) {
+        parts.length = 0
+        throw new SaveError(
+          'SAVE_MEMORY_LIMIT',
+          `文件超过 ${Math.round(maxBytes / 1048576)} MiB，当前浏览器无法流式落盘（避免整包进内存卡死）`,
+        )
+      }
       parts.push(bytes)
     },
     async close() {
-      return { blob: new Blob(parts), name: this.name }
+      try {
+        return { name: this.name, blob: new Blob(parts) }
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '组装文件')
+      }
+    },
+    async cleanup() {
+      parts.length = 0
     },
     async abort() {
       parts.length = 0
@@ -26,9 +79,10 @@ export function createMemorySink() {
   }
 }
 
-/** 流式写盘（Chrome/Edge）：块到即写，内存恒定 */
+/** 用户选路径写盘（Chrome/Edge）。必须在用户手势内 `open()`，否则浏览器会拒。 */
 export function createFileSink() {
   return {
+    kind: 'file',
     name: 'download.bin',
     handle: null,
     writable: null,
@@ -40,38 +94,224 @@ export function createFileSink() {
       return true
     },
     async write(bytes) {
-      await this.writable.write(bytes)
+      try {
+        await this.writable.write(bytes)
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '写入目标文件')
+      }
     },
     async close() {
-      await this.writable.close()
-      return { file: this.handle, name: this.name }
+      try {
+        await this.writable.close()
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '收尾目标文件')
+      }
+      // 已经写到用户选的位置，不需要再点一次 <a download>
+      return { name: this.name, delivered: true }
+    },
+    async cleanup() {
+      /* 用户选的路径由用户自己管，不动 */
     },
     async abort() {
       try {
         await this.writable?.abort()
       } catch {
-        /* 忽略 */
+        /* 用户已取消/流已关，忽略 */
       }
     },
   }
 }
 
 /**
- * 默认 sink 工厂：能用 FS Access 就流式写盘，否则退回内存累积。
- * 调用方（App）也可以注入自己的工厂，便于测试或 Node 侧写文件。
+ * 浏览器内部暂存（OPFS）：无需手势、常量内存；收完 getFile() 换一个磁盘承载的 Blob 去下载。
  */
-export async function defaultSinkFactory(meta) {
-  const name = meta?.name || 'download.bin'
-  const fileSink = createFileSink()
+export function createOpfsSink(name, { root = null, entryName = null } = {}) {
+  let dir = root
+  let handle = null
+  let writable = null
+  /**
+   * **条目名必须唯一**：cleanup 是按条目名删的，若直接用交付名，
+   * 用户 60s 内重下同一个文件时，上一次的定时器会把这一次正在写的文件删掉（表现为"重试也失败"）。
+   * 交付给浏览器的名字仍是 `name`；临时条目叫 `ys-<uuid>.part`（不拼交付名：180 字符/emoji 名字
+   * 会撞文件系统名上限，`getFileHandle` 直接抛错，换名重试也一样）。
+   * 唯一名的代价是「同名残留被下次 open() 清掉」这条兜底失效 → 由 `sweepStaleOpfsEntries()` 兜（见下）。
+   */
+  const entry = entryName || makeOpfsEntryName()
+  return {
+    kind: 'opfs',
+    name,
+    entryName: entry,
+    async open() {
+      dir = dir || (await globalThis.navigator.storage.getDirectory())
+      // 自己的同名残留（同一 entry 复用）先删，避免把两次内容接在一起
+      try {
+        await dir.removeEntry(entry)
+      } catch {
+        /* 没有就算了 */
+      }
+      try {
+        handle = await dir.getFileHandle(entry, { create: true })
+        writable = await handle.createWritable()
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '创建浏览器内部暂存')
+      }
+      return true
+    },
+    async write(bytes) {
+      try {
+        await writable.write(bytes)
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '写入浏览器内部暂存')
+      }
+    },
+    async close() {
+      try {
+        await writable.close()
+      } catch (err) {
+        throw asSaveError(err, 'SAVE_WRITE_FAILED', '收尾浏览器内部暂存')
+      }
+      const file = await handle.getFile()
+      return { name, file }
+    },
+    /** 交给浏览器下载之后再删（**别在 save 之前删**，那是唯一副本）；只删**自己的**条目 */
+    async cleanup() {
+      try {
+        await dir?.removeEntry(entry)
+      } catch {
+        /* 忽略 */
+      }
+    },
+    async abort() {
+      try {
+        await writable?.abort()
+      } catch {
+        /* 忽略 */
+      }
+      try {
+        await dir?.removeEntry(entry)
+      } catch {
+        /* 没有就算了 */
+      }
+    },
+  }
+}
+
+/** 有没有可用的 OPFS（拿不到就返回 null） */
+export async function opfsRoot() {
   try {
-    if (await fileSink.open(name)) {
-      fileSink.name = name
-      return fileSink
+    const storage = globalThis.navigator?.storage
+    if (typeof storage?.getDirectory !== 'function') return null
+    return await storage.getDirectory()
+  } catch {
+    return null
+  }
+}
+
+/** OPFS 临时条目名：`ys-<uuid>.part`。只用于内部暂存，交付名另存（见 `createOpfsSink` 注释）。 */
+export function makeOpfsEntryName(uuid) {
+  const id =
+    typeof uuid === 'string' && uuid
+      ? uuid
+      : typeof globalThis.crypto?.randomUUID === 'function'
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  return `ys-${id}.part`
+}
+
+/** 政策：临时条目超过这个年龄就清（正常路径 60s 后自己删，留下的都是异常退出/中途关闭页面的） */
+export const OPFS_STALE_MS = 24 * 60 * 60 * 1000
+
+/**
+ * 清扫 OPFS 里的**孤儿临时条目**。
+ *
+ * 为什么必须有：`cleanup()` 是 `setTimeout(…, 60s)` 调的，三条异常路径都收不到——
+ * ① 下载完成后 60 秒内关页面/刷新；② `ack` 抛错（整单重试，旧条目没人删）；
+ * ③ 下载中途关页面（半成品没人 `abort()`）。条目名唯一化之后也没有「同名残留被下次 open 清掉」这条兜底，
+ * 于是一个 1 GiB 文件就能永久占住 1 GiB 配额，几周后 `SAVE_QUOTA_EXCEEDED` 会成为常态。
+ *
+ * 只删「年龄 > `maxAgeMs` 的 `*.part`」：正在写的新条目 age≈0，不会被误删。
+ * 拿不到目录迭代能力（老浏览器/单测环境）时静默返回，绝不影响本次下载。
+ */
+export async function sweepStaleOpfsEntries(root, { maxAgeMs = OPFS_STALE_MS, now = () => Date.now(), prefix = 'ys-', suffix = '.part' } = {}) {
+  const result = { scanned: 0, removed: [] }
+  if (!root || typeof root.entries !== 'function') return result
+  try {
+    for await (const [name, handle] of root.entries()) {
+      if (typeof name !== 'string' || !name.startsWith(prefix) || !name.endsWith(suffix)) continue
+      if (handle?.kind && handle.kind !== 'file') continue
+      result.scanned += 1
+      let lastModified = 0
+      try {
+        lastModified = Number((await handle.getFile())?.lastModified) || 0
+      } catch {
+        continue // 刚好被删掉/读不到：下一轮再说
+      }
+      // 读不到 lastModified（0）时必须跳过：`now() - 0` 会远大于阈值 → 等于「立即删」，可能删掉正在写的条目
+      if (!lastModified) continue
+      if (now() - lastModified < maxAgeMs) continue
+      try {
+        await root.removeEntry(name)
+        result.removed.push(name)
+      } catch {
+        /* 并发删过了/被占用：忽略，清扫不能影响本次下载 */
+      }
     }
   } catch {
-    /* 用户取消选择文件 → 退回内存累积 */
+    /* 目录迭代失败（实现差异/权限）：放弃清扫，不影响下载 */
   }
-  const mem = createMemorySink()
-  mem.name = name
-  return mem
+  return result
+}
+
+/** 当前是否有「瞬时用户激活」——`showSaveFilePicker` 的硬要求 */
+export function hasUserGesture() {
+  return globalThis.navigator?.userActivation?.isActive === true
+}
+
+/**
+ * 默认选路：小文件 → 内存；大文件 → 用户选路径（仅当有手势）→ OPFS → 明确报错。
+ * 任何一步失败都**不静默**：要么换一条能保证落盘的路，要么把原因抛给 UI。
+ */
+export async function defaultSinkFactory(meta = {}, options = {}) {
+  const name = cleanName(meta?.name)
+  const size = Number(meta?.size) || 0
+  const maxMemoryBytes = options.maxMemoryBytes ?? MAX_MEMORY_SAVE_BYTES
+
+  if (size <= maxMemoryBytes) {
+    const mem = createMemorySink({ maxBytes: maxMemoryBytes })
+    mem.name = name
+    return mem
+  }
+
+  const canPick = options.canPick ?? hasUserGesture()
+  if (canPick && typeof globalThis.showSaveFilePicker === 'function') {
+    const fileSink = createFileSink()
+    try {
+      if (await fileSink.open(name)) {
+        fileSink.name = name
+        return fileSink
+      }
+    } catch (err) {
+      // 用户取消/浏览器拒绝都落到 OPFS：能落盘比让用户重来强，但必须留痕
+      options.onNotice?.({
+        code: 'SAVE_PICKER_UNAVAILABLE',
+        message: `未使用「选择保存位置」（${err?.name || err?.message || err}），改走浏览器内部暂存后自动下载`,
+      })
+    }
+  }
+
+  const root = options.root ?? (await opfsRoot())
+  if (root) {
+    // 顺手清扫孤儿临时条目（页面上次被关在 60s 窗口内 / ack 失败 / 下载中途关页面都会留下）。
+    // 不 await：清扫是"维护动作"，不该让用户等；它只删 > 24h 的 `*.part`，动不到本次新条目。
+    // await：配额真被孤儿占满时，先清扫再 open，用户不用点第二次（只读几条目录项，毫秒级）
+    await sweepStaleOpfsEntries(root) // 内部已全量 catch，不会抛
+    const sink = createOpfsSink(name, { root })
+    await sink.open()
+    return sink
+  }
+
+  throw new SaveError(
+    'SAVE_UNSUPPORTED_LARGE',
+    `文件 ${size} 字节：当前浏览器既不能「选择保存位置」也没有内部暂存（OPFS），为避免整包进内存卡死，本次不下载。请用 Chrome/Edge 打开，或让对方拆分后再发。`,
+  )
 }

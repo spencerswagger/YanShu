@@ -59,6 +59,10 @@ async function refresh({ quiet = false } = {}) {
   }
 }
 
+/** 「多久没有新进展」——v0.2.4 的教训：页面纯静默转圈 10 分钟，用户/测试都以为在下载 */
+const lastProgressAt = ref(0)
+const stallSec = ref(0)
+
 async function take(item) {
   // 兜底：万一定时器被节流没翻，这里按 serverClock 再判一次，直接置成过期态、不发请求（别去吃 410）
   if (isExpiredItem(item)) {
@@ -66,6 +70,8 @@ async function take(item) {
     return
   }
   activeId.value = item.transfer_id
+  lastProgressAt.value = Date.now()
+  stallSec.value = 0
   errorText.value = ''
   notice.value = ''
   rxMeter.reset()
@@ -74,6 +80,7 @@ async function take(item) {
     const result = await props.receive({
       transferId: item.transfer_id,
       onProgress: (p) => {
+        lastProgressAt.value = Date.now()
         progress.value = {
           phase: p.phase || '',
           done: p.done || 0,
@@ -123,14 +130,6 @@ watch(
   { immediate: true },
 )
 
-/**
- * 自动刷新（#84 真缺陷：v0.2.4 的待收列表**不点刷新就一直不出现新文件**）。
- *
- * 上面那个 `watch(props.api)` 只在 api 到场时拉一次；发送方在另一台设备，接收侧没有任何东西会推它，
- * 所以必须有轮询：可见 8 秒一轮、后台 30 秒一轮、切回页面/聚焦立刻补一次。
- * `lastSyncText` 只在**真发了请求且拿到列表**时更新（`refresh` 返回 false 时不更新），
- * 让「有自动更新」这件事在界面上也是可证的，而不是一句静态文案。
- */
 const lastSync = ref(0)
 const lastSyncText = computed(() => {
   if (!lastSync.value) return ''
@@ -150,6 +149,11 @@ const poller = createPoller({
 /** 切回页面/聚焦 → 立刻补一次；逻辑在 `lib/wakeEvents.js`（那边能用真事件做单测，不靠读源码） */
 const wake = bindWakeEvents({ poller })
 
+/** 「多久没有新进展」卡顿提示（#85 加的，保留）：每 5s 采样一次，纯 UI 定时器，与轮询互不相干 */
+const stallTimer = setInterval(() => {
+  stallSec.value = lastProgressAt.value ? Math.max(0, Math.floor((Date.now() - lastProgressAt.value) / 1000)) : 0
+}, 5000)
+
 onMounted(() => {
   poller.start()
   wake.bind()
@@ -157,6 +161,7 @@ onMounted(() => {
 onUnmounted(() => {
   poller.stop()
   wake.unbind()
+  clearInterval(stallTimer)
 })
 </script>
 
@@ -171,6 +176,9 @@ onUnmounted(() => {
       </button>
     </div>
 
+    <p v-if="activeId && stallSec >= 30" class="banner warn">
+      已 {{ stallSec }} 秒没有新进展 —— 不是卡在「已保存」，本次仍在进行；若持续不动可刷新后重试（服务端不会删未确认的密文）。
+    </p>
     <p v-if="lastSyncText && !errorText" class="meta">{{ lastSyncText }}（新文件会自动出现在这里）</p>
     <p v-if="notice" class="banner info">{{ notice }}</p>
     <p v-if="errorText" class="banner warn">{{ errorText }}</p>

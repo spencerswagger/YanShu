@@ -13,11 +13,34 @@ import { takeChunkBytes } from './p2pChunks.js'
 import { info } from '../lib/log.js'
 import { config } from '../config.js'
 import { bytes } from '../lib/bytes.js'
+import { createChunkPacer } from './chunkPacer.js'
+import { createMemorySink, SaveError } from '../lib/saveStream.js'
 
 /** 让出一帧：`unpack.finish()` 是同步的，不让出的话「解密中」这段永远画不出来 */
 function nextPaint() {
   if (typeof requestAnimationFrame !== 'function') return new Promise((r) => setTimeout(r, 0))
   return new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))
+}
+
+function sleepAbortable(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException('aborted', 'AbortError'))
+    const t = setTimeout(() => {
+      signal?.removeEventListener?.('abort', onAbort)
+      resolve()
+    }, ms)
+    function onAbort() {
+      clearTimeout(t)
+      reject(new DOMException('aborted', 'AbortError'))
+    }
+    signal?.addEventListener?.('abort', onAbort, { once: true })
+  })
+}
+
+/** 单块只做一次取数（直连优先，失败回中转）；429/5xx 由调用方按 pacer 处理，不在这里吞 */
+async function fetchChunkOnce({ directBuffer, index, relayGet }) {
+  if (!directBuffer) return { bytes: await relayGet(index), source: 'relay' }
+  return takeChunkBytes({ directBuffer, index, getChunk: relayGet })
 }
 
 const TERMINAL_CODES = {
@@ -78,6 +101,10 @@ async function receiveStreaming({
   onProgress,
   signal,
   sinkFactory,
+  save,
+  pacer: injectedPacer,
+  /** 测试可注入；生产固定 60s（给浏览器把流接过去的时间） */
+  cleanupDelayMs = 60_000,
   ack = true,
   directBuffer,
 }) {
@@ -100,47 +127,156 @@ async function receiveStreaming({
   })
 
   const sink = await (sinkFactory ? sinkFactory(meta) : createMemorySink())
-  const relayGet = (i) => api.getChunk({ transferId, downloadId: prelude.downloadId, index: i })
+  const relayGet = (i) => api.getChunk({ transferId, downloadId: prelude.downloadId, index: i, retry: false })
   const unpackSlice = (index, slice) =>
     kernel.streamUnpackChunk(
       bytes(kernel.segmenter.buildRecordHeader(index, slice.length - 16, chunkCount), slice),
     )
 
+  // 客户端自己排队：契约 §11.1 把内容端点限到「按传输 600 次/分、按 IP 120 次/分」（最紧 2 次/秒）。
+  const pacer = injectedPacer || createChunkPacer({ ratePerSec: config.chunkRatePerSec })
+
+  /**
+   * 取一块（含重试策略）：
+   * - 429 → 交给 pacer（按 `Retry-After` 等，不套 5s 地板），同一块原地重试；连吃 9 次才报错；
+   * - 500/502/503/504 → 1s/2s/4s 原地重试最多 3 次（**不能让学生单次 5xx 打死整条 1 GiB 下载**：
+   *   `retry:false` 关掉了 client 层 withRetry，这层必须自己补上，否则比 main 还差）；
+   * - 其它错误 → 直接抛（不静默、不吞）。
+   */
+  const fetchPaced = async (index, { relayOnly = false } = {}) => {
+    let throttleStreak = 0
+    let transient = 0
+    for (;;) {
+      if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
+      // 直连（P2P）的块**不消耗服务端额度**：先看本地缓冲，命中就直接用，不要为了拿中转令牌白等。
+      // （否则 1 GiB 直连也会被压到 1.8 块/秒 ≈ 9.5 分钟——纯性能回退，直连本来比中转快得多。）
+      if (!relayOnly) {
+        const direct = directBuffer?.take?.(index) || null
+        if (direct) return { bytes: direct, source: 'direct' }
+      }
+      await pacer.acquire()
+      try {
+        const picked = relayOnly
+          ? { bytes: await relayGet(index), source: 'relay' }
+          : await fetchChunkOnce({ directBuffer, index, relayGet })
+        pacer.onSuccess()
+        return picked
+      } catch (err) {
+        if (err?.status === 429) {
+          throttleStreak += 1
+          const waitMs = pacer.onThrottled(err.retryAfter)
+          report({
+            phase: 'downloading',
+            done: fetched,
+            decrypted: done,
+            total: totalSize,
+            message: `服务端限速：${Math.ceil(waitMs / 1000)} 秒后继续第 ${index + 1}/${chunkCount} 块（${pacer.summary()}）`,
+            throttled: pacer.throttledCount,
+          })
+          if (throttleStreak > 8) {
+            throw new ApiError({
+              code: 'RATE_LIMITED',
+              status: 429,
+              retryAfter: err.retryAfter,
+              message: `连续 ${throttleStreak} 次被限速，已暂停（可稍后重试，不会交残缺文件）`,
+            })
+          }
+          await sleepAbortable(waitMs, signal)
+          continue
+        }
+        if ([500, 502, 503, 504].includes(err?.status)) {
+          transient += 1
+          if (transient > 3) throw err
+          const waitMs = 1000 * 2 ** (transient - 1) // 1s / 2s / 4s
+          report({
+            phase: 'downloading',
+            done: fetched,
+            decrypted: done,
+            total: totalSize,
+            message: `服务端 ${err.status}：${Math.round(waitMs / 1000)} 秒后重试第 ${index + 1}/${chunkCount} 块（第 ${transient}/3 次）`,
+          })
+          await sleepAbortable(waitMs, signal)
+          continue
+        }
+        throw err
+      }
+    }
+  }
+
   let done = 0 // 已解密并写出的明文字节
   let fetched = 0 // 已取到的密文字节（含尚未解密的块）
-  for (let index = 0; index < chunkCount; index++) {
-    if (signal?.aborted) throw new DOMException('aborted', 'AbortError')
-    const picked = directBuffer
-      ? await takeChunkBytes({ directBuffer, index, getChunk: relayGet })
-      : { bytes: await relayGet(index), source: 'relay' }
-    // 先记「已取到」再解密：两个百分比因此会差一块左右，能看出解密落后于网络
-    fetched += picked.bytes.length
-    report({ phase: 'downloading', done: fetched, decrypted: done, total: totalSize, message: `下载块 ${index + 1}/${chunkCount}` })
-    let plain
-    try {
-      plain = unpackSlice(index, picked.bytes)
-    } catch (err) {
-      if (picked.source !== 'direct') throw err
-      // 直连块不可信 → 当块回落中转补齐（不交残缺文件）
-      plain = unpackSlice(index, await relayGet(index))
+  try {
+    for (let index = 0; index < chunkCount; index++) {
+      const picked = await fetchPaced(index)
+      // 先记「已取到」再解密：两个百分比因此会差一块左右，能看出解密落后于网络
+      fetched += picked.bytes.length
+      report({
+        phase: 'downloading',
+        done: fetched,
+        decrypted: done,
+        total: totalSize,
+        message: `下载块 ${index + 1}/${chunkCount}`,
+      })
+      let plain
+      try {
+        plain = unpackSlice(index, picked.bytes)
+      } catch (err) {
+        if (picked.source !== 'direct') throw err
+        // 直连块不可信 → 当块回落中转补齐（同样走 429/5xx 重试，不交残缺文件）
+        plain = unpackSlice(index, (await fetchPaced(index, { relayOnly: true })).bytes)
+      }
+      await sink.write(plain)
+      done += plain.length
+      report({
+        phase: 'downloading',
+        done: fetched,
+        decrypted: done,
+        total: totalSize,
+        message: `解密块 ${index + 1}/${chunkCount}`,
+      })
     }
-    await sink.write(plain)
-    done += plain.length
+    kernel.streamUnpackEnd()
+
     report({
-      phase: 'downloading',
-      done: fetched,
+      phase: 'saving',
+      done: totalSize,
       decrypted: done,
       total: totalSize,
-      message: `解密块 ${index + 1}/${chunkCount}`,
+      message: `块已全部处理（${chunkCount} 块 · ${done} 字节），校验并落盘…`,
+      verified: true,
     })
+    const out = await sink.close()
+    // close() 成功 = 明文字节确实写到了本机（内存 Blob / OPFS 文件 / 用户选的目标文件）；
+    // 之后才把它交给浏览器下载，再 ack。**注意口径**：浏览器是否真把文件写进 downloads/ 不可观测，
+    // 所以 ack 的判据是「写进 OPFS/目标文件成功」+「浏览器接受了下载请求（a.click 没抛）」，
+    // 不是「downloads/ 里出现文件」——后者只能靠 Gate 在镜像上验。
+    // 「用户选路径」那条在 close() 时已经写到目标位置（`delivered: true`），不需要再点 <a download>。
+    if (out?.delivered !== true) {
+      const payload = out?.blob || out?.file
+      if (!payload) {
+        // 兜底断言：sink 的 close() 既没给 blob/file、也没声明 delivered → 现在若静默跳过交付再 ack，
+        // 就是 v0.2.4「界面说已保存、密文已删、磁盘没文件」原地复现。宁可在 ack 之前报错。
+        throw new SaveError('SAVE_DELIVERY_FAILED', '落盘结果既不是文件也不是 Blob（sink 不符合契约），未确认删除服务端密文')
+      }
+      if (save) {
+        report({ phase: 'saving', done: totalSize, total: totalSize, message: '交给浏览器保存…', verified: true })
+        await save(payload, out.name || safeFileName(meta.name, meta.ext))
+      }
+    }
+  } catch (err) {
+    await sink.abort?.()
+    throw err
   }
-  kernel.streamUnpackEnd()
 
-  await sink.close()
   if (ack) {
     // ack 必须带租约 id（契约 §8.5）：不带会被判 409 DOWNLOAD_NOT_STARTED
     await api.ack({ transferId, downloadId: prelude.downloadId })
   }
+  // **OPFS 副本必须在 ack 之后才清**：`a.click()` 成功只代表浏览器接受了这次下载请求，
+  // 「接受但没写盘」（阻止多个自动下载 / Downloads 满 / 策略拦截）客户端没有任何回调可观测——
+  // 这份副本是唯一兜底。删在 ack 之前，就会重演 v0.2.4「界面说已保存 → 密文已删 → 没文件」。
+  // 延迟 60s 是为了给浏览器留时间把流接过去；期间同名文件会被下次 open() 清掉（open 里有 removeEntry）。
+  if (sink.cleanup) setTimeout(() => sink.cleanup(), cleanupDelayMs)
   info('接收完成（流式）', { bytes: done, chunks: chunkCount })
   return { name: sink.name, size: done, transferId, dataVerified: true }
 }
@@ -166,6 +302,16 @@ async function receiveOnce({
     throw terminalError(meta.state, meta.terminal_reason)
   }
 
+  // 回退路径（没有流式内核 / 没给 sink）只能整包解、整包拼 Blob：先按 maxPackSize 挡住，
+  // 别先把 1 GiB 拉下来再在收尾处被内存撑死（v0.2.4 就是「无报错、无文件」的死龟）。
+  const plaintextSize = Number(meta.plaintext_size) || 0
+  if (plaintextSize > config.maxPackSize) {
+    const err = new Error(
+      `当前内核不支持流式解包，${plaintextSize} 字节超过整包上限 ${config.maxPackSize} 字节，无法安全下载（否则会整包进内存）`,
+    )
+    err.code = 'FILE_TOO_LARGE'
+    throw err
+  }
   report({ phase: 'prelude', done: 0, total: meta.plaintext_size || 0, message: '取回包头' })
   const prelude = await api.getPrelude(transferId)
   if (!prelude.downloadId) throw new ApiError({ code: 'DOWNLOAD_NOT_STARTED', status: 409, message: 'no download id' })
@@ -254,7 +400,8 @@ async function receiveOnce({
   const blob = new Blob([plain], { type: finalMeta.mime || 'application/octet-stream' })
   if (save) {
     report({ phase: 'saving', done: plain.length, total: plain.length, message: '落盘', verified: true })
-    save(blob, safeFileName(finalMeta.name, finalMeta.ext))
+    // 交付失败要抛（不 ack），别出现「界面说已保存、其实没交出去」
+    await save(blob, safeFileName(finalMeta.name, finalMeta.ext))
   }
   if (ack) {
     report({ phase: 'acking', done: plain.length, total: plain.length, message: '确认取件（服务端随即删除密文）' })
