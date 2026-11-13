@@ -57,7 +57,7 @@ services:
     restart: unless-stopped
 
   yanshu-server:
-    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:${YANSHU_IMAGE_TAG:-v0.2.4}
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-server:${YANSHU_IMAGE_TAG:-v0.2.5}
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,7 +93,7 @@ services:
     restart: unless-stopped
 
   web:
-    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:${YANSHU_IMAGE_TAG:-v0.2.4}
+    image: swr.cn-east-5.myhuaweicloud.com/spencerswagger/yanshu-web:${YANSHU_IMAGE_TAG:-v0.2.5}
     depends_on:
       yanshu-server:
         condition: service_healthy
