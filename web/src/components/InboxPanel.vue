@@ -1,10 +1,12 @@
 <script setup>
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent } from '../lib/format.js'
 import { createSpeedMeter, stageLabel } from '../lib/speed.js'
 import { isExpired, remainingMs } from '../lib/serverClock.js'
 import { expiryNow, refreshExpiryClock } from '../lib/expiryTicker.js'
+import { createPoller } from '../lib/poller.js'
+import { bindWakeEvents } from '../lib/wakeEvents.js'
 import ReportSheet from './ReportSheet.vue'
 import SpeedLine from './SpeedLine.vue'
 import TtlPill from './TtlPill.vue'
@@ -30,21 +32,30 @@ const stageText = computed(() =>
 )
 
 /**
- * 手动刷新（看板按钮）。自动刷新在 PR #86（`lib/poller.js`）里单独做——
- * 这条修复（流式落盘/额度排队）不掺列表轮询，两个 PR 各自可独立合入与回滚。
+ * `quiet` = 后台自动刷新：不转圈、不清错误（避免每 8 秒闪一下把用户正在看的提示抹掉）。
+ * 返回值是**可证事实**：真拉到列表 → `true`；没 api / 正在下载 / 请求失败 → `false`。
+ * 轮询器只认 `false` 不推进「自动更新 hh:mm:ss」——否则界面会写"自动更新 12:00:00"，
+ * 其实一次都没拉到（#84 的假成功同源：界面报成功、事实没发生）。
  */
-async function refresh() {
-  if (!props.api) return
-  loading.value = true
-  errorText.value = ''
+async function refresh({ quiet = false } = {}) {
+  if (!props.api) return false
+  if (quiet && activeId.value) return false // 正在下载时不打扰（进度那条不能被列表刷新打断）
+  if (!quiet) {
+    loading.value = true
+    errorText.value = ''
+  }
   try {
     const res = await props.api.inbox({ state: 'ready', limit: 20 })
     items.value = res?.items || []
+    return true
   } catch (err) {
-    const d = describeError(err)
-    errorText.value = `${d.title}${d.hint ? '：' + d.hint : ''}`
+    if (!quiet) {
+      const d = describeError(err)
+      errorText.value = `${d.title}${d.hint ? '：' + d.hint : ''}`
+    }
+    return false
   } finally {
-    loading.value = false
+    if (!quiet) loading.value = false
   }
 }
 
@@ -119,11 +130,37 @@ watch(
   { immediate: true },
 )
 
+const lastSync = ref(0)
+const lastSyncText = computed(() => {
+  if (!lastSync.value) return ''
+  const d = new Date(lastSync.value)
+  const p = (n) => String(n).padStart(2, '0')
+  return `自动更新 ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+})
+
+const poller = createPoller({
+  task: () => refresh({ quiet: true }),
+  intervalMs: 8000,
+  hiddenMs: 30000,
+  onRun: (t) => {
+    lastSync.value = t
+  },
+})
+/** 切回页面/聚焦 → 立刻补一次；逻辑在 `lib/wakeEvents.js`（那边能用真事件做单测，不靠读源码） */
+const wake = bindWakeEvents({ poller })
+
+/** 「多久没有新进展」卡顿提示（#85 加的，保留）：每 5s 采样一次，纯 UI 定时器，与轮询互不相干 */
 const stallTimer = setInterval(() => {
   stallSec.value = lastProgressAt.value ? Math.max(0, Math.floor((Date.now() - lastProgressAt.value) / 1000)) : 0
 }, 5000)
 
+onMounted(() => {
+  poller.start()
+  wake.bind()
+})
 onUnmounted(() => {
+  poller.stop()
+  wake.unbind()
   clearInterval(stallTimer)
 })
 </script>
@@ -142,6 +179,7 @@ onUnmounted(() => {
     <p v-if="activeId && stallSec >= 30" class="banner warn">
       已 {{ stallSec }} 秒没有新进展 —— 不是卡在「已保存」，本次仍在进行；若持续不动可刷新后重试（服务端不会删未确认的密文）。
     </p>
+    <p v-if="lastSyncText && !errorText" class="meta">{{ lastSyncText }}（新文件会自动出现在这里）</p>
     <p v-if="notice" class="banner info">{{ notice }}</p>
     <p v-if="errorText" class="banner warn">{{ errorText }}</p>
 
