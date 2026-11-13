@@ -304,7 +304,12 @@ async function doReceive({ transferId, onProgress }) {
       onProgress,
       save: saveBlob,
       // 默认路径：流式边解边写（常量内存）；直连块也灌进同一个 sink
-      sinkFactory: defaultSinkFactory,
+      sinkFactory: (meta) =>
+        defaultSinkFactory(meta, {
+          maxMemoryBytes: config.maxMemorySaveBytes,
+          // 选路变化必须留痕（不许静默退回整包内存）
+          onNotice: (n) => info(n.code, n.message),
+        }),
       directBuffer,
     })
     counts.received += 1

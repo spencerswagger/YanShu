@@ -1,0 +1,124 @@
+/**
+ * 块下载的客户端限速器（AIMD，按服务端额度自适应）。
+ *
+ * 为什么需要：契约 §11.1 把内容端点限到「按传输 600 次/分」「按 IP 120 次/分」——
+ * 也就是**最紧的一档只有 2 次/秒**。v0.2.4 现场实测：客户端在限速天花板上跑（有效吞吐
+ * 2.07 块/秒），每撞一次 429 就被 `withRetry` 的 5 秒地板拖成约 5.6 秒一块
+ * （81 条 429，中位间隔 5.6 秒）——长文件因此在测试窗口内没跑完。
+ *
+ * 所以客户端必须自己排队：
+ * - 常态按 `ratePerSec` 发令牌（默认 `config.chunkRatePerSec` = 1.8/s，留一点余量给"多标签页"）；
+ *   注意起始速率也会被 `maxRatePerSec`（默认 2/s）夹住，所以「配置写得比 2 大」不会真的更快；
+ * - 吃到 429：立刻把速率减半（不低于 `minRatePerSec`），并按 `Retry-After` 等（**不再套 5s 地板**）；
+ * - 连续成功 `rampAfter` 次：速率**加性**加回一档（+0.1/秒，且不超过 `maxRatePerSec` = 2 次/秒，
+ *   也就是服务端 per-IP 的天花板——乘性增长会稳定越界，这里刻意不用）。
+ *
+ * 纯逻辑、可注入时钟与定时器，便于单测（真实浏览器里就是 setTimeout）。
+ */
+
+export const DEFAULT_PACING = {
+  ratePerSec: 1.8,
+  minRatePerSec: 0.5,
+  /** 契约最紧一档是「按 IP 120 次/分」= 2 次/秒：稳态**不许越过它**，否则「按额度排队」就是空话 */
+  maxRatePerSec: 2,
+  /** 桶容量：允许一点点突发，别把 RTT 全花在等令牌上 */
+  burst: 3,
+  /** 连续成功多少次加一档（AIMD 的 AI，**加性** +0.1，不是乘性） */
+  rampAfter: 24,
+  /** 每次 AI 加多少（次/秒） */
+  stepPerSec: 0.1,
+  /** 429 时的最小等待（秒）；`Retry-After` 缺失时用它 */
+  minBackoffSec: 1,
+  /**
+   * 429 时的最大等待（秒）：本服务的桶是 2/s，`Retry-After` 实际 ≤1s；
+   * 但前置代理/CDN 可能回 `3600`，原地睡一小时等于把下载挂死——夹到 60s，之后继续按额度重试。
+   */
+  maxBackoffSec: 60,
+}
+
+export function createChunkPacer(options = {}) {
+  const cfg = { ...DEFAULT_PACING, ...options }
+  const now = options.now || (() => Date.now())
+  const sleep = options.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)))
+
+  let rate = clamp(cfg.ratePerSec, cfg.minRatePerSec, cfg.maxRatePerSec)
+  let tokens = cfg.burst
+  let lastRefill = now()
+  let okStreak = 0
+  /** 被限速的次数与累计等待，用于进度提示（用户必须看得见） */
+  let throttled = 0
+  let waitedMs = 0
+
+  function clamp(v, lo, hi) {
+    return Math.min(hi, Math.max(lo, v))
+  }
+
+  function refill() {
+    const t = now()
+    const dt = Math.max(0, t - lastRefill) / 1000
+    if (dt > 0) {
+      tokens = Math.min(cfg.burst, tokens + dt * rate)
+      lastRefill = t
+    }
+  }
+
+  /** 等一个令牌（发一块前调用） */
+  async function acquire() {
+    for (;;) {
+      refill()
+      if (tokens >= 1) {
+        tokens -= 1
+        return
+      }
+      const needMs = Math.max(20, Math.ceil(((1 - tokens) / rate) * 1000))
+      await sleep(needMs)
+    }
+  }
+
+  /**
+   * 吃到 429：降速 + 返回该等多久（毫秒）。
+   * `retryAfterSec` 来自响应头 / body，服务端说了算；没有才用兜底；**超过 `maxBackoffSec` 就夹住**
+   * （前置代理可能回 3600，原地睡一小时等于挂死；夹住后继续按额度重试，进度条会说话）。
+   */
+  function onThrottled(retryAfterSec) {
+    rate = clamp(rate / 2, cfg.minRatePerSec, cfg.maxRatePerSec)
+    tokens = 0
+    lastRefill = now()
+    okStreak = 0
+    throttled += 1
+    const asked = Number(retryAfterSec) > 0 ? Number(retryAfterSec) : cfg.minBackoffSec
+    const sec = clamp(asked, cfg.minBackoffSec, cfg.maxBackoffSec)
+    const waitMs = Math.ceil(sec * 1000)
+    waitedMs += waitMs
+    return waitMs
+  }
+
+  function onSuccess() {
+    okStreak += 1
+    if (okStreak >= cfg.rampAfter) {
+      okStreak = 0
+      rate = clamp(rate + cfg.stepPerSec, cfg.minRatePerSec, cfg.maxRatePerSec)
+    }
+  }
+
+  return {
+    acquire,
+    onThrottled,
+    onSuccess,
+    get ratePerSec() {
+      return rate
+    },
+    get throttledCount() {
+      return throttled
+    },
+    get waitedMs() {
+      return waitedMs
+    },
+    /** 供 UI 一句话说清：`被限速 12 次，已等 1 分 05 秒` */
+    summary() {
+      if (!throttled) return ''
+      const s = Math.round(waitedMs / 1000)
+      return `服务端限速 ${throttled} 次，已等待 ${s >= 60 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${s} 秒`}`
+    },
+  }
+}

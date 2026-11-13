@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { describeError } from '../net/errors.js'
 import { bytes as fmtBytes, percent } from '../lib/format.js'
 import { createSpeedMeter, stageLabel } from '../lib/speed.js'
@@ -29,6 +29,10 @@ const stageText = computed(() =>
   stageLabel(progress.value.phase, progress.value.done, progress.value.total, progress.value.decrypted),
 )
 
+/**
+ * 手动刷新（看板按钮）。自动刷新在 PR #86（`lib/poller.js`）里单独做——
+ * 这条修复（流式落盘/额度排队）不掺列表轮询，两个 PR 各自可独立合入与回滚。
+ */
 async function refresh() {
   if (!props.api) return
   loading.value = true
@@ -44,6 +48,10 @@ async function refresh() {
   }
 }
 
+/** 「多久没有新进展」——v0.2.4 的教训：页面纯静默转圈 10 分钟，用户/测试都以为在下载 */
+const lastProgressAt = ref(0)
+const stallSec = ref(0)
+
 async function take(item) {
   // 兜底：万一定时器被节流没翻，这里按 serverClock 再判一次，直接置成过期态、不发请求（别去吃 410）
   if (isExpiredItem(item)) {
@@ -51,6 +59,8 @@ async function take(item) {
     return
   }
   activeId.value = item.transfer_id
+  lastProgressAt.value = Date.now()
+  stallSec.value = 0
   errorText.value = ''
   notice.value = ''
   rxMeter.reset()
@@ -59,6 +69,7 @@ async function take(item) {
     const result = await props.receive({
       transferId: item.transfer_id,
       onProgress: (p) => {
+        lastProgressAt.value = Date.now()
         progress.value = {
           phase: p.phase || '',
           done: p.done || 0,
@@ -107,19 +118,30 @@ watch(
   },
   { immediate: true },
 )
+
+const stallTimer = setInterval(() => {
+  stallSec.value = lastProgressAt.value ? Math.max(0, Math.floor((Date.now() - lastProgressAt.value) / 1000)) : 0
+}, 5000)
+
+onUnmounted(() => {
+  clearInterval(stallTimer)
+})
 </script>
 
 <template>
   <section class="card">
     <div class="spread" style="margin-bottom: 10px">
       <div class="card-title">{{ items.length ? `${items.length} 个文件待接收` : '暂无待接收文件' }}</div>
-      <button type="button" class="icon-btn" :disabled="loading" aria-label="刷新" @click="refresh">
+      <button type="button" class="icon-btn" :disabled="loading" aria-label="刷新" @click="refresh()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
     </div>
 
+    <p v-if="activeId && stallSec >= 30" class="banner warn">
+      已 {{ stallSec }} 秒没有新进展 —— 不是卡在「已保存」，本次仍在进行；若持续不动可刷新后重试（服务端不会删未确认的密文）。
+    </p>
     <p v-if="notice" class="banner info">{{ notice }}</p>
     <p v-if="errorText" class="banner warn">{{ errorText }}</p>
 
